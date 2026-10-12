@@ -60,6 +60,7 @@ from typing import Any, Iterable
 
 from ...database_connection import connect, connection_held
 from ..storage import server_local
+from ..storage.provider import SpdmStorageError
 from . import auth as drive_auth
 from . import gateway as drive_gateway
 from .. import notifications
@@ -334,12 +335,7 @@ def admin_list(conn: Any, *, state: str | None = None, limit: int = 200) -> dict
     counts = {state_name: 0 for state_name in STATES}
     for row in conn.execute("SELECT state, count(*) FROM drive_upload_queue GROUP BY state").fetchall():
         counts[str(row[0])] = int(row[1])
-    where, params = "", []
-    if state:
-        where, params = " WHERE state=?", [state]
-    else:
-        where = " WHERE state <> 'DONE' OR finished_at >= ?"
-        params = [_now() - timedelta(days=1)]
+    where, params = _filter(state)
     rows = conn.execute(_SELECT + where + " ORDER BY created_at DESC, batch_id, seq LIMIT ?", [*params, int(limit)]).fetchall()
     return {"counts": counts, "paused": counts["BLOCKED"] > 0, "items": [_item(row).view() for row in rows],
             "worker_running": worker_running()}
@@ -375,6 +371,122 @@ def cancel_item(conn: Any, item_id: str) -> Item:
     _notify_batch_finished(conn, item.batch_id)
     # The finish hook runs after the caller committed (:func:`request_finish`; the sweep covers a lost call).
     return get_item(conn, item_id)  # type: ignore[return-value]
+
+
+TERMINAL_STATES = ("DONE", "CANCELLED", "FAILED", "CONFLICT")
+CANCELLABLE_STATES = ("PENDING", "BLOCKED", "FAILED", "CONFLICT")
+BULK_MAX_ITEMS = 5000
+
+
+def _filter(state: str | None) -> tuple[str, list[Any]]:
+    """WHERE clause of the admin list for ``state`` (``None``: the default view of :func:`admin_list`)."""
+    if state:
+        return " WHERE state=?", [state]
+    return " WHERE (state <> 'DONE' OR finished_at >= ?)", [_now() - timedelta(days=1)]
+
+
+def filter_ids(conn: Any, *, state: str | None = None, states: Iterable[str] | None = None) -> list[str]:
+    """Ids of the items the admin list shows for ``state`` (optionally narrowed to ``states``)."""
+    where, params = _filter(state)
+    wanted = [value for value in (states or []) if value in STATES]
+    if states is not None:
+        if not wanted:
+            return []
+        where += " AND state IN (" + ",".join("?" for _ in wanted) + ")"
+        params = [*params, *wanted]
+    rows = conn.execute("SELECT id FROM drive_upload_queue" + where + " ORDER BY created_at DESC, batch_id, seq LIMIT ?",
+                        [*params, BULK_MAX_ITEMS]).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def ids_in_states(conn: Any, states: Iterable[str]) -> list[str]:
+    wanted = [value for value in states if value in STATES]
+    if not wanted:
+        return []
+    rows = conn.execute("SELECT id FROM drive_upload_queue WHERE state IN (" + ",".join("?" for _ in wanted) + ") "
+                        "ORDER BY created_at, batch_id, seq LIMIT ?", [*wanted, BULK_MAX_ITEMS]).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def bulk_cancel(conn: Any, item_ids: Iterable[str]) -> dict[str, Any]:
+    """:func:`cancel_item` for each id (same semantics); items that cannot be cancelled are reported, not failed.
+
+    The caller commits, then runs :func:`request_finish` for every returned batch (Final lock handling
+    exactly as for a single cancel).
+    """
+    cancelled: list[Item] = []
+    skipped: list[dict[str, str]] = []
+    for item_id in dict.fromkeys(str(value) for value in item_ids):
+        try:
+            cancelled.append(cancel_item(conn, item_id))
+        except LookupError:
+            skipped.append({"id": item_id, "code": "DRIVE_QUEUE_ITEM_NOT_FOUND"})
+        except ValueError as error:
+            skipped.append({"id": item_id, "code": "DRIVE_QUEUE_ITEM_STATE", "state": str(error)})
+    return {"cancelled": cancelled, "skipped": skipped,
+            "batches": list(dict.fromkeys(item.batch_id for item in cancelled))}
+
+
+def purge(conn: Any, item_ids: Iterable[str]) -> dict[str, Any]:
+    """Delete finished queue rows (in the caller's transaction); the drive is never touched.
+
+    Only ``DONE``/``CANCELLED``/``FAILED``/``CONFLICT`` items, and only from batches whose items are all
+    finished: a batch with an open item (``PENDING``/``RUNNING``/``BLOCKED``) is refused as a whole.  A Final
+    batch (``finalization``) is purged only after its Final is ``COMPLETE`` (a ``PUBLISHING`` Final holds
+    its request lock; a stopped one is retried from these rows).  Returns the purged items and, for
+    :func:`remove_purged_staging` after the commit, the server staging to remove.
+    """
+    wanted = list(dict.fromkeys(str(value) for value in item_ids))
+    found = {item.id: item for item in (get_item(conn, item_id) for item_id in wanted) if item is not None}
+    skipped: list[dict[str, str]] = [{"id": item_id, "code": "DRIVE_QUEUE_ITEM_NOT_FOUND"}
+                                     for item_id in wanted if item_id not in found]
+    by_batch: dict[str, list[Item]] = {}
+    for item in found.values():
+        by_batch.setdefault(item.batch_id, []).append(item)
+    purged: list[Item] = []
+    cleanup: list[dict[str, Any]] = []
+    for batch_id, selected in by_batch.items():
+        everything = batch_items(conn, batch_id)
+        reason = None
+        if any(item.state not in TERMINAL_STATES for item in everything):
+            reason = "DRIVE_QUEUE_BATCH_OPEN"
+        elif selected[0].origin == "finalization":
+            row = conn.execute("SELECT status FROM finalization_operations WHERE operation_id=?",
+                               [selected[0].origin_ref or batch_id]).fetchone()
+            if row is not None and str(row[0]) != "COMPLETE":
+                reason = "DRIVE_QUEUE_FINAL_ACTIVE"
+        if reason:
+            skipped.extend({"id": item.id, "code": reason, "state": item.state} for item in selected)
+            continue
+        ids = [item.id for item in selected]
+        conn.execute("DELETE FROM drive_upload_queue WHERE batch_id=? AND id IN (" + ",".join("?" for _ in ids) + ") "
+                     "AND state IN ('DONE','CANCELLED','FAILED','CONFLICT')", [batch_id, *ids])
+        purged.extend(selected)
+        remaining = int(conn.execute("SELECT count(*) FROM drive_upload_queue WHERE batch_id=?", [batch_id]).fetchone()[0])
+        cleanup.append({"batch_id": batch_id, "whole": remaining == 0,
+                        "files": [item.staging_path for item in selected if item.staging_path]})
+    return {"purged": purged, "skipped": skipped, "cleanup": cleanup}
+
+
+def remove_purged_staging(cleanup: Iterable[dict[str, Any]]) -> int:
+    """After the purge committed: remove the server staging of purged items (never the drive)."""
+    removed = 0
+    for entry in cleanup:
+        folder = staging_dir_for(str(entry["batch_id"]))
+        try:
+            if entry.get("whole"):
+                server_local.remove_tree(folder)
+                removed += 1
+                continue
+            for staged in entry.get("files") or []:
+                path = Path(str(staged))
+                if server_local.is_regular_file_inside(path, folder):
+                    server_local.discard_file(path)
+                    removed += 1
+        except OSError:
+            logger.warning("SCX drive queue purge could not remove server staging of batch %s", entry["batch_id"],
+                           exc_info=True)
+    return removed
 
 
 def request_finish(batch_id: str) -> None:
@@ -799,8 +911,14 @@ def _finish_if_done(batch_id: str) -> None:
 # --- drive steps (no DB connection) -------------------------------------------------------------
 
 def _drive_path(rel: str) -> str:
-    root = str(drive_gateway.current_settings().spdm_root or "")
-    return f"{root}/{rel}" if rel else root
+    """Drive path of an SPDM-root relative path: the same composition and checks as the read path.
+
+    ``reads.drive_path(spdm_root, reads.check_rel(rel))`` (NFC, contract §1 rules), so a folder the
+    queue creates is exactly the folder the next sync lists (issue #51).
+    """
+    from . import reads
+
+    return reads.drive_path(str(drive_gateway.current_settings().spdm_root or ""), reads.check_rel(rel))
 
 
 def _code(error: BaseException) -> str | None:
@@ -811,12 +929,22 @@ def _storage_code(code: str) -> str:
     return drive_gateway.DRIVE_ERROR_MAP.get(code, drive_gateway.DRIVE_ERROR_MAP["INTERNAL"]).storage_code
 
 
-def _failure(error: BaseException) -> _Outcome:
+_OPS = {"MKDIR": "mkdirs", "COPY": "copy_within", "FILE": "upload_new", "COMPLETE_MARKER": "upload_new"}
+
+
+def _failure(error: BaseException, item: Item | None = None) -> _Outcome:
     code = _code(error)
+    op = _OPS.get(item.kind, item.kind) if item is not None else "-"
+    target = item.target if item is not None else "-"
+    if isinstance(error, SpdmStorageError):
+        message = drive_gateway.safe_error_message(error)
+        logger.warning("SCX drive queue %s failed: rel=%s code=%s message=%s", op, target, error.code, message)
+        return _Outcome("FAILED", str(error.code), message)
     if code is None:
-        logger.warning("SCX drive queue step raised %s", type(error).__name__, exc_info=True)
+        logger.warning("SCX drive queue %s raised %s: rel=%s", op, type(error).__name__, target, exc_info=True)
         return _Outcome("FAILED", "DRIVE_INTERNAL", type(error).__name__)
     message = drive_gateway.safe_error_message(error)
+    logger.warning("SCX drive queue %s failed: rel=%s code=%s message=%s", op, target, code, message)
     if code in drive_gateway.AUTH_FAILURE_CODES:
         return _Outcome("BLOCKED", "DRIVE_AUTH_REQUIRED", ERROR_MESSAGES["DRIVE_AUTH_REQUIRED"])
     if code in RETRYABLE_CODES:
@@ -918,7 +1046,7 @@ def _execute_on(gateway: Any, item: Item) -> _Outcome:
             return _copy(gateway, item)
         return _upload(gateway, item)
     except Exception as error:  # noqa: BLE001 - adapter DriveError carries the code
-        return _failure(error)
+        return _failure(error, item)
 
 
 def _staged_file(item: Item) -> tuple[Path, int, str, str] | _Outcome:
@@ -957,7 +1085,7 @@ def _upload(gateway: Any, item: Item) -> _Outcome:
         entry = gateway.upload_new(path, _drive_path(item.dst_rel_dir), name=item.dst_name)
     except Exception as error:  # noqa: BLE001
         if _code(error) != "CONFLICT":
-            outcome = _failure(error)
+            outcome = _failure(error, item)
             outcome.staging = staging_note
             return outcome
         return _existing_outcome(gateway, item, gateway.stat(target), size=size, sha1=sha1, sha256=digest,
@@ -1012,7 +1140,7 @@ def _copy(gateway: Any, item: Item) -> _Outcome:
                 return _existing_outcome(gateway, item, gateway.stat(target), size=live.size, sha1=live.sha1,
                                          sha256=source_sha256, method="COPY_WITHIN")
             if code not in COPY_FALLBACK_CODES:
-                outcome = _failure(error)
+                outcome = _failure(error, item)
                 outcome.method = "COPY_WITHIN"
                 return outcome
             if code in COPY_UNSUPPORTED_CODES:
@@ -1100,14 +1228,14 @@ def _download_upload(gateway: Any, item: Item, live: Any) -> _Outcome:
             entry = gateway.upload_new(local, _drive_path(item.dst_rel_dir), name=item.dst_name)
         except Exception as error:  # noqa: BLE001
             if _code(error) != "CONFLICT":
-                outcome = _failure(error)
+                outcome = _failure(error, item)
                 outcome.method = method
                 return outcome
             return _existing_outcome(gateway, item, gateway.stat(_drive_path(item.target)), size=int(result.size),
                                      sha1=sha1, sha256=str(result.sha256), method=method)
         return _Outcome("DONE", entry=_with_sha1(entry, sha1), method=method)
     except Exception as error:  # noqa: BLE001
-        outcome = _failure(error)
+        outcome = _failure(error, item)
         outcome.method = method
         return outcome
     finally:

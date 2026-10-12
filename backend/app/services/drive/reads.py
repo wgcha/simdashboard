@@ -208,6 +208,8 @@ def token_observation() -> dict[str, Any]:
 def reset_for_tests() -> None:
     with _observed_lock:
         _observed.update(sha1=0, size_mtime=0, last_kind=None, last_at=None)
+    with _call_log_lock:
+        _call_logged.clear()
 
 
 # --- session ------------------------------------------------------------------------------------
@@ -474,12 +476,33 @@ def _priority(session: DriveReadSession | None) -> Any:
     return drive_gateway.priority(session.priority if session is not None else "INTERACTIVE")
 
 
-def _call(fn: Callable[[Any], T]) -> T:
+_CALL_LOG_SECONDS = 300.0
+_call_logged: dict[tuple[str, str, str], float] = {}
+_call_log_lock = threading.Lock()
+
+
+def _log_call_failure(op: str, rel: str, code: str, message: str) -> None:
+    """WARNING for a failed drive read call (``NOT_FOUND`` is a normal answer: INFO), once per 5 min per key."""
+    key = (op, rel, code)
+    now = time.monotonic()
+    with _call_log_lock:
+        last = _call_logged.get(key)
+        if last is not None and now - last < _CALL_LOG_SECONDS:
+            return
+        if len(_call_logged) > 2048:
+            _call_logged.clear()
+        _call_logged[key] = now
+    level = logging.INFO if code == "SPDM_NOT_FOUND" else logging.WARNING
+    logger.log(level, "SCX drive read %s failed: rel=%s code=%s message=%s", op, rel, code, message)
+
+
+def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
     if connection_held():
         raise RuntimeError("drive call while the thread holds a database connection")
     try:
         gateway = drive_gateway.get_drive_gateway()
     except drive_gateway.DriveStartupError as exc:
+        _log_call_failure(op, rel, "DRIVE_UNAVAILABLE", drive_gateway.safe_error_message(exc))
         raise SpdmStorageError("DRIVE_UNAVAILABLE", str(exc)[:200]) from None
     if gateway is None:
         raise SpdmStorageError("DRIVE_MODE_DISABLED", "SCX 드라이브 모드가 아닙니다.")
@@ -491,23 +514,28 @@ def _call(fn: Callable[[Any], T]) -> T:
             if drive_gateway.drive_error_code(error) != "AUTH_REQUIRED" or not drive_auth.auto_refresh_once(gateway):
                 raise
             return fn(drive_gateway.get_drive_gateway() or gateway)
-    except SpdmStorageError:
+    except SpdmStorageError as error:
+        _log_call_failure(op, rel, str(error.code), drive_gateway.safe_error_message(error))
         raise
     except Exception as error:  # adapter DriveError carries a code; anything else is a bug
         if drive_gateway.drive_error_code(error) is None:
+            logger.warning("SCX drive read %s raised %s: rel=%s", op, type(error).__name__, rel, exc_info=True)
             raise
-        raise drive_gateway.to_storage_error(error) from None
+        mapped = drive_gateway.to_storage_error(error)
+        _log_call_failure(op, rel, str(mapped.code), str(mapped))
+        raise mapped from None
 
 
 def _live_list(session: DriveReadSession | None, spdm_root: str, rel: str) -> list[Any]:
-    entries = _call(lambda gateway: gateway.list_dir(drive_path(spdm_root, rel), priority=_priority(session)))
+    entries = _call(lambda gateway: gateway.list_dir(drive_path(spdm_root, rel), priority=_priority(session)),
+                    "list_dir", rel)
     entries = list(entries)
     _observe(entries)
     return entries
 
 
 def _live_stat(session: DriveReadSession | None, spdm_root: str, rel: str) -> Any | None:
-    return _call(lambda gateway: gateway.stat(drive_path(spdm_root, rel), priority=_priority(session)))
+    return _call(lambda gateway: gateway.stat(drive_path(spdm_root, rel), priority=_priority(session)), "stat", rel)
 
 
 # --- raw (live drive) view, session cached ---------------------------------------------------
@@ -779,7 +807,8 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
     _reserve_staging(session, int(version.size or 0))
     target = session.next_dir()
     result = _call(lambda gateway: gateway.download_to(drive_path(spdm_root, rel), target,
-                                                       max_bytes=max_bytes, priority=_priority(session)))
+                                                       max_bytes=max_bytes, priority=_priority(session)),
+                   "download_to", rel)
     local = Path(result.local_path)
     if not server_local.is_regular_file_inside(local, target):
         raise SpdmStorageError("DRIVE_INTERNAL", "드라이브 다운로드 위치가 올바르지 않습니다.")

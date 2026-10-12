@@ -35,7 +35,13 @@ def result_environments(conn, project_id: str, request_id: str) -> dict[str, Any
             [project_id, request_id]).fetchall():
         if str(environment) in counts:
             counts[str(environment)] = int(count)
-    return {"environments": [env for env in RESULT_ENVIRONMENTS if counts[env] > 0], "case_counts": counts}
+    # Environments of the request's folder registrations (no Cases needed): the default
+    # environment for result registration of a request that has no Cases yet.
+    folder = {str(row[0]) for row in conn.execute(
+        "SELECT DISTINCT environment FROM folder_environment_registrations "
+        "WHERE project_id=? AND request_id=? AND deleted_at IS NULL", [project_id, request_id]).fetchall()}
+    return {"environments": [env for env in RESULT_ENVIRONMENTS if counts[env] > 0], "case_counts": counts,
+            "folder_environments": [env for env in RESULT_ENVIRONMENTS if env in folder]}
 
 
 def fail(message: str):

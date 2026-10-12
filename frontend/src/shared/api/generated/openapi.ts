@@ -2612,6 +2612,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/drive/queue/bulk-cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Bulk Cancel
+         * @description Cancel the selected (or all filtered) open items, as the single cancel does. Drive files are never deleted.
+         */
+        post: operations["queue_bulk_cancel_api_admin_drive_queue_bulk_cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/queue/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Purge
+         * @description Remove finished rows (DONE/CANCELLED/FAILED/CONFLICT) and their server staging. Drive files are never deleted.
+         */
+        post: operations["queue_purge_api_admin_drive_queue_purge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/drive/queue/resume": {
         parameters: {
             query?: never;
@@ -5596,6 +5636,36 @@ export interface components {
              */
             in_flight: number;
         };
+        /**
+         * DriveQueueBulkCancelInput
+         * @description Exactly one of ``ids`` (selected rows) or ``all_filter`` (every row of that list filter).
+         */
+        DriveQueueBulkCancelInput: {
+            /** Ids */
+            ids?: string[] | null;
+            all_filter?: components["schemas"]["DriveQueueFilter"] | null;
+        };
+        /** DriveQueueBulkResult */
+        DriveQueueBulkResult: {
+            /** Affected */
+            affected: string[];
+            /** Skipped */
+            skipped: components["schemas"]["DriveQueueSkipped"][];
+            /**
+             * Staging Removed
+             * @default 0
+             */
+            staging_removed: number;
+            queue: components["schemas"]["DriveQueueList"];
+        };
+        /**
+         * DriveQueueFilter
+         * @description The admin list filter the selection was made in (``state`` empty: the default view).
+         */
+        DriveQueueFilter: {
+            /** State */
+            state?: string | null;
+        };
         /** DriveQueueItem */
         DriveQueueItem: {
             /** Id */
@@ -5663,6 +5733,25 @@ export interface components {
             writes_enabled: boolean;
             /** Items */
             items: components["schemas"]["DriveQueueItem"][];
+        };
+        /**
+         * DriveQueuePurgeInput
+         * @description Exactly one of ``ids`` or ``states`` (every finished row in those states).
+         */
+        DriveQueuePurgeInput: {
+            /** Ids */
+            ids?: string[] | null;
+            /** States */
+            states?: string[] | null;
+        };
+        /** DriveQueueSkipped */
+        DriveQueueSkipped: {
+            /** Id */
+            id: string;
+            /** Code */
+            code: string;
+            /** State */
+            state?: string | null;
         };
         /** DriveSourceChangeDecision */
         DriveSourceChangeDecision: {
@@ -7243,6 +7332,11 @@ export interface components {
             /** Environments */
             environments: ("USAGE" | "DISTRIBUTION")[];
             case_counts: components["schemas"]["ResultEnvironmentCounts"];
+            /**
+             * Folder Environments
+             * @default []
+             */
+            folder_environments: ("USAGE" | "DISTRIBUTION")[];
         };
         /**
          * ResultImportHistoryItem
@@ -13796,6 +13890,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriveQueueItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_bulk_cancel_api_admin_drive_queue_bulk_cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DriveQueueBulkCancelInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveQueueBulkResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_purge_api_admin_drive_queue_purge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DriveQueuePurgeInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveQueueBulkResult"];
                 };
             };
             /** @description Validation Error */

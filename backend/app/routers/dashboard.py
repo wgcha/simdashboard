@@ -21,6 +21,7 @@ class ResultEnvironmentCounts(BaseModel):
 class ResultEnvironments(BaseModel):
     environments: list[Literal["USAGE", "DISTRIBUTION"]]
     case_counts: ResultEnvironmentCounts
+    folder_environments: list[Literal["USAGE", "DISTRIBUTION"]] = []
 
 
 class FolderProgressStep(BaseModel):

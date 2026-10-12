@@ -128,6 +128,8 @@ def _classify_for_refresh(session, payload: "Refresh", request: Request) -> None
         if not isinstance(status_code, int):
             status_code = drive_gateway.storage_http_status(code, 422 if isinstance(exc, ValueError) else 503)
         message = str(exc) if isinstance(exc, ValueError) else "드라이브 원본을 확인하지 못했습니다. 잠시 후 다시 시도하세요."
+        folder_auto_sync.log_outcome(payload.project_id, payload.request_id, payload.environment,
+                                     {"status": "FAILED", "code": code, "message": message}, exc, source="refresh")
         with connect() as conn:
             write_audit_event(request=request, principal=request.state.principal, status_code=status_code,
                               action="FOLDER_ENVIRONMENT_REFRESH_FAILED",
@@ -150,6 +152,10 @@ def refresh(payload: Refresh, request: Request):
                     conn, payload.project_id, payload.request_id, payload.environment,
                     result["snapshot_id"], result["status"], request.state.principal.user_id,
                 )
+            if result["status"] == "CONFLICT":
+                folder_auto_sync.log_outcome(payload.project_id, payload.request_id, payload.environment,
+                                             {"status": "CONFLICT", "code": "FOLDER_SCHEMA_ROLE_CONFLICT",
+                                              "message": "폴더 역할이 모호한 항목이 있어 이전 구조를 유지합니다."}, source="refresh")
             write_audit_event(request=request, principal=request.state.principal, status_code=200,
                               action="FOLDER_ENVIRONMENT_REFRESH_CONFLICT" if result["status"] == "CONFLICT" else "FOLDER_ENVIRONMENT_REFRESHED",
                               detail={"snapshot_id": result["snapshot_id"], "project_id": payload.project_id,
@@ -159,6 +165,8 @@ def refresh(payload: Refresh, request: Request):
         except ValueError as exc:
             code = getattr(exc, "code", "ENVIRONMENT_REFRESH_INVALID")
             status_code = getattr(exc, "status_code", 422)
+            folder_auto_sync.log_outcome(payload.project_id, payload.request_id, payload.environment,
+                                         {"status": "FAILED", "code": code, "message": str(exc)}, exc, source="refresh")
             write_audit_event(request=request, principal=request.state.principal, status_code=status_code,
                               action="FOLDER_ENVIRONMENT_REFRESH_FAILED",
                               detail={"project_id": payload.project_id, "request_id": payload.request_id,

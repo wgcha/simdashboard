@@ -59,7 +59,7 @@
 | `SIMDASH_DRIVE_BLOB_DIR` | — | `<WORK_DIR>\blobs` | 32 MiB 초과 다운로드 파일의 서버 보관소(내용 sha256 이름, 05 §3). 백업 대상 아님(드라이브에서 다시 받을 수 있음) |
 | `SIMDASH_DRIVE_BLOB_MAX_BYTES` | — | `107374182400`(100 GiB) | 보관소 용량 상한. 넘으면 가장 오래 쓰지 않은 파일부터 지운다(64 MiB 이상) |
 | `SIMDASH_SCX_CA_BUNDLE` | 권장 | — | 사내 CA 번들 pem 절대 경로 |
-| `SIMDASH_SCX_WORK_DIR` | — | `backend\data\scx-worker` | 워커 TEMP·adcopy 로그·`dashboard.lock`. 서버 설치는 릴리스 폴더 밖 경로 권장 |
+| `SIMDASH_SCX_WORK_DIR` | — | `backend\data\scx-worker` | 워커 TEMP·adcopy 로그·`dashboard.lock`·작업자 stderr `worker.log`(§8.8). 서버 설치는 릴리스 폴더 밖 경로 권장 |
 | `SIMDASH_SCX_STAGING_DIR` | — | `<WORK_DIR>\staging` | 다운로드·업로드 임시 저장소. 대시보드 서비스 계정만 접근 |
 | `SIMDASH_SCX_MAX_CONCURRENCY` | — | `1` | 워커 동시 SDK 호출 수(1–8) |
 | `SIMDASH_SCX_CACHE_TTL_SECONDS` | — | `30` | 어댑터 목록·조회 캐시(0–3600초) |
@@ -201,6 +201,13 @@
 
 `POST /api/folder-discovery/environments/sync`(scx): 권한 확인(짧은 연결) → 합치기 간격 확인 → 의뢰별 드라이브 잠금(연결 없이) → 읽기 세션: ① 분류(§8.4, 드라이브 목록은 연결 없이, DB는 짧은 연결) ② 기존 빠른 확인·새로고침(연결 → 의뢰 범위 잠금, local 모드·등록 삭제와 같은 잠금 순서) → 결과에 `drive: {pending_changes, missing, ignored, token_kind, new_files}`. 드라이브 오류(`BUSY`·`TIMEOUT`·`AUTH_REQUIRED` 등)는 `FAILED`+코드로 끝나고 등록 버전은 바뀌지 않으며 다음 주기에 다시 확인한다.
 
+이슈 #51(2026-10-12, 실제 드라이브 현장 보고)에서 고친 규칙:
+
+- **내용 지문의 크기 한도:** 드라이브의 내용 지문은 `version_token`이라 파일을 읽지 않는다. 그래서 로컬 읽기용 한도(결과·미디어 32 MiB, 덱 64 MiB)를 적용하지 않는다. 전에는 32 MiB를 넘는 결과 영상(사용환경 동작 영상 등) 하나가 의뢰 전체의 동기화를 매번 `FAILED`(`FOLDER_SCHEMA_CONTENT_FILE_LIMIT`, HTTP 200)로 만들었다. local 모드는 그대로다(내용을 읽으므로 한도 유지).
+- **등록 뒤 생긴 Case:** Case 없이(빈 `Working`) 등록된 의뢰에 사용자가 드라이브에서 직접 만든 Case 폴더는, 결과 파일(값·미디어)이 생기면 그 새로고침에서 바로 수집한다(전에는 Case·Scene만 보이고 "결과 없음"으로 남았다). 새 Case의 수집 실패는 스냅샷을 막지 않고 Case를 결과 없이 보여 준다(경고 로그, 다음 폴더 변경 때 다시 시도). 다른 의뢰에 연결된 Case 경로는 건너뛴다. local 모드는 등록된 Case만 다시 수집한다(기존 동작).
+- **큰 자산:** 드라이브 모드의 수집은 32 MiB를 넘는 영상·이미지를 내려받지 않고 `UNPROCESSED_FILE:…:ASSET_TOO_LARGE` 품질 이슈로 남긴 채 나머지 결과를 수집한다(전에는 Case 수집 전체가 `DASHBOARD_ASSET_TOO_LARGE`로 실패). local 모드와 파일·값 검수 경로는 그대로 거부한다.
+- 일부 단계만 있는 구조(빈 Case, 빈 평가 폴더, Case 바로 아래 파일)도 있는 Case·Scene을 그대로 보여 준다(회귀 시험 `tests/test_drive_usage_sync.py`).
+
 ### 8.6 화면 (데스크톱)
 
 - Case 결과·소재 탭의 폴더 자동 확인 줄: `원본 변경 n · 확인 필요 · 원본 없음 m` 배지 → **드라이브 원본 변경** 대화상자(파일·상태·등록 버전·드라이브 값, 파일별/전체 [새 버전 등록]·[무시], 권한이 없으면 목록만).
@@ -214,6 +221,21 @@
 - 32 MiB 초과 영상의 "드라이브에서 불러오는 중" 표시, 화면 폴더 선택기(D4). 같은 파일 `BUSY` 3회 연속 "사용 중" 배지 미구현(`FAILED`+`SPDM_FILE_BUSY`로 표시).
 - 서버 임시·보관소 정리는 읽기 세션 단위와 한 시간 주기 고아 정리만 있다(업로드 대기 파일 정리는 D3).
 - 등록 직후 첫 동기화 전(행이 아직 의뢰 범위로 분류되기 전)의 드라이브 변경은 등록 버전으로 가리지 않는다(분류 없는 행은 확인 대상이 될 수 없어 영구 차단을 피함). 보통 1분 안의 자동 반영이 분류한다.
+
+### 8.8 문제 확인: 로그 위치
+
+드라이브 화면이 "폴더 확인 필요"·"폴더를 확인하지 못했습니다"만 보일 때(동기화 응답은 HTTP 200 + `status: FAILED`) 아래 순서로 본다. 로그에 토큰·비밀번호 값은 남지 않는다(`Bearer`·JWT 형태·`*token=`/`"password":` 값 가림).
+
+| 무엇 | 어디 | 형태 |
+|---|---|---|
+| 동기화·새로고침 실패·충돌 | 서버 로그(`uvicorn-error.log`, 로거 `app.services.folder_auto_sync`) | `WARNING Folder sync FAILED: project=… request=… environment=USAGE code=… message=… cause=<예외 형식>: <정리된 메시지> <- <원인 예외>` — 같은 의뢰·환경·코드는 **10분에 한 번**(60초 자동 확인이 같은 줄을 반복하지 않음). 수동 새로고침은 `Folder refresh …` |
+| 읽기 세션의 드라이브 호출 실패 | 같은 서버 로그(로거 `app.services.drive.reads`) | `WARNING SCX drive read <list_dir|stat|download_to> failed: rel=<루트 기준 경로> code=<DRIVE_*·SPDM_*> message=…`(같은 호출·경로·코드는 5분에 한 번, `SPDM_NOT_FOUND`는 INFO) |
+| 업로드 대기열의 드라이브 호출 실패 | 같은 서버 로그(로거 `app.services.drive.upload_queue`) | `WARNING SCX drive queue <mkdirs|upload_new|copy_within> failed: rel=… code=… message=…`, 관리 화면 업로드 대기열의 오류 열 |
+| 어댑터 작업자(별도 Python 프로세스)의 stderr | `<SIMDASH_SCX_WORK_DIR>/worker.log`(기본 `backend\data\scx-worker\worker.log`, 5 MB × 3개 회전: `worker.log.1`~`.3`) | `<시각> pid=<작업자 PID> <줄>` — 어댑터 내부 예외·SDK 오류 메시지. 줄 단위로 토큰을 가린다 |
+
+- `worker.log`는 어댑터가 작업자를 `subprocess.Popen`으로 시작하면서 stderr를 버리거나(`DEVNULL`) 물려받게(`None`) 둘 때 대시보드가 그 stderr를 파이프로 받아 기록한다(`drive/worker_log.py`; 어댑터 모듈의 `subprocess`만 바꾸며 다른 프로세스에는 영향 없음). 어댑터가 stderr를 직접 읽으면 손대지 않는다. 어댑터가 다른 방식으로 작업자를 띄우면 이 파일은 생기지 않는다 — 그때는 어댑터 쪽 로그를 본다.
+- 응답 코드 읽기: `FOLDER_SCHEMA_*`는 폴더 구조·규칙 문제(메시지가 원인), `DRIVE_*`/`SPDM_*`는 드라이브 호출 문제(위 읽기 로그의 같은 시각 줄), `DRIVE_READ_NOT_PREPARED`는 읽기 세션 회차(8회)를 넘긴 경우다.
+- 관리 › 드라이브 관리 › **드라이브 점검**은 조회 전용(stat·list·작은 파일 download)이라 통과해도 동기화 실패 원인(구조·크기 한도·수집)은 위 로그로 확인한다.
 
 ## 9. 코드 위치와 경계
 
@@ -272,8 +294,11 @@
 - **임시 파일:** 항목이 `DONE`이 되기 전에는 지우지 않는다. Final 묶음은 보고서·`plan.json` 임시 파일을 **묶음 전체가 `DONE`일 때까지** 남긴다(같은 Final ID 재시도). 묶음이 모두 `DONE`이면 `upload-<묶음>` 폴더를 지운다. 기동 시와 그 뒤 1시간마다 하루 지난 `upload-*`·`xfer-*`를 지우되(이 프로세스에서 아직 내려받는 중인 항목의 `xfer-*`는 제외), 아직 진행할 수 있는 묶음(묶음 요약 `QUEUED`·`RUNNING`·`PAUSED`)이나 `PUBLISHING` Final이 쓰는 것은 남기고, 관리자 판단을 기다리는 묶음(`CONFLICT`·`FAILED` 항목, 또는 `halt_on_error` 항목이 멈춰 뒤 항목이 `PENDING`으로 남은 정지 묶음)과 미완료 Final(`PLANNED`·`STAGED`·`FAILED`)의 것은 마지막 활동 후 **7일**까지 남긴다(서버 임시 저장소만, 드라이브는 건드리지 않음). 7일 뒤 재시도하면 보고서·파일을 다시 올려야 한다(Final 재시도는 지워진 `plan.json` 임시 파일을 DB `plan_json`에서 다시 만들고, 대기열에 기록된 sha256과 다르면 422 `FINALIZATION_PLAN_STAGE_INVALID`로 멈춘다).
 - **단일 작업자:** 프로세스당 스레드 1개(`dashboard.lock`으로 프로세스도 하나). 묶음은 만든 순서대로, 묶음 안은 `seq` 순서.
 - 묶음 상태: `QUEUED`·`RUNNING`·`PAUSED`(인증 대기)·`DONE`·`PARTIAL`·`CONFLICT`·`FAILED`·`CANCELLED`. 항목 상태: `PENDING`·`RUNNING`·`DONE`·`CONFLICT`·`FAILED`·`BLOCKED`·`CANCELLED`.
+- **드라이브 경로:** 대기열 항목의 드라이브 경로는 읽기 경로와 같은 함수로 만든다(`reads.drive_path(SIMDASH_SCX_DRIVE_ROOT, reads.check_rel(rel))` — NFC 정규화, 계약 §1 경로 규칙). 루트는 설정에서 앞뒤 `/`를 떼고 `~`로 시작하면 기동을 거부한다. 그래서 `mkdirs`가 만든 폴더는 다음 동기화가 목록에서 보는 그 폴더다(이슈 #51에서 확인).
+- **실패 로그:** 드라이브 호출이 실패하면 `WARNING SCX drive queue <mkdirs|upload_new|copy_within> failed: rel=<루트 기준 경로> code=<코드> message=<정리된 메시지>`를 남긴다.
 - 관리자 취소는 항목을 `CANCELLED`로 표시만 한다(드라이브 내용 불변). 묶음 마무리(Final 실패 판정·잠금 해제)는 취소가 커밋된 뒤에 실행한다. 다시 시도는 같은 항목을 처음부터(충돌은 드라이브 재확인). Final 묶음 항목의 다시 시도는 의뢰 잠금을 먼저 잡는다(다른 Final이 반영 중이면 409 `FINALIZATION_LOCKED`).
 - **항목 잡기:** 조건부 `UPDATE … WHERE state='PENDING' RETURNING`으로 자기 잡기를 확인한다.
+- **목록 편집(2026-10-12, 전체 관리자):** `POST /api/admin/drive/queue/bulk-cancel {ids | all_filter: {state}}`는 고른 항목(또는 그 목록 조건의 취소 가능한 항목 전부, 최대 5000)을 단건 취소와 똑같이 `CANCELLED`로 표시하고, 커밋 뒤 묶음마다 마무리 훅(Final 실패 판정·잠금 해제)을 실행한다. 취소할 수 없는 상태는 `skipped`로 돌려준다. `POST /api/admin/drive/queue/purge {ids | states}`는 끝난 항목(`DONE`·`CANCELLED`·`FAILED`·`CONFLICT`)의 **대기열 행과 서버 임시 파일만** 지운다(드라이브는 건드리지 않음). 같은 묶음에 진행 중인 항목(`PENDING`·`RUNNING`·`BLOCKED`)이 있으면 그 묶음은 `DRIVE_QUEUE_BATCH_OPEN`으로, Final 지정 묶음은 Final이 `COMPLETE`가 아니면(`PUBLISHING`은 잠금 보유, 멈춘 Final은 이 행으로 다시 시도) `DRIVE_QUEUE_FINAL_ACTIVE`로 건너뛴다. 묶음의 행이 모두 지워지면 `upload-<묶음>` 폴더를, 일부만이면 그 항목의 임시 파일을 지운다. 감사 기록 `DRIVE_QUEUE_BULK_CANCELLED`·`DRIVE_QUEUE_PURGED`(개수, 항목·묶음 id 최대 200개).
 
 ### 10.3 결과 등록(끌어놓기) — integration 05 §5.3, W8
 
@@ -335,7 +360,7 @@
 
 - 결과 등록: 올리기 후 "n개 파일을 서버에 받았습니다 · 드라이브 업로드 대기열" + 묶음 진행(막대, 파일 n/m, 현재 항목, 인증 대기 안내, 충돌 목록 — "덮어쓰거나 지우지 않음"). 쓰기 허용이 꺼져 있으면 D2와 같은 읽기 전용 안내.
 - Final 지정: 배지·창의 진행 문구가 "Final 드라이브 반영 대기/중 n%", 인증 대기 시 "Final 일시 정지(드라이브 인증 필요)". 완료 기록에 "드라이브 반영 기록" 표시, 요약 파일 대기 중 "요약 파일 드라이브 반영 중".
-- 관리 › 드라이브 관리 › **업로드 대기열**: 상태별 개수·필터, 항목(기능·작업·대상·시도·오류·전송 방식), 다시 시도·취소(확인 창: 드라이브 내용은 지우지 않음)·대기열 재개, 쓰기 설정 꺼짐·작업자 미실행·일시 정지 경고.
+- 관리 › 드라이브 관리 › **업로드 대기열**: 상태별 개수·필터, 항목(기능·작업·대상·시도·오류·전송 방식), 다시 시도·취소(확인 창: 드라이브 내용은 지우지 않음)·대기열 재개, 쓰기 설정 꺼짐·작업자 미실행·일시 정지 경고. 행마다 선택 칸과 머리글의 **전체 선택(현재 목록 조건)**, **선택 취소**·**목록에서 지우기**·**완료·취소 항목 모두 지우기**(모두 확인 창: 드라이브에 이미 올라간 파일·폴더는 지우지 않음, 결과에 처리·건너뜀 개수). 전체 선택 상태의 선택 취소는 화면에 보이는 행이 아니라 그 목록 조건 전체에 적용된다.
 - 상단 상태 API의 `queue_paused`로 일시 정지 여부를 알 수 있다.
 
 ### 10.8 D3에서 남긴 것

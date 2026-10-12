@@ -7482,6 +7482,90 @@
         }
       }
     },
+    "/api/admin/drive/queue/bulk-cancel": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Queue Bulk Cancel",
+        "description": "Cancel the selected (or all filtered) open items, as the single cancel does. Drive files are never deleted.",
+        "operationId": "queue_bulk_cancel_api_admin_drive_queue_bulk_cancel_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DriveQueueBulkCancelInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveQueueBulkResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/queue/purge": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Queue Purge",
+        "description": "Remove finished rows (DONE/CANCELLED/FAILED/CONFLICT) and their server staging. Drive files are never deleted.",
+        "operationId": "queue_purge_api_admin_drive_queue_purge_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DriveQueuePurgeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveQueueBulkResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/drive/queue/resume": {
       "post": {
         "tags": [
@@ -17293,6 +17377,90 @@
         ],
         "title": "DriveHealth"
       },
+      "DriveQueueBulkCancelInput": {
+        "properties": {
+          "ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 5000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ids"
+          },
+          "all_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriveQueueFilter"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "DriveQueueBulkCancelInput",
+        "description": "Exactly one of ``ids`` (selected rows) or ``all_filter`` (every row of that list filter)."
+      },
+      "DriveQueueBulkResult": {
+        "properties": {
+          "affected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Affected"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/DriveQueueSkipped"
+            },
+            "type": "array",
+            "title": "Skipped"
+          },
+          "staging_removed": {
+            "type": "integer",
+            "title": "Staging Removed",
+            "default": 0
+          },
+          "queue": {
+            "$ref": "#/components/schemas/DriveQueueList"
+          }
+        },
+        "type": "object",
+        "required": [
+          "affected",
+          "skipped",
+          "queue"
+        ],
+        "title": "DriveQueueBulkResult"
+      },
+      "DriveQueueFilter": {
+        "properties": {
+          "state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(PENDING|RUNNING|DONE|CONFLICT|FAILED|BLOCKED|CANCELLED)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "type": "object",
+        "title": "DriveQueueFilter",
+        "description": "The admin list filter the selection was made in (``state`` empty: the default view)."
+      },
       "DriveQueueItem": {
         "properties": {
           "id": {
@@ -17533,6 +17701,72 @@
           "items"
         ],
         "title": "DriveQueueList"
+      },
+      "DriveQueuePurgeInput": {
+        "properties": {
+          "ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 5000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ids"
+          },
+          "states": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "States"
+          }
+        },
+        "type": "object",
+        "title": "DriveQueuePurgeInput",
+        "description": "Exactly one of ``ids`` or ``states`` (every finished row in those states)."
+      },
+      "DriveQueueSkipped": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "code"
+        ],
+        "title": "DriveQueueSkipped"
       },
       "DriveSourceChangeDecision": {
         "properties": {
@@ -21977,6 +22211,18 @@
           },
           "case_counts": {
             "$ref": "#/components/schemas/ResultEnvironmentCounts"
+          },
+          "folder_environments": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ]
+            },
+            "type": "array",
+            "title": "Folder Environments",
+            "default": []
           }
         },
         "type": "object",
