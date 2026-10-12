@@ -16,6 +16,15 @@ nor overwrite a freshly registered account; such a save is dropped with a
 warning.  Internally bundles are always :class:`LocalTokenBundle` (redacting
 ``repr``); the adapter's ``TokenBundle`` type is used only for values returned
 by ``load()`` to the adapter.
+
+"연결 계정" (issue #50, migration 0042): ``drive_connected_account`` remembers the
+shared account of the first successful registration/login (fallback for rows
+registered before the upgrade: ``drive_credentials.account_hint``).  ``save()``
+never persists a bundle whose non-empty ``account_hint`` names another account
+(the worker's ``tokens`` notification after ``login_password`` with a different
+account must not replace the stored tokens before the admin confirms the
+change); :meth:`DbTokenStore.write` sets the connected account in the same
+transaction as the new generation.
 """
 from __future__ import annotations
 
@@ -24,9 +33,10 @@ import json
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -50,6 +60,11 @@ class LocalTokenBundle:
 
     def __repr__(self) -> str:  # never expose token values through repr/logging
         return f"TokenBundle(server_url={self.server_url!r}, account_hint={self.account_hint!r}, obtained_at={self.obtained_at!r})"
+
+
+def same_account(left: str | None, right: str | None) -> bool:
+    """Account identifiers compare case-insensitively after trimming (SSO user names)."""
+    return (left or "").strip().casefold() == (right or "").strip().casefold()
 
 
 def key_id(secret_key: str) -> str:
@@ -106,6 +121,8 @@ class DbTokenStore:
         self._lock = write_lock if write_lock is not None else threading.Lock()
         self._status = status if status is not None else StoreStatus()
         self._loaded_generation: int | None = None
+        self._captured: list[LocalTokenBundle] | None = None
+        self._capture_event = threading.Event()
 
     def for_gateway(self, adapter_bundle_type: Any | None = None) -> "DbTokenStore":
         """A fresh store for one gateway instance: own loaded generation, shared admin status."""
@@ -201,18 +218,32 @@ class DbTokenStore:
         """Persist a rotated bundle from the worker; commits before returning.
 
         Only updates the row generation this store last loaded.  A save for a
-        deleted or re-registered row is dropped (warning log, no token content).
+        deleted or re-registered row is dropped (warning log, no token content),
+        and so is a bundle of an account other than the connected account.
+        While :meth:`capturing` is active the bundle is also handed to the caller.
         """
+        try:
+            local = self.to_local(bundle)
+        except Exception:
+            logger.error("SCX token save failed: the worker sent an unreadable token bundle")
+            return
+        captured = self._captured
+        if captured is not None:
+            captured.append(local)
+            self._capture_event.set()
         generation = self._loaded_generation
         if generation is None:
             self._dropped("no registered token was loaded by this gateway")
             return
         try:
-            local = self.to_local(bundle)
             ciphertext = self._fernet.encrypt(bundle_to_json(local))
             obtained_at = _utc(local.obtained_at).replace(tzinfo=None)
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             with self._lock, self._connect() as conn:
+                connected = _connected_account(conn)
+                if local.account_hint and connected and not same_account(local.account_hint, connected):
+                    self._dropped("the token belongs to another account than the connected account")
+                    return
                 updated = conn.execute(
                     "UPDATE drive_credentials SET ciphertext=?, account_hint=?, obtained_at=?, updated_by=?, updated_at=? "
                     "WHERE id=? AND generation=? AND key_id=? RETURNING id",
@@ -234,10 +265,40 @@ class DbTokenStore:
         self._status.last_stale_save_at = datetime.now(timezone.utc)
         logger.warning("SCX rotated token not saved: %s (stale token chain dropped)", reason)
 
+    # -- Re-login (issue #50) ---------------------------------------------------------------------
+
+    @contextmanager
+    def capturing(self) -> Iterator[list[LocalTokenBundle]]:
+        """Collect every bundle the worker hands to :meth:`save` while the block runs."""
+        captured: list[LocalTokenBundle] = []
+        self._capture_event.clear()
+        self._captured = captured
+        try:
+            yield captured
+        finally:
+            self._captured = None
+
+    def wait_captured(self, timeout: float) -> None:
+        self._capture_event.wait(max(0.0, timeout))
+
+    def adopt_generation(self, generation: int) -> None:
+        """The worker already holds the bundle just written as ``generation``: keep saving its rotations."""
+        self._loaded_generation = int(generation)
+
+    def detach(self) -> None:
+        """Drop every later save of this (abandoned) gateway store."""
+        self._loaded_generation = None
+
+    def connected_account(self) -> str | None:
+        with self._connect() as conn:
+            return _connected_account(conn)
+
     # -- Admin helpers ---------------------------------------------------------------------------
 
-    def write(self, bundle: Any, *, updated_by: str) -> int:
-        """Admin registration: replace the row with a new, larger generation; returns it."""
+    def write(self, bundle: Any, *, updated_by: str, connected_account: str | None = None) -> int:
+        """Admin registration: replace the row with a new, larger generation; returns it.
+
+        ``connected_account`` (when given) becomes the remembered "연결 계정" in the same transaction."""
         local = self.to_local(bundle)
         ciphertext = self._fernet.encrypt(bundle_to_json(local))
         obtained_at = _utc(local.obtained_at).replace(tzinfo=None)
@@ -254,6 +315,13 @@ class DbTokenStore:
                 "updated_by=excluded.updated_by, updated_at=excluded.updated_at, generation=excluded.generation",
                 [ROW_ID, ciphertext, self._key_id, local.account_hint, obtained_at, updated_by, now, generation],
             )
+            if connected_account and connected_account.strip():
+                conn.execute(
+                    "INSERT INTO drive_connected_account(id,account_hint,updated_by,updated_at) VALUES (?,?,?,?) "
+                    "ON CONFLICT (id) DO UPDATE SET account_hint=excluded.account_hint, updated_by=excluded.updated_by, "
+                    "updated_at=excluded.updated_at",
+                    [ROW_ID, connected_account.strip()[:200], updated_by, now],
+                )
             if getattr(conn, "backend", "") == "postgresql":
                 conn.execute("COMMIT")
         return generation
@@ -280,6 +348,15 @@ class DbTokenStore:
 
         return {"present": True, "account_hint": row[0], "obtained_at": stamp(row[1]), "updated_by": row[2],
                 "updated_at": stamp(row[3]), "key_matches": str(row[4]) == self._key_id}
+
+
+def _connected_account(conn: Any) -> str | None:
+    """The remembered "연결 계정"; rows registered before migration 0042 fall back to the token row."""
+    row = conn.execute("SELECT account_hint FROM drive_connected_account WHERE id=?", [ROW_ID]).fetchone()
+    if row is not None and row[0]:
+        return str(row[0])
+    row = conn.execute("SELECT account_hint FROM drive_credentials WHERE id=?", [ROW_ID]).fetchone()
+    return str(row[0]) if row is not None and row[0] else None
 
 
 _generation_lock = threading.Lock()

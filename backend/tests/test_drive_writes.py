@@ -73,6 +73,7 @@ def scxw(tmp_path, monkeypatch, password_auth_bootstrap_admin):
     drive_gateway.shutdown()
     with connect() as conn:
         conn.execute("DELETE FROM drive_credentials")
+        conn.execute("DELETE FROM drive_connected_account")
     drive.add_dir(root)
     violations: list[tuple[str, str]] = []
     drive.on_call = lambda op, rel: violations.append((op, rel)) if connection_held() else None

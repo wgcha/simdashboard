@@ -67,6 +67,7 @@ from ...database_connection import connect, connection_held
 from ..storage import server_local
 from ..storage.provider import SpdmStorageError
 from ..storage.server_local import BlobStore
+from . import auth as drive_auth
 from . import gateway as drive_gateway
 from .config import validate_drive_rel_path
 
@@ -483,7 +484,13 @@ def _call(fn: Callable[[Any], T]) -> T:
     if gateway is None:
         raise SpdmStorageError("DRIVE_MODE_DISABLED", "SCX 드라이브 모드가 아닙니다.")
     try:
-        return fn(gateway)
+        try:
+            return fn(gateway)
+        except Exception as error:  # noqa: BLE001
+            # Issue #50 §3.5: one refresh_now per AUTH_REQUIRED episode, then this call once more.
+            if drive_gateway.drive_error_code(error) != "AUTH_REQUIRED" or not drive_auth.auto_refresh_once(gateway):
+                raise
+            return fn(drive_gateway.get_drive_gateway() or gateway)
     except SpdmStorageError:
         raise
     except Exception as error:  # adapter DriveError carries a code; anything else is a bug

@@ -44,6 +44,7 @@ def _reset_drive_state():
     drive_gateway.shutdown()
     with connect() as conn:   # an explicitly enabled PostgreSQL test DB persists between tests
         conn.execute("DELETE FROM drive_credentials")
+        conn.execute("DELETE FROM drive_connected_account")
     yield
     drive_gateway.shutdown()
 
@@ -121,7 +122,7 @@ def test_none_mode_is_unchanged_and_never_imports_the_adapter(password_auth, mon
         assert client.get("/api/admin/drive/status", headers=admin).json()["mode"] == "none"
         assert client.get("/api/drive/status", headers=viewer).json() == {"mode": "none", "state": None,
                                                                           "writes_enabled": False, "writes_available": True,
-                                                                              "queue_paused": False}
+                                                                              "queue_paused": False, "can_reconnect": False}
         for method, path, kwargs in (("PUT", "/api/admin/drive/credentials", {"content": _bundle_json()}),
                                      ("DELETE", "/api/admin/drive/credentials", {}),
                                      ("POST", "/api/admin/drive/test", {}),
@@ -311,7 +312,7 @@ def test_credentials_register_validate_test_delete_without_echoing_tokens(fake_d
         assert status["credentials"]["present"] is False and status["drive_root_locked"] is True
         assert client.get("/api/drive/status", headers=viewer).json() == {"mode": "scx", "state": "AUTH_REQUIRED",
                                                                           "writes_enabled": False, "writes_available": False,
-                                                                          "queue_paused": False}
+                                                                          "queue_paused": False, "can_reconnect": False}
         bodies = []
         for body, fragment in ((_bundle_json(server_url="https://evil.example.test/"), "호스트"),
                                (_bundle_json(access_token=""), "access_token"),
@@ -340,7 +341,7 @@ def test_credentials_register_validate_test_delete_without_echoing_tokens(fake_d
         bodies.append(status.text)
         user = client.get("/api/drive/status", headers=viewer)
         assert user.json() == {"mode": "scx", "state": "OK", "writes_enabled": False, "writes_available": False,
-                                                                          "queue_paused": False}
+                                                                          "queue_paused": False, "can_reconnect": False}
         deleted = client.delete("/api/admin/drive/credentials", headers=admin)
         assert deleted.status_code == 204
         failed = client.post("/api/admin/drive/test", headers=admin).json()
@@ -447,6 +448,8 @@ def test_drive_error_mapping_matches_integration_06(fake_drive):
         assert drive_gateway.to_storage_error(error).code == storage_code
     assert drive_gateway.map_drive_error(module.DriveError(module.ErrorCode.OVERLOADED, "x")).retry_after == 5
     assert set(drive_gateway.DRIVE_ERROR_MAP) == {member.value for member in module.ErrorCode}
+    for code in drive_gateway.AUTH_FAILURE_CODES - {"AUTH_REQUIRED"}:   # issue #50 codes outside re-login
+        assert drive_gateway.DRIVE_ERROR_MAP[code].storage_code == "DRIVE_AUTH_REQUIRED"
 
 
 FORBIDDEN_CALLS = {"rm", "mv", "mv_to_trash", "move", "rename", "replace", "remove", "delete", "touch", "update_type",
@@ -611,9 +614,13 @@ def test_reregister_is_not_overwritten_by_the_old_chain(fake_drive, password_aut
         admin = _login(client, "drive-admin")
         _registered(client, admin)
         old = drive_gateway.existing_gateway()
-        renewed = client.put("/api/admin/drive/credentials", headers=admin,
-                             content=_bundle_json(access_token="eyJnew.access-SECRET", refresh_token="new-refresh-SECRET",
-                                                  obtained_at="2026-10-07T05:00:00Z", account_hint="other"))
+        other = _bundle_json(access_token="eyJnew.access-SECRET", refresh_token="new-refresh-SECRET",
+                             obtained_at="2026-10-07T05:00:00Z", account_hint="other")
+        # issue #50: another account than the connected one needs an explicit confirmation
+        refused = client.put("/api/admin/drive/credentials", headers=admin, content=other)
+        assert refused.status_code == 409 and refused.json()["detail"]["code"] == "DRIVE_ACCOUNT_CHANGE_CONFIRM"
+        assert not old.closed and drive_gateway.token_store().metadata()["account_hint"] == "spdm-shared"
+        renewed = client.put("/api/admin/drive/credentials?confirm_account_change=true", headers=admin, content=other)
         assert renewed.status_code == 200 and renewed.json()["test"]["ok"] is True
         assert old.closed and drive_gateway.existing_gateway() is not old
         current = drive_gateway.token_store().load_local().refresh_token
@@ -647,7 +654,7 @@ def test_status_endpoints_report_unavailable_instead_of_500(fake_drive, password
         user = client.get("/api/drive/status", headers=viewer)
         assert user.status_code == 200 and user.json() == {"mode": "scx", "state": "UNAVAILABLE",
                                                                 "writes_enabled": False, "writes_available": False,
-                                                                          "queue_paused": False}
+                                                                          "queue_paused": False, "can_reconnect": False}
         status = client.get("/api/admin/drive/status", headers=admin)
         assert status.status_code == 200 and status.json()["state"] == "UNAVAILABLE"
         tested = client.post("/api/admin/drive/test", headers=admin)

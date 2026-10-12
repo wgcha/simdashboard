@@ -348,6 +348,17 @@ def drive_queue_paused(conn: Any) -> int:
         link=ADMIN_DRIVE_LINK, dedupe_key="drive-queue-paused"))
 
 
+def resolve_drive_queue_paused(conn: Any) -> int:
+    """Drive re-authenticated (issue #50): every unread queue-paused notice is marked read for all admins."""
+    def work() -> int:
+        count = int(conn.execute("SELECT count(*) FROM notifications WHERE type='DRIVE_QUEUE_PAUSED' AND read_at IS NULL")
+                    .fetchone()[0])
+        if count:
+            conn.execute("UPDATE notifications SET read_at=? WHERE type='DRIVE_QUEUE_PAUSED' AND read_at IS NULL", [_now()])
+        return count
+    return _guarded(conn, "DRIVE_QUEUE_PAUSED_RESOLVED", work)
+
+
 _UPLOAD_TEXT = {
     "DONE": ("SUCCESS", "드라이브 업로드 완료", "파일 {done}/{total}개를 드라이브에 올렸습니다. 다음 자동 반영에서 결과에 나타납니다."),
     "PARTIAL": ("WARNING", "드라이브 업로드 일부 완료", "파일 {done}/{total}개만 올렸습니다. 나머지는 충돌·실패로 멈췄습니다."),

@@ -85,6 +85,7 @@ def initialize_database() -> None:
                 "materials_deck_cache",
                 "notifications",
                 "folder_link_reservations",
+                "drive_connected_account",
             )
             missing = [
                 table_name
@@ -142,6 +143,7 @@ def initialize_database() -> None:
                                   "request_id", "dedupe_key", "created_at", "read_at"},
                 "folder_link_reservations": {"root_key", "path_key", "project_id", "request_id", "environment",
                                              "created_by", "created_at", "expires_at"},
+                "drive_connected_account": {"id", "account_hint", "updated_by", "updated_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1275,6 +1277,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_materials_deck_cache_schema(conn)
         ensure_notifications_schema(conn)
         ensure_folder_link_reservations_schema(conn)
+        ensure_drive_connected_account_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1624,6 +1627,14 @@ def ensure_folder_link_reservations_schema(conn: duckdb.DuckDBPyConnection) -> N
         root_key VARCHAR NOT NULL, path_key VARCHAR NOT NULL, project_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL,
         environment VARCHAR NOT NULL CHECK (environment IN ('USAGE', 'DISTRIBUTION')), created_by VARCHAR NOT NULL,
         created_at TIMESTAMP NOT NULL, expires_at TIMESTAMP NOT NULL, PRIMARY KEY (root_key, path_key)
+    )""")
+
+
+def ensure_drive_connected_account_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0042 (SCX drive "연결 계정", issue #50)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS drive_connected_account (
+        id VARCHAR PRIMARY KEY CHECK (id = 'scx'), account_hint VARCHAR NOT NULL, updated_by VARCHAR NOT NULL,
+        updated_at TIMESTAMP NOT NULL
     )""")
 
 
