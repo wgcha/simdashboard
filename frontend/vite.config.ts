@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import os from 'node:os'
 
@@ -43,6 +43,24 @@ function basePathRedirect(basePath: string): Plugin {
   }
 }
 
+// Headers a browser must not be able to forward to the API through this proxy.  uvicorn trusts
+// X-Forwarded-* from 127.0.0.1 (= this proxy), so client-supplied values are removed, and the
+// real peer address is passed as X-Simdash-Proxy-Peer (overwritten, never taken from the client).
+// The API uses it for the "same PC only" rule of the drive account login (issue #50).
+const STRIPPED_PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-forwarded-port', 'x-forwarded-prefix', 'forwarded', 'x-real-ip', 'x-simdash-proxy-peer']
+
+function apiProxy(target: string): ProxyOptions {
+  return {
+    target,
+    configure(proxy) {
+      proxy.on('proxyReq', (proxyReq, request) => {
+        for (const name of STRIPPED_PROXY_HEADERS) proxyReq.removeHeader(name)
+        proxyReq.setHeader('x-simdash-proxy-peer', request.socket.remoteAddress ?? '')
+      })
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => ({
   plugins: [react(), basePathRedirect(normalizeBasePath(process.env.VITE_APP_BASE_PATH))],
   base: normalizeBasePath(process.env.VITE_APP_BASE_PATH),
@@ -58,8 +76,8 @@ export default defineConfig(({ mode }) => ({
     port: 5173,
     allowedHosts: allowedHosts(),
     proxy: {
-      '/api': process.env.VITE_API_TARGET ?? 'http://127.0.0.1:8000',
-      '/assets': process.env.VITE_API_TARGET ?? 'http://127.0.0.1:8000',
+      '/api': apiProxy(process.env.VITE_API_TARGET ?? 'http://127.0.0.1:8000'),
+      '/assets': apiProxy(process.env.VITE_API_TARGET ?? 'http://127.0.0.1:8000'),
     },
   },
 }))

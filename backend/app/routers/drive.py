@@ -510,6 +510,7 @@ def _after_reauth() -> int:
     with connect() as conn:
         resumed = upload_queue.resume_blocked(conn)
         notifications.resolve_drive_queue_paused(conn)
+    upload_queue.wake()   # after the commit: the worker must see the PENDING rows
     if resumed:
         logger.info("SCX drive upload queue resumed after re-authentication (%d item(s))", resumed)
     return resumed
@@ -880,22 +881,38 @@ NOT_AN_SSO_ATTEMPT = frozenset({"DRIVE_ADAPTER_UPDATE_REQUIRED", "DRIVE_MODE_DIS
 PROXY_HEADERS = ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded")
 
 
+PROXY_PEER_HEADER = "x-simdash-proxy-peer"
+
+
+def _peer_host(request: Request) -> str:
+    """The browser's address for the same-PC rule.
+
+    Behind the source deployment's Vite server every request reaches uvicorn from 127.0.0.1; that
+    proxy removes client-supplied forwarding headers and sets ``X-Simdash-Proxy-Peer`` to the real
+    peer.  The header is honoured only from a loopback peer (uvicorn listens on 127.0.0.1 only), so
+    a browser cannot claim to be the server PC.
+    """
+    host = request.client.host if request.client else ""
+    if host in LOOPBACK_HOSTS and PROXY_PEER_HEADER in request.headers:
+        host = request.headers[PROXY_PEER_HEADER].strip().removeprefix("::ffff:")
+    return host
+
+
 def password_login_block(request: Request, settings: DriveSettings) -> str | None:
     """``OFF`` / ``HTTP`` when account login is refused for this request, else ``None``.
 
-    The scheme is ``request.url.scheme``: uvicorn (``--proxy-headers``, default on) already
-    replaced it with ``X-Forwarded-Proto`` when — and only when — the peer is a trusted proxy
-    (``--forwarded-allow-ips``, default 127.0.0.1 = the Caddy reverse proxy on the same server).
-    The dashboard never reads ``X-Forwarded-Proto`` itself, so a client cannot claim HTTPS.
-    Same-PC access (127.0.0.1/::1 without proxy headers) is allowed in ``https_only``.
+    HTTPS is ``request.url.scheme``: uvicorn replaces it with ``X-Forwarded-Proto`` only from a
+    trusted proxy peer (``--forwarded-allow-ips``, default 127.0.0.1 = the Caddy reverse proxy of the
+    offline installation).  The Vite server of the source deployment strips that header from
+    browsers, so a client cannot claim HTTPS through it.  Same-PC access (the browser itself on
+    127.0.0.1/::1, see :func:`_peer_host`, without forwarding headers) is allowed in ``https_only``.
     """
     mode = settings.password_login
     if mode == "off":
         return "OFF"
     if mode == "on" or request.url.scheme == "https":
         return None
-    host = request.client.host if request.client else ""
-    if host in LOOPBACK_HOSTS and not any(name in request.headers for name in PROXY_HEADERS):
+    if _peer_host(request) in LOOPBACK_HOSTS and not any(name in request.headers for name in PROXY_HEADERS):
         return None
     return "HTTP"
 
@@ -949,9 +966,10 @@ def _apply_relogin(request: Request, result: drive_auth.AuthResult, *, confirm: 
             gateway_store.detach()
         drive_gateway.reset_gateway()
         raise
-    generation = store.write(bundle, updated_by=request.state.principal.user_id, remember_account=True)
-    if gateway_store is not None and drive_gateway.gateway_token_store() is gateway_store:
-        gateway_store.adopt_generation(generation)   # the worker already uses these tokens: no reset
+    # The worker already uses these tokens: the gateway store adopts the new generation under the
+    # write lock (no reset), unless the gateway was replaced meanwhile.
+    adopt = gateway_store if gateway_store is not None and drive_gateway.gateway_token_store() is gateway_store else None
+    store.write(bundle, updated_by=request.state.principal.user_id, remember_account=True, adopt_into=adopt)
     drive_auth.record_success(result)
     resumed = _after_reauth()
     return DriveReloginResult(account_hint=bundle.account_hint,
@@ -987,9 +1005,10 @@ def _reconnect(request: Request, confirm: bool) -> DriveReloginResult:
     try:
         drive_gateway.get_drive_gateway()
         gateway_store = drive_gateway.gateway_token_store()
-        result = drive_auth.refresh_now()
-        received = result.bundle.account_hint
-        outcome = _apply_relogin(request, result, confirm=confirm, gateway_store=gateway_store)
+        with drive_auth.account_switch():
+            result = drive_auth.refresh_now()
+            received = result.bundle.account_hint
+            outcome = _apply_relogin(request, result, confirm=confirm, gateway_store=gateway_store)
     except drive_auth.DriveAuthError as error:
         drive_auth.record_failure(error.code)
         _relogin_audit(request, "DRIVE_RECONNECT_FAILED", error.status, result=error.code, received=received)
@@ -1049,23 +1068,24 @@ def _login(request: Request, raw: bytes) -> DriveReloginResult:
             raise drive_auth.DriveAuthError(409, "DRIVE_AUTH_BUSY", "다른 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.")
         try:
             attempt = drive_auth.limiter.take(settings.login_max_attempts)
-            try:
-                drive_gateway.get_drive_gateway()
-                gateway_store = drive_gateway.gateway_token_store()
-                result = drive_auth.login_password(username, password)
-            except drive_auth.DriveAuthError as error:
-                if error.code in NOT_AN_SSO_ATTEMPT:
-                    drive_auth.limiter.refund(attempt)   # the SSO never saw this attempt
-                raise
-            except drive_gateway.DriveStartupError:
-                drive_auth.limiter.refund(attempt)
-                raise
-            finally:
-                del password   # the only reference left; nothing else ever held it
-            # The SSO accepted ID and password: no lockout risk any more, whatever happens next.
-            drive_auth.limiter.clear()
-            received = result.bundle.account_hint
-            outcome = _apply_relogin(request, result, confirm=confirm, gateway_store=gateway_store)
+            with drive_auth.account_switch():
+                try:
+                    drive_gateway.get_drive_gateway()
+                    gateway_store = drive_gateway.gateway_token_store()
+                    result = drive_auth.login_password(username, password)
+                except drive_auth.DriveAuthError as error:
+                    if error.code in NOT_AN_SSO_ATTEMPT:
+                        drive_auth.limiter.refund(attempt)   # the SSO never saw this attempt
+                    raise
+                except drive_gateway.DriveStartupError:
+                    drive_auth.limiter.refund(attempt)
+                    raise
+                finally:
+                    del password   # the only reference left; nothing else ever held it
+                # The SSO accepted ID and password: no lockout risk any more, whatever happens next.
+                drive_auth.limiter.clear()
+                received = result.bundle.account_hint
+                outcome = _apply_relogin(request, result, confirm=confirm, gateway_store=gateway_store)
         finally:
             drive_auth.operation_lock.release()
     except drive_auth.DriveAuthError as error:

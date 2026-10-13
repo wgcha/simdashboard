@@ -24,9 +24,10 @@ import logging
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from . import gateway as drive_gateway
 from .token_store import LocalTokenBundle, same_account
@@ -86,6 +87,29 @@ class _Status:
 _status = _Status()
 # One re-login at a time (reconnect, login, automatic refresh): the worker serializes too.
 operation_lock = threading.Lock()
+# Set while a manual reconnect/login runs until its account check finished: the worker may then hold
+# tokens of an unconfirmed account, so drive reads and queue writes wait (or retry later) meanwhile.
+_switch_idle = threading.Event()
+_switch_idle.set()
+SWITCH_WAIT_SECONDS = 45.0
+
+
+@contextmanager
+def account_switch() -> Iterator[None]:
+    _switch_idle.clear()
+    try:
+        yield
+    finally:
+        _switch_idle.set()
+
+
+def account_switch_active() -> bool:
+    return not _switch_idle.is_set()
+
+
+def wait_account_switch(timeout: float | None = None) -> bool:
+    """True when no account switch is pending (after waiting up to ``timeout`` seconds)."""
+    return _switch_idle.wait(max(0.0, SWITCH_WAIT_SECONDS if timeout is None else timeout))
 
 
 def _now() -> datetime:
@@ -366,8 +390,13 @@ def auto_refresh_once(gateway: Any) -> bool:
     with _status.lock:
         attempted = _status.auto_attempted_at
     if attempted is not None:
+        # A new episode needs a successful drive call after the last attempt *and* after the
+        # refresh it produced (an adapter may count refresh_now itself as a success).
         succeeded = _last_success(gateway)
-        if succeeded is None or succeeded <= attempted:
+        with _status.lock:
+            refreshed = _status.last_refresh_at
+        floor = max(attempted, refreshed) if refreshed else attempted
+        if succeeded is None or succeeded <= floor:
             return False
     caps, supported, _error = capabilities(gateway)
     if not supported or not caps.get("refresh"):

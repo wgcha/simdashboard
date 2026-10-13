@@ -1024,6 +1024,9 @@ def _existing_outcome(gateway: Any, item: Item, existing: Any, *, size: int | No
 def _execute(item: Item) -> _Outcome:
     if connection_held():
         raise RuntimeError("drive write while the thread holds a database connection")
+    if not drive_auth.wait_account_switch():
+        # Issue #50: never write while a manual re-login may hold an unconfirmed account's session.
+        return _Outcome("RETRY", "DRIVE_BUSY", "드라이브 재연결이 진행 중입니다.")
     try:
         gateway = drive_gateway.get_drive_gateway()
     except drive_gateway.DriveStartupError as exc:

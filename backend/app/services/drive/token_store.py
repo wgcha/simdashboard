@@ -233,40 +233,55 @@ class DbTokenStore:
         if captured is not None:
             captured.append(local)
             self._capture_event.set()
-        generation = self._loaded_generation
-        if generation is None:
-            if captured is not None:
-                return   # first registration by re-login: the request handler writes a new generation itself
-            self._dropped("no registered token was loaded by this gateway")
-            return
         try:
             ciphertext = self._fernet.encrypt(bundle_to_json(local))
             obtained_at = _utc(local.obtained_at).replace(tzinfo=None)
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            with self._lock, self._connect() as conn:
-                connected = _connected_account(conn)
-                other = bool(local.account_hint) and not same_account(local.account_hint, connected)
-                if connected and (other or (strict and not local.account_hint)):
-                    # Re-login of another (or an unnamed) account: saved only by the request handler after
-                    # the admin confirmed the change.  Expected, so not reported as a stale save.
-                    logger.warning("SCX token not saved: it is not the connected account (confirmation required)")
-                    return
-                updated = conn.execute(
-                    "UPDATE drive_credentials SET ciphertext=?, account_hint=?, obtained_at=?, updated_by=?, updated_at=? "
-                    "WHERE id=? AND generation=? AND key_id=? RETURNING id",
-                    [ciphertext, local.account_hint, obtained_at, WORKER_ACTOR, now, ROW_ID, generation, self._key_id],
-                ).fetchone()
-                if getattr(conn, "backend", "") == "postgresql":
-                    conn.execute("COMMIT")
         except Exception:
             self._status.last_save_error_at = datetime.now(timezone.utc)
-            # Do not raise into the adapter's notification thread; the admin card shows the failure.
             logger.error("SCX token save failed; the next restart may require re-registration")
+            return
+        # The generation is read under the shared write lock: an admin write that adopts its new
+        # generation into this store (re-login) cannot interleave between the read and the UPDATE.
+        with self._lock:
+            generation = self._loaded_generation
+            if generation is None:
+                if captured is None:
+                    self._dropped("no registered token was loaded by this gateway")
+                return   # with capture: first registration by re-login, the request handler writes it
+            try:
+                updated = self._save_locked(local, ciphertext, obtained_at, now, generation, strict)
+            except Exception:
+                self._status.last_save_error_at = datetime.now(timezone.utc)
+                # Do not raise into the adapter's notification thread; the admin card shows the failure.
+                logger.error("SCX token save failed; the next restart may require re-registration")
+                return
+        if updated is False:
             return
         if updated is None:
             self._dropped("the token row was deleted or re-registered since this gateway loaded it")
             return
         self._status.last_save_error_at = None
+
+    def _save_locked(self, local: LocalTokenBundle, ciphertext: bytes, obtained_at: datetime, now: datetime,
+                     generation: int, strict: bool) -> Any:
+        """UPDATE of the loaded generation (caller holds the write lock); ``False`` = refused account."""
+        with self._connect() as conn:
+            connected = _connected_account(conn)
+            other = bool(local.account_hint) and not same_account(local.account_hint, connected)
+            if connected and (other or (strict and not local.account_hint)):
+                # Re-login of another (or an unnamed) account: saved only by the request handler after
+                # the admin confirmed the change.  Expected, so not reported as a stale save.
+                logger.warning("SCX token not saved: it is not the connected account (confirmation required)")
+                return False
+            updated = conn.execute(
+                "UPDATE drive_credentials SET ciphertext=?, account_hint=?, obtained_at=?, updated_by=?, updated_at=? "
+                "WHERE id=? AND generation=? AND key_id=? RETURNING id",
+                [ciphertext, local.account_hint, obtained_at, WORKER_ACTOR, now, ROW_ID, generation, self._key_id],
+            ).fetchone()
+            if getattr(conn, "backend", "") == "postgresql":
+                conn.execute("COMMIT")
+            return updated
 
     def _dropped(self, reason: str) -> None:
         self._status.last_stale_save_at = datetime.now(timezone.utc)
@@ -308,11 +323,15 @@ class DbTokenStore:
 
     # -- Admin helpers ---------------------------------------------------------------------------
 
-    def write(self, bundle: Any, *, updated_by: str, remember_account: bool = False) -> int:
+    def write(self, bundle: Any, *, updated_by: str, remember_account: bool = False,
+              adopt_into: "DbTokenStore | None" = None) -> int:
         """Admin registration: replace the row with a new, larger generation; returns it.
 
-        ``remember_account``: the bundle's ``account_hint`` becomes the remembered "연결 계정" in the
-        same transaction (a bundle without one clears it, so later rotations are not refused)."""
+        ``remember_account``: a non-empty ``account_hint`` becomes the remembered "연결 계정" in the
+        same transaction (a bundle without one keeps the current connected account, so a confirmed
+        unnamed token does not switch the account-change check off).  ``adopt_into``: a gateway
+        store whose worker already holds this bundle (re-login) takes the new generation while the
+        write lock is still held, so a rotation saved right after is not dropped as stale."""
         local = self.to_local(bundle)
         ciphertext = self._fernet.encrypt(bundle_to_json(local))
         obtained_at = _utc(local.obtained_at).replace(tzinfo=None)
@@ -337,10 +356,10 @@ class DbTokenStore:
                     "updated_at=excluded.updated_at",
                     [ROW_ID, hint[:200], updated_by, now],
                 )
-            elif remember_account:
-                conn.execute("DELETE FROM drive_connected_account WHERE id=?", [ROW_ID])
             if getattr(conn, "backend", "") == "postgresql":
                 conn.execute("COMMIT")
+            if adopt_into is not None:
+                adopt_into._loaded_generation = int(generation)
         return generation
 
     def clear(self) -> bool:

@@ -499,6 +499,10 @@ def _log_call_failure(op: str, rel: str, code: str, message: str) -> None:
 def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
     if connection_held():
         raise RuntimeError("drive call while the thread holds a database connection")
+    if not drive_auth.wait_account_switch():
+        # Issue #50: a manual re-login is still checking the account the worker now holds.
+        _log_call_failure(op, rel, "DRIVE_BUSY", "account switch pending")
+        raise SpdmStorageError("DRIVE_BUSY", "드라이브 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.")
     try:
         gateway = drive_gateway.get_drive_gateway()
     except drive_gateway.DriveStartupError as exc:

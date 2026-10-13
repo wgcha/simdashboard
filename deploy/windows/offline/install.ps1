@@ -632,7 +632,9 @@ $tlsLine
     redir /home /home/ 308
     @backend path /api /api/* /assets/* /health
     handle @backend {
-        reverse_proxy 127.0.0.1:$apiPort
+        reverse_proxy 127.0.0.1:$apiPort {
+            header_up -X-Simdash-Proxy-Peer
+        }
     }
     handle_path /home/* {
         try_files {path} /index.html
