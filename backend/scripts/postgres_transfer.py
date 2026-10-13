@@ -78,8 +78,35 @@ def safe_relative_path(value: str) -> PurePosixPath:
 
 
 def process_is_running(process_id: int) -> bool:
+    if process_id <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill(pid, 0) on Windows calls TerminateProcess; query the process instead.
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        process_query_limited_information = 0x1000
+        still_active = 259
+        handle = kernel32.OpenProcess(process_query_limited_information, False, process_id)
+        if not handle:
+            # Access denied means the process exists but belongs to another account.
+            return ctypes.get_last_error() == 5
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(process_id, 0)
+        return True
+    except PermissionError:
         return True
     except (OSError, ProcessLookupError):
         return False
@@ -750,6 +777,21 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:
-        message = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+        if isinstance(error, RuntimeError):
+            message = str(error)
+        elif isinstance(error, OSError):
+            # Paths and OS error codes carry no credentials and are needed to diagnose access problems.
+            code = getattr(error, "winerror", None) or error.errno
+            parts = [type(error).__name__]
+            if code:
+                parts.append(f"[code {code}]")
+            if error.strerror:
+                parts.append(error.strerror)
+            for name in (error.filename, getattr(error, "filename2", None)):
+                if name:
+                    parts.append(f"path={name}")
+            message = " ".join(parts)
+        else:
+            message = type(error).__name__
         print(f"[ERROR] {message}", file=sys.stderr)
         raise SystemExit(1)
