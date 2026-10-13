@@ -47,3 +47,20 @@ def test_explicit_postgres_bin_precedes_path_and_discovery(windows_installation,
 def test_missing_tools_fail_without_a_fake_success_path(windows_installation):
     with pytest.raises(cli.PostgresToolNotFound, match="POSTGRES_BIN"):
         cli.executable("pg_dump")
+
+
+def test_inaccessible_drive_root_is_skipped(tmp_path, monkeypatch):
+    class BrokenRoot:
+        def is_dir(self):
+            raise OSError(19, "The media is write protected", "M:\\PostgreSQL")
+
+        def glob(self, pattern):
+            raise AssertionError("glob must not run on an inaccessible root")
+
+    good = tmp_path / "good"
+    expected = _tool(good, "18")
+    monkeypatch.setattr(cli, "WINDOWS", True)
+    monkeypatch.delenv("POSTGRES_BIN", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli, "_windows_installation_roots", lambda: [BrokenRoot(), good])
+    assert cli.executable("pg_dump") == str(expected.resolve())

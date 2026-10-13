@@ -1501,3 +1501,4 @@
 
 - 2026-10-13: 새 PC deploy.bat `Service credential activation failed`(PermissionError) — 비밀 파일 ACL이 (R,W)만 부여해 폴더 권한이 "수정"일 때 os.replace에 필요한 DELETE가 없음. 부여를 (R,W,D)로 수정, 최초 설정 가이드에 재시도 절차 추가. Windows 실기 재검증 미실시.
 - 2026-10-13: 이관 내보내기 PermissionError 진단 — postgres_transfer 오류가 예외 이름만 출력해 원인 불명. OSError는 코드·경로를 출력하도록 변경. Windows에서 os.kill(pid,0)이 TerminateProcess를 호출하는 문제를 OpenProcess 조회로 교체. test_postgres_transfer 25 통과, Windows 실기 미검증.
+- 2026-10-13: 이관 내보내기 "쓰기 방지된 미디어 path=M:\PostgreSQL" — POSTGRES_BIN·PATH에 pg_dump가 없을 때 모든 드라이브 문자를 훑다 빈 카드리더 등에서 OSError. 접근 불가 드라이브는 건너뛰도록 수정, 테스트 추가(31 통과).
