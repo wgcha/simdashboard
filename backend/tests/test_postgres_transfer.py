@@ -475,3 +475,19 @@ def test_import_never_bootstraps_when_pre_replacement_backup_fails(
     )
     with pytest.raises(RuntimeError, match="backup failed"):
         transfer.import_bundle(tmp_path, False, replace_existing=True, backup_dir=tmp_path / "backups")
+
+
+def test_main_uses_postgres_bin_from_env_file(tmp_path, monkeypatch):
+    from scripts import postgres_transfer as transfer
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("POSTGRES_BIN=C:\\PG\\18\\bin\nDATABASE_URL=postgresql://x@h/db\n", encoding="utf-8")
+    monkeypatch.setattr(transfer, "ENV_FILE", env_file)
+    monkeypatch.delenv("POSTGRES_BIN", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    seen = {}
+    monkeypatch.setattr(transfer, "export_bundle", lambda output_dir: seen.update(bin=transfer.os.environ.get("POSTGRES_BIN")))
+    monkeypatch.setattr(transfer.sys, "argv", ["postgres_transfer.py", "export"])
+    assert transfer.main() == 0
+    assert seen["bin"] == "C:\\PG\\18\\bin"
+    assert "DATABASE_URL" not in transfer.os.environ

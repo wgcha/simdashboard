@@ -761,6 +761,12 @@ def main() -> int:
     import_parser.add_argument("--replace-existing", action="store_true")
     import_parser.add_argument("--backup-dir", type=Path)
     args = parser.parse_args()
+    # Tool discovery reads the process environment; honour POSTGRES_BIN configured in .env
+    # without importing other keys (DATABASE_URL etc. are read explicitly from the files).
+    if not os.getenv("POSTGRES_BIN") and ENV_FILE.is_file():
+        configured_bin = dotenv_values(ENV_FILE, encoding="utf-8-sig").get("POSTGRES_BIN")
+        if configured_bin:
+            os.environ["POSTGRES_BIN"] = configured_bin.strip()
     if args.command == "export":
         export_bundle(args.output_dir)
     else:
