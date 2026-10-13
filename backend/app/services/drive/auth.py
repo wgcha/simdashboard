@@ -24,7 +24,7 @@ import logging
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -301,7 +301,11 @@ def refresh_now() -> AuthResult:
         except Exception:  # noqa: BLE001
             connected = None
         if connected:
-            result = AuthResult(replace(result.bundle, account_hint=connected), result.expires_at)
+            old = result.bundle
+            named = LocalTokenBundle(server_url=old.server_url, access_token=old.access_token,
+                                     refresh_token=old.refresh_token, obtained_at=old.obtained_at,
+                                     account_hint=connected)
+            result = AuthResult(named, result.expires_at)
     return result
 
 
