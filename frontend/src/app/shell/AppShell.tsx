@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { DriveStatusBanner } from '../../shared/components/DriveStatusBanner'
 import { NotificationBell } from '../../features/notifications/NotificationBell'
+import { DriveReconnectButton } from '../../features/storage/DriveAdminPanel'
 
 type AppShellProps = {
   children: ReactNode
@@ -30,7 +31,7 @@ type AppShellMainProps = {
 export function AppShellMain({ children, topbar }: AppShellMainProps) {
   return <main className="main-shell">
     {topbar}
-    <DriveStatusBanner />
+    <DriveStatusBanner adminAction={<DriveReconnectButton />} />
     {children}
   </main>
 }

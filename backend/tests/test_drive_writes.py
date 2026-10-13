@@ -73,6 +73,7 @@ def scxw(tmp_path, monkeypatch, password_auth_bootstrap_admin):
     drive_gateway.shutdown()
     with connect() as conn:
         conn.execute("DELETE FROM drive_credentials")
+        conn.execute("DELETE FROM drive_connected_account")
     drive.add_dir(root)
     violations: list[tuple[str, str]] = []
     drive.on_call = lambda op, rel: violations.append((op, rel)) if connection_held() else None
@@ -290,6 +291,7 @@ def test_auth_required_pauses_the_queue_until_credentials_are_registered(scxw):
     project_id, request_id = _register(scxw)
     session = _drop(scxw, project_id, request_id, [("2_Face/auth.csv", b"auth\n")])
     scxw.drive.fail_next["upload_new"] = ErrorCode.AUTH_REQUIRED
+    scxw.drive.refresh_expired = True        # issue #50: the one automatic refresh_now fails too
     _complete(scxw, session["session_id"])
     _settle()
     assert _items(session["session_id"])[-1][1] == "BLOCKED"
@@ -301,6 +303,18 @@ def test_auth_required_pauses_the_queue_until_credentials_are_registered(scxw):
     _settle()
     assert _batch(scxw, session["session_id"])["state"] == "DONE"
     assert scxw.client.get("/api/drive/status").json()["queue_paused"] is False
+
+
+def test_auth_required_is_recovered_once_by_an_automatic_refresh(scxw):
+    """Issue #50 §3.5: one refresh_now per AUTH_REQUIRED episode, then the same step runs again."""
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/auto.csv", b"auto\n")])
+    scxw.drive.fail_next["upload_new"] = ErrorCode.AUTH_REQUIRED
+    _complete(scxw, session["session_id"])
+    _settle()
+    assert _batch(scxw, session["session_id"])["state"] == "DONE"
+    assert ("refresh_now", "") in scxw.drive.auth_calls
+    assert scxw.drive.content(scxw.path(f"{OPTION}/2_Face/auto.csv")) == b"auto\n"
 
 
 def test_restart_resumes_running_items_and_the_worker_thread_finishes_them(scxw, monkeypatch):
@@ -883,6 +897,7 @@ def test_admin_cancel_runs_the_finish_hook_only_after_commit(scxw):
     operation_id = plan["operation_id"]
     _stage(scxw, ctx, operation_id)
     scxw.drive.fail_next["mkdirs"] = ErrorCode.AUTH_REQUIRED
+    scxw.drive.refresh_expired = True        # issue #50: the automatic refresh_now fails too
     assert _confirm(scxw, ctx, operation_id).status_code == 200
     _settle()
     with connect() as conn:
@@ -947,6 +962,7 @@ def test_the_final_lock_is_held_while_its_final_is_publishing(scxw):
     _settle()
     assert _job(scxw, ctx, first["operation_id"])["state"] == "FAILED"
     scxw.drive.fail_next["mkdirs"] = ErrorCode.AUTH_REQUIRED
+    scxw.drive.refresh_expired = True        # issue #50: the automatic refresh_now fails too
     assert _confirm(scxw, ctx, second["operation_id"]).status_code == 200
     _settle()
     assert _job(scxw, ctx, second["operation_id"])["drive"]["state"] == "PAUSED"

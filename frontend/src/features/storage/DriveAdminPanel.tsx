@@ -6,6 +6,7 @@ import {
   DRIVE_QUEUE_ITEM_STATE_LABELS, driveApi, driveCodeMessage, driveErrorText, driveStateLabel,
   type DriveAdminStatus, type DriveCheckReport, type DriveQueueBulkResult, type DriveQueueList, type DriveTestResult,
 } from '../../shared/api/drive'
+import { confirmAccountChange, DriveReloginSection } from './DriveReloginSection'
 import './DriveAdminPanel.css'
 
 const PROBLEM_TEXT: Record<string, string> = {
@@ -126,7 +127,7 @@ function DriveQueueSection({ busy, run }: { busy: string; run: (label: string, a
     <h3 id="drive-queue-title"><ListChecks aria-hidden="true" /> 업로드 대기열</h3>
     <p className="drive-admin-note">결과 등록·Final 지정이 드라이브에 쓰는 순서입니다(폴더 만들기·드라이브 안 복사·새 파일 올리기만, 덮어쓰기·삭제 없음). 취소는 대기열 항목만 멈추며 드라이브 내용은 지우지 않습니다. 충돌은 같은 이름의 다른 파일이 있다는 뜻이고, 다시 시도하면 드라이브를 다시 확인합니다. 목록에서 지우기는 끝난 항목의 기록과 서버 임시 파일만 지웁니다.</p>
     {queue && !queue.writes_enabled ? <p className="drive-admin-result warn" role="status">드라이브 쓰기 허용 설정이 꺼져 있어 대기열이 실행되지 않습니다(SIMDASH_DRIVE_WRITES_ENABLED).</p> : null}
-    {queue?.paused ? <p className="drive-admin-result bad" role="alert" data-testid="drive-queue-paused">드라이브 인증이 필요해 대기열이 멈췄습니다. 토큰을 다시 등록하면 이어서 진행합니다.</p> : null}
+    {queue?.paused ? <p className="drive-admin-result bad" role="alert" data-testid="drive-queue-paused">드라이브 인증이 필요해 대기열이 멈췄습니다. 위 [다시 연결]이나 토큰 등록으로 인증하면 이어서 진행합니다.</p> : null}
     {queue && queue.writes_enabled && !queue.worker_running ? <p className="drive-admin-result warn" role="status">대기열 작업자가 실행 중이 아닙니다. 서비스를 다시 시작하세요.</p> : null}
     <div className="drive-admin-actions">
       <label className="drive-admin-folder"><span>상태</span><select aria-label="대기열 상태" value={filter} onChange={(event) => setFilter(event.target.value)}>
@@ -178,6 +179,7 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
   const [testResult, setTestResult] = useState<DriveTestResult | null>(null)
   const [testFolder, setTestFolder] = useState('')
   const [report, setReport] = useState<DriveCheckReport | null>(null)
+  const [reloginKey, setReloginKey] = useState(0)
 
   const load = useCallback(async () => {
     try { setStatus(await driveApi.adminStatus()) } catch (reason) { setError(driveErrorText(reason, '드라이브 상태를 불러오지 못했습니다.')) }
@@ -224,6 +226,8 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
         {problem ? <p className="drive-admin-result warn" role="status">{problem}</p> : null}
         {status.token_save_failed_at ? <p className="drive-admin-result bad" role="alert">갱신된 토큰을 저장하지 못했습니다({stamp(status.token_save_failed_at)}). 재시작 전에 토큰을 다시 등록하세요.</p> : null}
 
+        <DriveReloginSection key={reloginKey} busy={busy} run={run} onChanged={() => void load()} />
+
         <section className="drive-admin-section" aria-labelledby="drive-token-title">
           <h3 id="drive-token-title"><ShieldCheck aria-hidden="true" /> 공용 계정 토큰</h3>
           <p className="drive-admin-note">관리자 PC에서 <code>python -m scx_drive_adapter login --server {status.server_url}</code>을 실행해 출력된 JSON 전체를 붙여 넣으세요. 토큰은 암호화해 저장하며 화면에 다시 표시하지 않습니다.</p>
@@ -232,8 +236,12 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
             onChange={(event) => setBundleText(event.target.value)} />
           <div className="drive-admin-actions">
             <Button variant="primary" disabled={Boolean(busy) || !bundleText.trim()} onClick={() => void run('토큰 등록', async () => {
-              const saved = await driveApi.registerCredentials(bundleText)
-              setBundleText(''); setTestResult(saved.test)
+              let saved
+              try { saved = await driveApi.registerCredentials(bundleText) } catch (reason) {
+                if (!confirmAccountChange(reason)) throw reason
+                saved = await driveApi.registerCredentials(bundleText, true)
+              }
+              setBundleText(''); setTestResult(saved.test); setReloginKey((key) => key + 1)
               setMessage(`토큰을 등록했습니다(${saved.account_hint ?? '계정 이름 없음'}).${saved.test.ok ? '' : ' 새 토큰은 최대 10초 안에 워커에 반영됩니다. 잠시 후 연결 시험을 다시 하세요.'}`)
             })}>{busy === '토큰 등록' ? '등록 중…' : '토큰 등록'}</Button>
             <Button disabled={Boolean(busy) || !credentials?.present} onClick={() => {
@@ -280,4 +288,15 @@ export function DriveSettingsEntry() {
     <button type="button" className="ghost-button" data-testid="drive-admin-open" onClick={() => setOpen(true)}><HardDrive aria-hidden="true" /> 드라이브 관리</button>
     {open ? createPortal(<DriveAdminPanel onClose={() => setOpen(false)} />, host()) : null}
   </div>
+}
+
+/** [다시 연결] in the AUTH_REQUIRED banner (global admins, issue #50): opens 드라이브 관리. */
+export function DriveReconnectButton() {
+  const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLSpanElement>(null)
+  const host = () => anchor.current?.closest<HTMLElement>('.app-shell') ?? document.body
+  return <span ref={anchor}>
+    <Button size="sm" data-testid="drive-banner-reconnect" onClick={() => setOpen(true)}>다시 연결</Button>
+    {open ? createPortal(<DriveAdminPanel onClose={() => setOpen(false)} />, host()) : null}
+  </span>
 }

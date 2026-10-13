@@ -7,6 +7,11 @@
 * ``/api/drive/upload-batches/{batch_id}`` — progress of one drive upload batch (request viewers, D3).
 * ``/api/admin/drive/queue`` — the drive upload queue (D3): list, retry, cancel, resume after
   re-authentication.  Cancelling only marks the row; nothing on the drive is deleted.
+* ``/api/admin/drive/auth|reconnect|login`` — re-login from the dashboard (issue #50,
+  docs/plans/scx-drive-relogin-spec.md §3): status, refresh with the stored token, account
+  login.  The login body (password) is read by hand (no validation echo), never logged,
+  stored, audited or notified; failures return codes only.  A token of an account other
+  than the remembered "연결 계정" is saved only with ``confirm_account_change``.
 
 In ``none`` mode the status endpoints report ``mode: "none"`` and every admin
 write returns 409 ``DRIVE_MODE_DISABLED``.  Token values are never returned,
@@ -36,6 +41,8 @@ from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, require_resource_permission
 from ..security import write_audit_event
 from ..services import folder_auto_sync
+from ..services import notifications
+from ..services.drive import auth as drive_auth
 from ..services.drive import gateway as drive_gateway
 from ..services.drive import reads as drive_reads
 from ..services.drive import sources as drive_sources
@@ -43,7 +50,7 @@ from ..services.drive import upload_queue
 from ..services.drive import writes as drive_writes
 from ..services.drive.check import CheckAlreadyRunning, run_drive_check
 from ..services.drive.config import DriveSettings, url_host, validate_drive_rel_path
-from ..services.drive.token_store import parse_obtained_at
+from ..services.drive.token_store import parse_obtained_at, same_account
 from ..services.storage.drive import drive_root_from_settings
 
 logger = logging.getLogger("app.routers.drive")
@@ -115,6 +122,47 @@ class DriveUserStatus(BaseModel):
     writes_enabled: bool = False
     writes_available: bool = True
     queue_paused: bool = False
+    can_reconnect: bool = False
+
+
+class DriveAuthCapabilities(BaseModel):
+    refresh: bool = False
+    password: bool = False
+    mfa: bool = False
+
+
+class DriveAuthStatus(BaseModel):
+    """Reconnect dialog (issue #50): what the adapter supports and why account login may be refused."""
+
+    capabilities: DriveAuthCapabilities
+    adapter_supported: bool
+    capabilities_error: str | None = None
+    connected_account: str | None = None
+    account_hint: str | None = None
+    credentials_present: bool = False
+    obtained_at: str | None = None
+    expires_at: str | None = None
+    last_refresh_at: str | None = None
+    last_error_code: str | None = None
+    last_error_at: str | None = None
+    password_login: str
+    password_login_allowed: bool = False
+    password_login_blocked: str | None = None   # OFF | HTTP
+    attempts_left: int = 0
+    max_attempts: int = 0
+    locked_until: str | None = None
+
+
+class DriveReconnectRequest(BaseModel):
+    confirm_account_change: bool = False
+
+
+class DriveReloginResult(BaseModel):
+    ok: bool = True
+    account_hint: str | None = None
+    obtained_at: str
+    account_changed: bool = False
+    queue_resumed: int = 0
 
 
 class DriveQueueItem(BaseModel):
@@ -441,51 +489,88 @@ def _parse_bundle(raw: bytes, settings: DriveSettings) -> dict[str, Any]:
             "account_hint": hint.strip() if isinstance(hint, str) and hint.strip() else None}
 
 
-def _register(request: Request, raw: bytes) -> DriveCredentialsSaved:
+def _account_change(store: Any, received: str | None, confirm: bool) -> tuple[str | None, bool]:
+    """(connected account, changed); raises 409 DRIVE_ACCOUNT_CHANGE_CONFIRM before anything is saved."""
+    connected = store.connected_account()
+    changed = bool(connected) and not same_account(received, connected)
+    if changed and not confirm:
+        raise drive_auth.DriveAuthError(
+            409, "DRIVE_ACCOUNT_CHANGE_CONFIRM",
+            f"연결 계정이 {connected}에서 {received or '(계정 이름 없음)'}(으)로 바뀝니다. 계속하려면 변경을 확인하세요.",
+            current=connected, received=received)
+    return connected, changed
+
+
+def _auth_fail(error: drive_auth.DriveAuthError) -> HTTPException:
+    return HTTPException(error.status, {"code": error.code, "message": error.message, **error.extra})
+
+
+def _after_reauth() -> int:
+    """Queue paused by AUTH_REQUIRED continues; the admins' queue-paused notice is resolved."""
+    with connect() as conn:
+        resumed = upload_queue.resume_blocked(conn)
+        notifications.resolve_drive_queue_paused(conn)
+    upload_queue.wake()   # after the commit: the worker must see the PENDING rows
+    if resumed:
+        logger.info("SCX drive upload queue resumed after re-authentication (%d item(s))", resumed)
+    return resumed
+
+
+def _register(request: Request, raw: bytes, confirm: bool = False) -> DriveCredentialsSaved:
     settings = _require_scx()
     fields = _parse_bundle(raw, settings)
     store = drive_gateway.token_store()
     bundle = store.make_bundle(**fields)
+    try:
+        _connected, changed = _account_change(store, bundle.account_hint, confirm)
+    except drive_auth.DriveAuthError as error:
+        # Nothing saved; the worker keeps the current tokens (no gateway reset).
+        write_audit_event(request=request, principal=request.state.principal, status_code=error.status,
+                          action="DRIVE_CREDENTIALS_REJECTED",
+                          detail={"account_hint": bundle.account_hint, "result": error.code})
+        raise _auth_fail(error) from None
     actor = request.state.principal.user_id
-    store.write(bundle, updated_by=actor)
+    store.write(bundle, updated_by=actor, remember_account=True)
     drive_gateway.reset_gateway()   # the worker must drop the previous account's in-memory tokens
-    resumed = upload_queue.resume_blocked()   # 05 §5.2: a queue paused by AUTH_REQUIRED continues
-    if resumed:
-        logger.info("SCX drive upload queue resumed after credential registration (%d item(s))", resumed)
+    drive_auth.record_registered()
+    _after_reauth()   # 05 §5.2: a queue paused by AUTH_REQUIRED continues
     obtained = bundle.obtained_at.isoformat(timespec="microseconds")
     write_audit_event(request=request, principal=request.state.principal, status_code=200,
                       action="DRIVE_CREDENTIALS_REGISTERED",
                       detail={"account_hint": bundle.account_hint, "obtained_at": obtained,
-                              "server_host": settings.server_host, "key_id": store.key_id})
+                              "server_host": settings.server_host, "key_id": store.key_id,
+                              "account_changed": changed})
     test = _connection_test()
     return DriveCredentialsSaved(account_hint=bundle.account_hint, obtained_at=obtained, test=test)
 
 
 @admin_router.put("/credentials", response_model=DriveCredentialsSaved, openapi_extra={
     "requestBody": {"required": True, "content": {"application/json": {"schema": TOKEN_BUNDLE_SCHEMA}}}})
-async def put_credentials(request: Request) -> DriveCredentialsSaved:
+async def put_credentials(request: Request,
+                          confirm_account_change: bool = Query(default=False)) -> DriveCredentialsSaved:
     _require_admin(request)
     await run_in_threadpool(_require_scx)
     raw = await _read_capped_body(request)
-    return await run_in_threadpool(_register, request, raw)
+    return await run_in_threadpool(_register, request, raw, confirm_account_change)
 
 
-async def _read_capped_body(request: Request) -> bytes:
+async def _read_capped_body(request: Request, *, limit: int = MAX_CREDENTIALS_BODY,
+                            code: str = "DRIVE_CREDENTIALS_INVALID") -> bytes:
     """Reject by Content-Length before reading, then read at most the cap (chunked bodies too)."""
-    too_large = _fail(400, "DRIVE_CREDENTIALS_INVALID", "토큰 JSON이 너무 큽니다.")
+    too_large = _fail(400, code, "토큰 JSON이 너무 큽니다." if code == "DRIVE_CREDENTIALS_INVALID" else "요청 본문이 너무 큽니다.")
     declared = request.headers.get("content-length")
     if declared is not None:
         try:
             length = int(declared)
         except ValueError:
-            raise _fail(400, "DRIVE_CREDENTIALS_INVALID", "Content-Length가 올바르지 않습니다.") from None
-        if length > MAX_CREDENTIALS_BODY:
+            raise _fail(400, code, "Content-Length가 올바르지 않습니다.") from None
+        if length > limit:
             raise too_large
     chunks: list[bytes] = []
     size = 0
     async for chunk in request.stream():
         size += len(chunk)
-        if size > MAX_CREDENTIALS_BODY:
+        if size > limit:
             raise too_large
         chunks.append(chunk)
     return b"".join(chunks)
@@ -535,7 +620,7 @@ def drive_check(payload: DriveCheckRequest, request: Request) -> DriveCheckRepor
 
 @status_router.get("/status", response_model=DriveUserStatus)
 def user_status(request: Request) -> DriveUserStatus:
-    del request  # any signed-in user (SecurityMiddleware)
+    """Any signed-in user (SecurityMiddleware); ``can_reconnect`` marks global admins (banner action)."""
     try:
         settings = _settings()
         if not settings.enabled:
@@ -543,9 +628,11 @@ def user_status(request: Request) -> DriveUserStatus:
         credentials, health, _store, _gateway = _scx_snapshot()
         with connect() as conn:
             paused = upload_queue.queue_paused(conn)
+        principal = getattr(request.state, "principal", None)
         return DriveUserStatus(mode="scx", state=_derived_state(credentials, health),
                                writes_enabled=settings.writes_enabled,
-                               writes_available=drive_writes.writes_available(), queue_paused=paused)
+                               writes_available=drive_writes.writes_available(), queue_paused=paused,
+                               can_reconnect=bool(principal is not None and principal.is_global_admin))
     except Exception as error:
         logger.warning("SCX drive status unavailable (%s)", type(error).__name__)
         return DriveUserStatus(mode="scx", state="UNAVAILABLE", writes_available=False)
@@ -774,3 +861,266 @@ def queue_resume(request: Request) -> DriveQueueList:
     with connect() as conn:
         listed = upload_queue.admin_list(conn)
     return DriveQueueList(**listed, writes_enabled=settings.writes_enabled)
+
+
+# --- re-login from the dashboard (issue #50, docs/plans/scx-drive-relogin-spec.md §3) ----------------
+
+MAX_LOGIN_BODY = 4 * 1024
+LOGIN_SCHEMA = {
+    "type": "object",
+    "required": ["username", "password"],
+    "properties": {
+        "username": {"type": "string", "maxLength": 128},
+        "password": {"type": "string", "maxLength": 256, "format": "password", "writeOnly": True},
+        "confirm_account_change": {"type": "boolean", "default": False},
+    },
+}
+LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
+# Failures raised before the worker reached the HPC SSO: they do not use up a login attempt.
+NOT_AN_SSO_ATTEMPT = frozenset({"DRIVE_ADAPTER_UPDATE_REQUIRED", "DRIVE_MODE_DISABLED", "DRIVE_UNAVAILABLE"})
+PROXY_HEADERS = ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded")
+
+
+PROXY_PEER_HEADER = "x-simdash-proxy-peer"
+
+
+def _peer_host(request: Request) -> str:
+    """The browser's address for the same-PC rule.
+
+    Behind the source deployment's Vite server every request reaches uvicorn from 127.0.0.1; that
+    proxy removes client-supplied forwarding headers and sets ``X-Simdash-Proxy-Peer`` to the real
+    peer.  The header is honoured only from a loopback peer (uvicorn listens on 127.0.0.1 only), so
+    a browser cannot claim to be the server PC.
+    """
+    host = request.client.host if request.client else ""
+    if host in LOOPBACK_HOSTS and PROXY_PEER_HEADER in request.headers:
+        host = request.headers[PROXY_PEER_HEADER].strip().removeprefix("::ffff:")
+    return host
+
+
+def password_login_block(request: Request, settings: DriveSettings) -> str | None:
+    """``OFF`` / ``HTTP`` when account login is refused for this request, else ``None``.
+
+    HTTPS is ``request.url.scheme``: uvicorn replaces it with ``X-Forwarded-Proto`` only from a
+    trusted proxy peer (``--forwarded-allow-ips``, default 127.0.0.1 = the Caddy reverse proxy of the
+    offline installation).  The Vite server of the source deployment strips that header from
+    browsers, so a client cannot claim HTTPS through it.  Same-PC access (the browser itself on
+    127.0.0.1/::1, see :func:`_peer_host`, without forwarding headers) is allowed in ``https_only``.
+    """
+    mode = settings.password_login
+    if mode == "off":
+        return "OFF"
+    if mode == "on" or request.url.scheme == "https":
+        return None
+    if _peer_host(request) in LOOPBACK_HOSTS and not any(name in request.headers for name in PROXY_HEADERS):
+        return None
+    return "HTTP"
+
+
+def _blocked_fail(reason: str) -> HTTPException:
+    message = ("계정 로그인이 꺼져 있습니다(SIMDASH_DRIVE_PASSWORD_LOGIN=off). 토큰 붙여넣기를 사용하세요."
+               if reason == "OFF" else
+               "HTTPS 접속에서만 계정 로그인을 사용할 수 있습니다(비밀번호 평문 전송 방지). HTTPS 주소로 접속하거나 토큰 붙여넣기를 사용하세요.")
+    return HTTPException(403, {"code": "DRIVE_PASSWORD_LOGIN_DISABLED", "message": message, "reason": reason})
+
+
+def _stamp(value: Any) -> str | None:
+    return value.isoformat() if isinstance(value, datetime) else (str(value) if value else None)
+
+
+@admin_router.get("/auth", response_model=DriveAuthStatus)
+def auth_status(request: Request) -> DriveAuthStatus:
+    _require_admin(request)
+    settings = _require_scx()
+    store = drive_gateway.token_store()
+    credentials = store.metadata()
+    connected = store.connected_account()
+    caps, supported, caps_error = drive_auth.capabilities()
+    health = _health(drive_gateway.existing_gateway()) if drive_gateway.existing_gateway() is not None else {}
+    memory = drive_auth.snapshot()
+    left, locked_until = drive_auth.limiter.state(settings.login_max_attempts)
+    blocked = password_login_block(request, settings)
+    return DriveAuthStatus(
+        capabilities=DriveAuthCapabilities(**caps), adapter_supported=supported, capabilities_error=caps_error,
+        connected_account=connected, account_hint=credentials.get("account_hint"),
+        credentials_present=bool(credentials.get("present")), obtained_at=credentials.get("obtained_at"),
+        expires_at=memory["expires_at"], last_refresh_at=memory["last_refresh_at"] or health.get("token_refreshed_at"),
+        last_error_code=memory["last_error_code"] or health.get("last_error_code"),
+        last_error_at=memory["last_error_at"] or health.get("last_error_at"),
+        password_login=settings.password_login, password_login_allowed=blocked is None and supported and caps["password"],
+        password_login_blocked=blocked, attempts_left=left, max_attempts=settings.login_max_attempts,
+        locked_until=_stamp(locked_until),
+    )
+
+
+def _apply_relogin(request: Request, result: drive_auth.AuthResult, *, confirm: bool, gateway_store: Any) -> DriveReloginResult:
+    """Account check → encrypted save as a new generation → worker keeps its session → queue resumes."""
+    store = drive_gateway.token_store()
+    bundle = result.bundle
+    try:
+        _connected, changed = _account_change(store, bundle.account_hint, confirm)
+    except drive_auth.DriveAuthError:
+        # Nothing saved.  The worker now holds the other account's tokens: drop that session so the
+        # next call loads the stored (connected) account again; late saves of it are fenced off.
+        if gateway_store is not None:
+            gateway_store.detach()
+        drive_gateway.reset_gateway()
+        raise
+    # The worker already uses these tokens: the gateway store adopts the new generation under the
+    # write lock (no reset), unless the gateway was replaced meanwhile.
+    adopt = gateway_store if gateway_store is not None and drive_gateway.gateway_token_store() is gateway_store else None
+    store.write(bundle, updated_by=request.state.principal.user_id, remember_account=True, adopt_into=adopt)
+    drive_auth.record_success(result)
+    resumed = _after_reauth()
+    return DriveReloginResult(account_hint=bundle.account_hint,
+                              obtained_at=bundle.obtained_at.isoformat(timespec="microseconds"),
+                              account_changed=changed, queue_resumed=resumed)
+
+
+def _relogin_audit(request: Request, action: str, status: int, *, result: str, received: str | None,
+                   username: str | None = None) -> None:
+    detail: dict[str, Any] = {"result": result, "received_account": received}
+    if username is not None:
+        detail["username"] = username
+    try:
+        write_audit_event(request=request, principal=request.state.principal, status_code=status, action=action,
+                          detail=detail)
+    except Exception:  # noqa: BLE001 - the audit failure must not hide the result
+        logger.error("SCX drive %s audit could not be written", action)
+
+
+def _reconnect(request: Request, confirm: bool) -> DriveReloginResult:
+    _require_scx()
+    store = drive_gateway.token_store()
+    if not store.metadata().get("present"):
+        _relogin_audit(request, "DRIVE_RECONNECT_FAILED", 409, result="DRIVE_CREDENTIALS_MISSING", received=None)
+        raise _fail(409, "DRIVE_CREDENTIALS_MISSING", "저장된 토큰이 없습니다. 계정으로 로그인하거나 토큰을 붙여 넣으세요.")
+    caps, supported, _error = drive_auth.capabilities()
+    if supported and not caps.get("refresh"):
+        _relogin_audit(request, "DRIVE_RECONNECT_FAILED", 409, result="AUTH_METHOD_UNSUPPORTED", received=None)
+        raise _fail(409, "AUTH_METHOD_UNSUPPORTED", "이 어댑터는 저장된 토큰으로 다시 연결하는 기능을 지원하지 않습니다. 계정으로 로그인하세요.")
+    if not drive_auth.operation_lock.acquire(blocking=False):
+        raise _fail(409, "DRIVE_AUTH_BUSY", "다른 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.")
+    received: str | None = None
+    try:
+        drive_gateway.get_drive_gateway()
+        gateway_store = drive_gateway.gateway_token_store()
+        with drive_auth.account_switch():
+            result = drive_auth.refresh_now()
+            received = result.bundle.account_hint
+            outcome = _apply_relogin(request, result, confirm=confirm, gateway_store=gateway_store)
+    except drive_auth.DriveAuthError as error:
+        drive_auth.record_failure(error.code)
+        _relogin_audit(request, "DRIVE_RECONNECT_FAILED", error.status, result=error.code, received=received)
+        raise _auth_fail(error) from None
+    except drive_gateway.DriveStartupError as error:
+        _relogin_audit(request, "DRIVE_RECONNECT_FAILED", 503, result="DRIVE_UNAVAILABLE", received=None)
+        raise _fail(503, "DRIVE_UNAVAILABLE", str(error)[:200]) from None
+    finally:
+        drive_auth.operation_lock.release()
+    _relogin_audit(request, "DRIVE_RECONNECT_SUCCEEDED", 200, result="OK", received=received)
+    return outcome
+
+
+@admin_router.post("/reconnect", response_model=DriveReloginResult)
+def reconnect(request: Request, payload: DriveReconnectRequest | None = None) -> DriveReloginResult:
+    """[저장된 토큰으로 다시 연결]: ``refresh_now`` with the stored refresh token; no input."""
+    _require_admin(request)
+    return _reconnect(request, bool(payload and payload.confirm_account_change))
+
+
+def _login_fields(raw: bytes) -> tuple[str, str, bool]:
+    """Validate the login body without ever echoing it (no pydantic 422 ``input``)."""
+    invalid = _fail(400, "DRIVE_LOGIN_INVALID", "아이디(128자 이하)와 비밀번호(256자 이하)를 입력하세요.")
+    if len(raw) > MAX_LOGIN_BODY:
+        raise invalid
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise invalid from None
+    if not isinstance(payload, dict):
+        raise invalid
+    username, password, confirm = payload.get("username"), payload.get("password"), payload.get("confirm_account_change", False)
+    payload.clear()
+    if not isinstance(username, str) or not isinstance(password, str) or not isinstance(confirm, bool):
+        raise invalid
+    username = username.strip()
+    if not username or len(username) > 128 or any(ord(ch) < 32 or ord(ch) == 127 for ch in username):
+        raise invalid
+    if not password or len(password) > 256:
+        raise invalid
+    return username, password, confirm
+
+
+def _login(request: Request, raw: bytes) -> DriveReloginResult:
+    settings = _require_scx()
+    username, password, confirm = _login_fields(raw)
+    del raw
+    received: str | None = None
+    try:
+        caps, supported, _error = drive_auth.capabilities()
+        if not supported:
+            raise drive_auth.DriveAuthError(409, "DRIVE_ADAPTER_UPDATE_REQUIRED",
+                                            "설치된 드라이브 어댑터가 계정 로그인을 지원하지 않습니다. 어댑터 업데이트 필요 (이슈 #50).")
+        if not caps.get("password"):
+            raise drive_auth.DriveAuthError(409, "AUTH_METHOD_UNSUPPORTED", drive_auth.AUTH_ERRORS["AUTH_METHOD_UNSUPPORTED"][1])
+        if not drive_auth.operation_lock.acquire(blocking=False):
+            raise drive_auth.DriveAuthError(409, "DRIVE_AUTH_BUSY", "다른 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.")
+        try:
+            attempt = drive_auth.limiter.take(settings.login_max_attempts)
+            with drive_auth.account_switch():
+                try:
+                    drive_gateway.get_drive_gateway()
+                    gateway_store = drive_gateway.gateway_token_store()
+                    result = drive_auth.login_password(username, password)
+                except drive_auth.DriveAuthError as error:
+                    if error.code in NOT_AN_SSO_ATTEMPT:
+                        drive_auth.limiter.refund(attempt)   # the SSO never saw this attempt
+                    raise
+                except drive_gateway.DriveStartupError:
+                    drive_auth.limiter.refund(attempt)
+                    raise
+                finally:
+                    del password   # the only reference left; nothing else ever held it
+                # The SSO accepted ID and password: no lockout risk any more, whatever happens next.
+                drive_auth.limiter.clear()
+                received = result.bundle.account_hint
+                outcome = _apply_relogin(request, result, confirm=confirm, gateway_store=gateway_store)
+        finally:
+            drive_auth.operation_lock.release()
+    except drive_auth.DriveAuthError as error:
+        if error.code not in {"DRIVE_AUTH_BUSY", "DRIVE_LOGIN_LOCKED"}:
+            drive_auth.record_failure(error.code)
+        _relogin_audit(request, "DRIVE_LOGIN_FAILED", error.status, result=error.code, received=received, username=username)
+        raise _auth_fail(error) from None
+    except drive_gateway.DriveStartupError as error:
+        _relogin_audit(request, "DRIVE_LOGIN_FAILED", 503, result="DRIVE_UNAVAILABLE", received=None, username=username)
+        raise _fail(503, "DRIVE_UNAVAILABLE", str(error)[:200]) from None
+    except HTTPException:
+        raise
+    except Exception as error:  # noqa: BLE001 - type only: nothing from this request may reach a log
+        logger.error("SCX drive account login failed unexpectedly (%s)", type(error).__name__)
+        _relogin_audit(request, "DRIVE_LOGIN_FAILED", 500, result="DRIVE_INTERNAL", received=None, username=username)
+        raise _fail(500, "DRIVE_INTERNAL", "계정 로그인 처리 중 오류가 발생했습니다.") from None
+    _relogin_audit(request, "DRIVE_LOGIN_SUCCEEDED", 200, result="OK", received=received, username=username)
+    return outcome
+
+
+@admin_router.post("/login", response_model=DriveReloginResult, openapi_extra={
+    "requestBody": {"required": True, "content": {"application/json": {"schema": LOGIN_SCHEMA}}}})
+async def login(request: Request) -> DriveReloginResult:
+    """[계정으로 로그인]: the adapter gets new tokens from the HPC SSO with ID and password.
+
+    The body is never stored, logged, audited or echoed (spec §3.3); HTTP is refused in ``https_only``."""
+    _require_admin(request)
+    settings = await run_in_threadpool(_require_scx)
+    blocked = password_login_block(request, settings)
+    if blocked is not None:
+        await run_in_threadpool(_relogin_audit, request, "DRIVE_LOGIN_FAILED", 403,
+                                result=f"DRIVE_PASSWORD_LOGIN_DISABLED:{blocked}", received=None)
+        raise _blocked_fail(blocked)
+    try:
+        raw = await _read_capped_body(request, limit=MAX_LOGIN_BODY, code="DRIVE_LOGIN_INVALID")
+    except HTTPException:
+        raise _fail(400, "DRIVE_LOGIN_INVALID", "아이디(128자 이하)와 비밀번호(256자 이하)를 입력하세요.") from None
+    return await run_in_threadpool(_login, request, raw)

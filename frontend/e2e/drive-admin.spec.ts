@@ -34,6 +34,12 @@ async function mockDrive(page: Page, state: { status: typeof BASE_STATUS; user: 
     const path = new URL(request.url()).pathname
     state.requests.push({ method: request.method(), path, body: request.postData() })
     if (path.endsWith('/status')) return route.fulfill({ json: state.status })
+    if (path.endsWith('/auth')) return route.fulfill({ json: {
+      capabilities: { refresh: false, password: false, mfa: false }, adapter_supported: false, capabilities_error: 'DRIVE_ADAPTER_UPDATE_REQUIRED',
+      connected_account: null, account_hint: null, credentials_present: false, obtained_at: null, expires_at: null, last_refresh_at: null,
+      last_error_code: null, last_error_at: null, password_login: 'https_only', password_login_allowed: false, password_login_blocked: null,
+      attempts_left: 3, max_attempts: 3, locked_until: null,
+    } })
     if (path.endsWith('/credentials') && request.method() === 'PUT') {
       state.status = OK_STATUS
       return route.fulfill({ json: { account_hint: 'spdm-shared', obtained_at: '2026-10-07T01:02:03.123456+00:00', test: { ok: true, latency_ms: 210, root_identity: 'scx:scx.example.test:item-1', error: null } } })

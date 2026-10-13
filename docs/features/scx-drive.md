@@ -99,6 +99,33 @@
 - API 응답·로그·감사 기록에 토큰 값을 넣지 않는다. 감사: `DRIVE_CREDENTIALS_REGISTERED`(계정 표시명·발급 시각·서버 호스트·key_id), `DRIVE_CREDENTIALS_DELETED`, `DRIVE_CHECK_RUN`.
 - 새 토큰을 등록하면 게이트웨이를 새로 만들므로 등록 직후 연결 시험부터 새 토큰을 쓴다. 요청 본문은 64 KiB까지만 읽는다(`Content-Length`로 먼저 거부, 스트림도 상한). 너무 깊게 중첩된 JSON도 400 `DRIVE_CREDENTIALS_INVALID`.
 
+### 4.1 대시보드에서 다시 연결 (이슈 #50)
+
+사양: [재연결 사양](../plans/scx-drive-relogin-spec.md). 어댑터에 `auth_capabilities`·`refresh_now`·`login_password`(워커 op 같은 이름)가 있어야 한다. 없는 어댑터는 화면에 "어댑터 업데이트 필요"를 보여 주고 토큰 붙여넣기만 쓴다.
+
+- 진입: **드라이브 관리 → 다시 연결** 구역, 또는 `AUTH_REQUIRED` 배너의 **[다시 연결]**(전역 관리자에게만 보임, 일반 사용자는 지금처럼 "관리자에게 문의").
+- **[저장된 토큰으로 다시 연결]**: 입력 없이 `refresh_now`. `AUTH_REFRESH_EXPIRED`면 "저장된 토큰이 만료되었습니다"와 함께 계정 로그인 양식을 연다.
+- **계정으로 로그인**: HPC 아이디·비밀번호 → 어댑터가 HPC SSO에서 새 토큰을 받아 자동 등록(브라우저 불필요). 아이디 칸은 연결 계정으로 미리 채운다. 비밀번호 칸은 `type=password`·`autocomplete=off`이며 보내는 즉시 비운다.
+- **연결 계정**(결정 4, migration `0042`): 처음 등록·로그인에 성공한 계정을 `drive_connected_account`에 기억한다. 다른 계정의 토큰(로그인·붙여넣기·갱신 결과)은 저장 전에 "연결 계정이 ○○에서 △△로 바뀝니다. 계속할까요?"를 묻고, 확인 없이는 409 `DRIVE_ACCOUNT_CHANGE_CONFIRM`으로 저장하지 않는다(워커 세션도 버려 다음 호출은 기존 계정 토큰으로 돌아간다).
+- 성공하면 새 세대로 암호화 저장하고, 인증 대기로 멈춘 업로드 대기열을 재개하며 관리자 "대기열 일시 정지" 알림을 읽음 처리한다.
+- **자동 갱신**(사양 §3.5): 드라이브 호출·대기열 항목이 `AUTH_REQUIRED`를 받으면 `AUTH_REQUIRED` 한 번당 `refresh_now`를 한 번만 시도하고 같은 호출을 한 번 더 한다. 실패하면 지금처럼 대기열이 멈추고 배너가 뜬다.
+
+| 설정 | 기본 | 내용 |
+|---|---|---|
+| `SIMDASH_DRIVE_PASSWORD_LOGIN` | `https_only` | `off`/`https_only`/`on`. `https_only`는 HTTPS 접속(같은 서버 Caddy가 붙인 `X-Forwarded-Proto`를 uvicorn이 신뢰한 경우만) 또는 **서버 PC에서 직접 접속**(`127.0.0.1`)만 허용한다. 클라이언트가 보낸 `X-Forwarded-Proto`는 믿지 않는다. 사내망 HTTP(예 `http://서버:8080`)로 다른 PC에서 접속하면 거부되므로 서버 PC 브라우저에서 로그인하거나, 위험을 이해한 뒤 `on`으로 바꾼다(비밀번호가 사내망에 평문으로 흐름) |
+| `SIMDASH_DRIVE_LOGIN_MAX_ATTEMPTS` | `3` | 15분당 계정 로그인 시도 한도(1–20, 대시보드 전체). 넘으면 15분 잠금(429 `DRIVE_LOGIN_LOCKED`). 잘못된 비밀번호 뒤 자동 재시도 없음. 어댑터가 SSO에 보내지 못한 시도(어댑터 미지원·드라이브 미가동)는 세지 않는다. 프로세스 메모리에 두므로 재시작하면 초기화된다(scx 모드는 단일 프로세스) |
+
+같은 PC 판정: 소스 배포는 Vite 서버가 모든 요청을 127.0.0.1에서 API로 넘기므로, Vite 프록시가 브라우저가 보낸 `X-Forwarded-*`·`Forwarded`를 지우고 실제 접속지를 `X-Simdash-Proxy-Peer`로 덮어써 전달한다. API는 이 헤더를 127.0.0.1에서 온 요청에서만 믿는다(폐쇄망 설치의 Caddy는 이 헤더를 지운다). 다시 연결·로그인이 계정을 확인하는 동안(최대 45초) 드라이브 읽기는 기다리고 업로드 대기열은 다음 차례로 미룬다.
+
+보안: 비밀번호는 요청 처리 함수의 지역 변수로만 있고 워커에 stdin JSON으로 한 번 전달된다. DB·파일·로그·감사·알림·오류 응답에 넣지 않는다(본문은 pydantic 검증 없이 직접 읽어 422 입력 반향이 없다). 감사: `DRIVE_RECONNECT_SUCCEEDED/FAILED`, `DRIVE_LOGIN_SUCCEEDED/FAILED`(입력 아이디·받은 계정·결과 코드), 붙여넣기 거부 `DRIVE_CREDENTIALS_REJECTED`.
+
+| 메서드 | 경로 | 내용 |
+|---|---|---|
+| GET | `/api/admin/drive/auth` | 어댑터 지원 여부·capabilities·연결 계정·마지막 갱신/오류·계정 로그인 허용 여부(`password_login_blocked`: `OFF`/`HTTP`)·남은 시도·잠금 시각 |
+| POST | `/api/admin/drive/reconnect` | `{confirm_account_change?}` → `{account_hint, obtained_at, account_changed, queue_resumed}` |
+| POST | `/api/admin/drive/login` | `{username(≤128), password(≤256), confirm_account_change?}` → 위와 같음. 오류: 401 `AUTH_INVALID_CREDENTIALS`, 409 `AUTH_ACCOUNT_LOCKED`·`AUTH_MFA_REQUIRED`·`AUTH_METHOD_UNSUPPORTED`·`DRIVE_ACCOUNT_CHANGE_CONFIRM`·`DRIVE_ADAPTER_UPDATE_REQUIRED`, 429 `RATE_LIMITED`·`DRIVE_LOGIN_LOCKED`, 403 `DRIVE_PASSWORD_LOGIN_DISABLED` |
+| PUT | `/api/admin/drive/credentials?confirm_account_change=true` | 다른 계정 토큰 붙여넣기 확인 |
+
 ## 5. 드라이브 점검 (결정 D7)
 
 **드라이브 관리 → 드라이브 점검**에 SPDM 루트 기준 시험 폴더(예 `_simdash_test`)를 넣고 **점검 실행**. 한 번에 하나만 실행된다(409 `DRIVE_CHECK_RUNNING`).

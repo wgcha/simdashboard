@@ -115,7 +115,17 @@ DRIVE_ERROR_MAP: dict[str, DriveErrorMapping] = {
     "TIMEOUT": DriveErrorMapping("DRIVE_TIMEOUT", 504, True),
     "UNAVAILABLE": DriveErrorMapping("DRIVE_UNAVAILABLE", 503, True),
     "INTERNAL": DriveErrorMapping("DRIVE_INTERNAL", 500, False),
+    # Issue #50 adapter auth codes (spec §2.4) seen outside the re-login endpoints: the drive needs re-login.
+    "AUTH_REFRESH_EXPIRED": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
+    "AUTH_INVALID_CREDENTIALS": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
+    "AUTH_ACCOUNT_LOCKED": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
+    "AUTH_MFA_REQUIRED": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
+    "AUTH_METHOD_UNSUPPORTED": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
+    "RATE_LIMITED": DriveErrorMapping("DRIVE_BUSY", 503, True, 5),
 }
+# Adapter codes that mean "credentials needed" (queue pauses, banner asks for re-login).
+AUTH_FAILURE_CODES = frozenset({"AUTH_REQUIRED", "AUTH_REFRESH_EXPIRED", "AUTH_INVALID_CREDENTIALS",
+                                "AUTH_ACCOUNT_LOCKED", "AUTH_MFA_REQUIRED", "AUTH_METHOD_UNSUPPORTED"})
 _FALLBACK = DRIVE_ERROR_MAP["INTERNAL"]
 
 
@@ -132,7 +142,7 @@ def map_drive_error(error: BaseException) -> DriveErrorMapping:
     return DRIVE_ERROR_MAP.get(drive_error_code(error) or "", _FALLBACK)
 
 
-_STORAGE_STATUS = {mapping.storage_code: mapping.http_status for mapping in DRIVE_ERROR_MAP.values()}
+_STORAGE_STATUS = {mapping.storage_code: mapping.http_status for mapping in DRIVE_ERROR_MAP.values()}  # duplicates agree
 
 
 def storage_http_status(storage_code: str, default: int = 503) -> int:
@@ -294,6 +304,9 @@ def shutdown() -> None:
             _state.adapter = None
             _state.token_store = None
             _state.settings = None
+            from . import auth
+
+            auth.reset_state()
 
 
 def current_settings() -> DriveSettings:
@@ -347,6 +360,9 @@ def reset_gateway() -> None:
     """
     with _state.lock:
         gateway, _state.gateway, _state.gateway_store = _state.gateway, None, None
+    from . import auth
+
+    auth.forget_capabilities()
     if gateway is None:
         return
     try:

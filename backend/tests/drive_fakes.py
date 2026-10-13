@@ -25,6 +25,17 @@ the call raises, like a timeout after the server accepted the upload) and
 ``writes()`` (every write call, for "nothing deleted/overwritten" checks).
 CONFLICT for an existing name is the adapter behaviour (``upload_new`` /
 ``copy_within`` never overwrite).
+
+Issue #50 additions (re-login, spec §2): ``auth_capabilities`` / ``refresh_now`` /
+``login_password`` (``make_fake_adapter_module(drive, relogin=False)`` builds an
+adapter without them, like one released before #50).  ``sso_accounts`` maps a user
+name to ``(password, account_hint)``; ``auth_fail_next`` injects any §2.4 code for one
+call; ``refresh_expired`` answers ``AUTH_REFRESH_EXPIRED``; ``refresh_account`` makes
+``refresh_now`` return another account; ``auth_result_dict`` returns only the worker
+op result (``account_hint``/``obtained_at``/``expires_at``) so the dashboard must take
+the tokens from the ``tokens`` notification (``TokenStore.save``); ``unknown_op``
+answers like an older worker that does not know the op.  Every call is logged in
+``auth_calls`` with the user name only (never the password).
 """
 from __future__ import annotations
 
@@ -58,6 +69,12 @@ class ErrorCode(str, Enum):
     TIMEOUT = "TIMEOUT"
     UNAVAILABLE = "UNAVAILABLE"
     INTERNAL = "INTERNAL"
+    AUTH_INVALID_CREDENTIALS = "AUTH_INVALID_CREDENTIALS"
+    AUTH_ACCOUNT_LOCKED = "AUTH_ACCOUNT_LOCKED"
+    AUTH_MFA_REQUIRED = "AUTH_MFA_REQUIRED"
+    AUTH_METHOD_UNSUPPORTED = "AUTH_METHOD_UNSUPPORTED"
+    AUTH_REFRESH_EXPIRED = "AUTH_REFRESH_EXPIRED"
+    RATE_LIMITED = "RATE_LIMITED"
 
 
 RETRYABLE = {ErrorCode.LOCKED, ErrorCode.BUSY, ErrorCode.OVERLOADED, ErrorCode.TIMEOUT, ErrorCode.UNAVAILABLE}
@@ -169,6 +186,15 @@ class MemoryDrive:
     copy_unsupported: bool = False
     fail_path: dict[tuple[str, str], list[ErrorCode]] = field(default_factory=dict)
     lost_response: dict[str, ErrorCode] = field(default_factory=dict)
+    # issue #50 re-login
+    auth_caps: dict[str, bool] = field(default_factory=lambda: {"refresh": True, "password": True, "mfa": False})
+    sso_accounts: dict[str, tuple[str, str]] = field(default_factory=dict)
+    auth_fail_next: dict[str, ErrorCode] = field(default_factory=dict)
+    refresh_expired: bool = False
+    refresh_account: str | None = None
+    auth_result_dict: bool = False
+    unknown_op: bool = False
+    auth_calls: list[tuple[str, str]] = field(default_factory=list)
     call_delay_s: dict[str, float] = field(default_factory=dict)
     _ids: Any = field(default_factory=lambda: itertools.count(1))
     _clock: Any = field(default_factory=lambda: itertools.count(1))
@@ -437,9 +463,76 @@ class FakeWorkerDriveGateway:
         self.closed = True
 
 
-def make_fake_adapter_module(drive: MemoryDrive) -> types.ModuleType:
+class FakeReloginOps:
+    """Issue #50 worker ops (spec §2.1–2.2) on top of :class:`FakeWorkerDriveGateway`."""
+
+    drive: MemoryDrive
+
+    def _auth_op(self, op: str, user: str = "") -> None:
+        if self.closed:
+            raise DriveError(ErrorCode.UNAVAILABLE, "gateway closed")
+        self.drive.auth_calls.append((op, user))
+        if self.drive.unknown_op:
+            raise DriveError(ErrorCode.INTERNAL, f"unknown op: {op}")
+        injected = self.drive.auth_fail_next.pop(op, None)
+        if injected is not None:
+            self._fail(injected)
+            raise DriveError(injected, f"injected {injected.value}")
+
+    def _answer(self, bundle: TokenBundle) -> Any:
+        self.token_store.save(bundle)            # the ``tokens`` notification, synchronous here
+        self._bundle = bundle
+        self._sent_obtained_at = bundle.obtained_at
+        self.token_refreshed_at = bundle.obtained_at
+        self.last_success_at = datetime.now(timezone.utc)
+        if self.drive.auth_result_dict:
+            return {"account_hint": bundle.account_hint, "obtained_at": bundle.obtained_at.isoformat(),
+                    "expires_at": (bundle.obtained_at + timedelta(days=30)).isoformat()}
+        return bundle
+
+    def auth_capabilities(self) -> dict[str, bool]:
+        self._auth_op("auth_capabilities")
+        return dict(self.drive.auth_caps)
+
+    def refresh_now(self) -> Any:
+        self._auth_op("refresh_now")
+        if self._bundle is None:
+            loaded = self.token_store.load()
+            if loaded is None:
+                self._fail(ErrorCode.AUTH_REQUIRED)
+                raise DriveError(ErrorCode.AUTH_REQUIRED, "no token registered")
+            self._bundle = loaded
+        if self.drive.refresh_expired:
+            self._fail(ErrorCode.AUTH_REFRESH_EXPIRED)
+            raise DriveError(ErrorCode.AUTH_REFRESH_EXPIRED, "refresh token expired")
+        self.drive.sessions += 1
+        current = self._bundle
+        rotated = TokenBundle(server_url=current.server_url, access_token=f"{current.access_token}-n{self.drive.sessions}",
+                              refresh_token=f"{current.refresh_token}-n{self.drive.sessions}",
+                              obtained_at=datetime.now(timezone.utc),
+                              account_hint=self.drive.refresh_account or current.account_hint)
+        return self._answer(rotated)
+
+    def login_password(self, username: str, password: str, *, timeout_s: float = 30) -> Any:
+        self._auth_op("login_password", username)
+        known = self.drive.sso_accounts.get(username)
+        if known is None or known[0] != password:
+            del password
+            self._fail(ErrorCode.AUTH_INVALID_CREDENTIALS)
+            raise DriveError(ErrorCode.AUTH_INVALID_CREDENTIALS, f"invalid credentials for {username}")
+        del password
+        self.drive.sessions += 1
+        bundle = TokenBundle(server_url=self.config.adapter.server_url,
+                             access_token=f"eyJlogin.access-SECRET-{self.drive.sessions}",
+                             refresh_token=f"login-refresh-SECRET-{self.drive.sessions}",
+                             obtained_at=datetime.now(timezone.utc), account_hint=known[1])
+        return self._answer(bundle)
+
+
+def make_fake_adapter_module(drive: MemoryDrive, *, relogin: bool = True) -> types.ModuleType:
     module = types.ModuleType("scx_drive_adapter")
-    gateway_cls = type("WorkerDriveGateway", (FakeWorkerDriveGateway,), {"drive": drive, "instances": []})
+    bases = (FakeReloginOps, FakeWorkerDriveGateway) if relogin else (FakeWorkerDriveGateway,)
+    gateway_cls = type("WorkerDriveGateway", bases, {"drive": drive, "instances": []})
     for name, value in {
         "Priority": Priority, "ErrorCode": ErrorCode, "DriveError": DriveError, "DriveEntry": DriveEntry,
         "DownloadResult": DownloadResult, "HealthStatus": HealthStatus, "TokenBundle": TokenBundle,

@@ -224,6 +224,7 @@ def test_auth_required_pause_notifies_global_admins_once_per_pause(scxw):
     me = _admin_id(scxw)
     session = _drop(scxw, project_id, request_id, [("2_Face/auth.csv", b"auth\n")])
     scxw.drive.fail_next["upload_new"] = ErrorCode.AUTH_REQUIRED
+    scxw.drive.refresh_expired = True        # issue #50: the automatic refresh_now fails too
     _complete(scxw, session["session_id"])
     _settle()
     paused = _rows(me, "DRIVE_QUEUE_PAUSED")
@@ -232,12 +233,15 @@ def test_auth_required_pause_notifies_global_admins_once_per_pause(scxw):
     assert scxw.client.put("/api/admin/drive/credentials", content=__import__("test_drive_reads")._bundle()).status_code == 200
     _settle()
     assert [row["severity"] for row in _rows(me, "DRIVE_UPLOAD")] == ["SUCCESS"]
-    # a second pause while the first notification is unread does not add another one
-    again = _drop(scxw, project_id, request_id, [("2_Face/auth2.csv", b"auth2\n")])
-    scxw.drive.fail_next["upload_new"] = ErrorCode.AUTH_REQUIRED
-    _complete(scxw, again["session_id"])
-    _settle()
-    assert len(_rows(me, "DRIVE_QUEUE_PAUSED")) == 1
+    # issue #50: re-authentication resolves (marks read) the pause notice
+    assert all(row["read_at"] for row in _rows(me, "DRIVE_QUEUE_PAUSED"))
+    # a new pause notifies again; while it is unread, a further pause does not add another one
+    for name in ("auth2", "auth3"):
+        again = _drop(scxw, project_id, request_id, [(f"2_Face/{name}.csv", f"{name}\n".encode())])
+        scxw.drive.fail_next["upload_new"] = ErrorCode.AUTH_REQUIRED
+        _complete(scxw, again["session_id"])
+        _settle()
+    assert [bool(row["read_at"]) for row in _rows(me, "DRIVE_QUEUE_PAUSED")].count(False) == 1
 
 
 def test_final_completion_and_failure_notify_the_designating_user_and_members(scxw):

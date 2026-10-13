@@ -61,6 +61,7 @@ from typing import Any, Iterable
 from ...database_connection import connect, connection_held
 from ..storage import server_local
 from ..storage.provider import SpdmStorageError
+from . import auth as drive_auth
 from . import gateway as drive_gateway
 from .. import notifications
 
@@ -70,7 +71,7 @@ KINDS = ("MKDIR", "COPY", "FILE", "COMPLETE_MARKER")
 STATES = ("PENDING", "RUNNING", "DONE", "CONFLICT", "FAILED", "BLOCKED", "CANCELLED")
 OPEN_STATES = ("PENDING", "RUNNING", "BLOCKED")
 STOP_STATES = ("FAILED", "CONFLICT", "CANCELLED")
-RETRYABLE_CODES = frozenset({"BUSY", "LOCKED", "TIMEOUT", "OVERLOADED", "UNAVAILABLE"})
+RETRYABLE_CODES = frozenset({"BUSY", "LOCKED", "TIMEOUT", "OVERLOADED", "UNAVAILABLE", "RATE_LIMITED"})
 BACKOFF_SECONDS = (30, 120, 600, 1800, 3600)
 # copy_within failures that mean "this drive cannot copy" (C7 unknown): fall back to download → upload.
 COPY_UNSUPPORTED_CODES = frozenset({"INTERNAL"})
@@ -944,7 +945,7 @@ def _failure(error: BaseException, item: Item | None = None) -> _Outcome:
         return _Outcome("FAILED", "DRIVE_INTERNAL", type(error).__name__)
     message = drive_gateway.safe_error_message(error)
     logger.warning("SCX drive queue %s failed: rel=%s code=%s message=%s", op, target, code, message)
-    if code == "AUTH_REQUIRED":
+    if code in drive_gateway.AUTH_FAILURE_CODES:
         return _Outcome("BLOCKED", "DRIVE_AUTH_REQUIRED", ERROR_MESSAGES["DRIVE_AUTH_REQUIRED"])
     if code in RETRYABLE_CODES:
         return _Outcome("RETRY", _storage_code(code), message)
@@ -1023,12 +1024,24 @@ def _existing_outcome(gateway: Any, item: Item, existing: Any, *, size: int | No
 def _execute(item: Item) -> _Outcome:
     if connection_held():
         raise RuntimeError("drive write while the thread holds a database connection")
+    if not drive_auth.wait_account_switch():
+        # Issue #50: never write while a manual re-login may hold an unconfirmed account's session.
+        return _Outcome("RETRY", "DRIVE_BUSY", "드라이브 재연결이 진행 중입니다.")
     try:
         gateway = drive_gateway.get_drive_gateway()
     except drive_gateway.DriveStartupError as exc:
         return _Outcome("RETRY", "DRIVE_UNAVAILABLE", str(exc)[:200])
     if gateway is None:
         return _Outcome("FAILED", "DRIVE_MODE_DISABLED", "SCX 드라이브 모드가 아닙니다.")
+    outcome = _execute_on(gateway, item)
+    if outcome.code == "DRIVE_AUTH_REQUIRED" and drive_auth.auto_refresh_once(gateway):
+        # Issue #50 §3.5: one refresh_now per AUTH_REQUIRED episode before the queue pauses.
+        # AUTH_REQUIRED means nothing was written, so the same step simply runs once more.
+        outcome = _execute_on(drive_gateway.get_drive_gateway() or gateway, item)
+    return outcome
+
+
+def _execute_on(gateway: Any, item: Item) -> _Outcome:
     try:
         if item.kind == "MKDIR":
             return _Outcome("DONE", entry=gateway.mkdirs(_drive_path(item.target)))

@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from ...config import ROOT
 
 DriveMode = Literal["none", "scx"]
+PasswordLoginMode = Literal["off", "https_only", "on"]
 
 MODE_ENV = "SIMDASH_DRIVE_GATEWAY"
 REQUIRED_SCX = (
@@ -63,6 +64,9 @@ class DriveSettings:
     # 05 §3 server blob store for downloaded files above BLOB_THRESHOLD_BYTES (content-addressed).
     blob_dir: Path = DEFAULT_WORK_DIR / "blobs"
     blob_max_bytes: int = 100 * 1024 ** 3
+    # Issue #50 (docs/plans/scx-drive-relogin-spec.md §3.1): account login from the reconnect dialog.
+    password_login: PasswordLoginMode = "https_only"
+    login_max_attempts: int = 3
 
     @property
     def enabled(self) -> bool:
@@ -156,6 +160,13 @@ def _flag(name: str) -> bool:
     raise DriveConfigError(name, "true 또는 false여야 합니다.")
 
 
+def _password_login(name: str) -> PasswordLoginMode:
+    raw = "_".join((_text(name) or "https_only").casefold().split("-"))
+    if raw not in {"off", "https_only", "on"}:
+        raise DriveConfigError(name, "off, https_only, on 중 하나여야 합니다.")
+    return raw  # type: ignore[return-value]
+
+
 def _fernet_key(name: str) -> str:
     value = _required(name)
     try:
@@ -223,4 +234,6 @@ def drive_settings() -> DriveSettings:
         verify_max_bytes=int(_number("SIMDASH_DRIVE_VERIFY_MAX_BYTES", 2 * 1024 ** 3, 0, 2 ** 50, integer=True)),
         blob_dir=blob_dir,
         blob_max_bytes=int(_number("SIMDASH_DRIVE_BLOB_MAX_BYTES", 100 * 1024 ** 3, 64 * 1024 ** 2, 2 ** 50, integer=True)),
+        password_login=_password_login("SIMDASH_DRIVE_PASSWORD_LOGIN"),
+        login_max_attempts=int(_number("SIMDASH_DRIVE_LOGIN_MAX_ATTEMPTS", 3, 1, 20, integer=True)),
     )

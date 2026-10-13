@@ -2672,6 +2672,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/drive/auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Auth Status */
+        get: operations["auth_status_api_admin_drive_auth_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/reconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconnect
+         * @description [저장된 토큰으로 다시 연결]: ``refresh_now`` with the stored refresh token; no input.
+         */
+        post: operations["reconnect_api_admin_drive_reconnect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Login
+         * @description [계정으로 로그인]: the adapter gets new tokens from the HPC SSO with ID and password.
+         *
+         *     The body is never stored, logged, audited or echoed (spec §3.3); HTTP is refused in ``https_only``.
+         */
+        post: operations["login_api_admin_drive_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drive/status": {
         parameters: {
             query?: never;
@@ -2679,7 +2738,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** User Status */
+        /**
+         * User Status
+         * @description Any signed-in user (SecurityMiddleware); ``can_reconnect`` marks global admins (banner action).
+         */
         get: operations["user_status_api_drive_status_get"];
         put?: never;
         post?: never;
@@ -5528,6 +5590,75 @@ export interface components {
             writes_available: boolean;
             version_tokens?: components["schemas"]["DriveTokenObservation"] | null;
         };
+        /** DriveAuthCapabilities */
+        DriveAuthCapabilities: {
+            /**
+             * Refresh
+             * @default false
+             */
+            refresh: boolean;
+            /**
+             * Password
+             * @default false
+             */
+            password: boolean;
+            /**
+             * Mfa
+             * @default false
+             */
+            mfa: boolean;
+        };
+        /**
+         * DriveAuthStatus
+         * @description Reconnect dialog (issue #50): what the adapter supports and why account login may be refused.
+         */
+        DriveAuthStatus: {
+            capabilities: components["schemas"]["DriveAuthCapabilities"];
+            /** Adapter Supported */
+            adapter_supported: boolean;
+            /** Capabilities Error */
+            capabilities_error?: string | null;
+            /** Connected Account */
+            connected_account?: string | null;
+            /** Account Hint */
+            account_hint?: string | null;
+            /**
+             * Credentials Present
+             * @default false
+             */
+            credentials_present: boolean;
+            /** Obtained At */
+            obtained_at?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Last Refresh At */
+            last_refresh_at?: string | null;
+            /** Last Error Code */
+            last_error_code?: string | null;
+            /** Last Error At */
+            last_error_at?: string | null;
+            /** Password Login */
+            password_login: string;
+            /**
+             * Password Login Allowed
+             * @default false
+             */
+            password_login_allowed: boolean;
+            /** Password Login Blocked */
+            password_login_blocked?: string | null;
+            /**
+             * Attempts Left
+             * @default 0
+             */
+            attempts_left: number;
+            /**
+             * Max Attempts
+             * @default 0
+             */
+            max_attempts: number;
+            /** Locked Until */
+            locked_until?: string | null;
+        };
         /** DriveBatchError */
         DriveBatchError: {
             /** Id */
@@ -5753,6 +5884,36 @@ export interface components {
             /** State */
             state?: string | null;
         };
+        /** DriveReconnectRequest */
+        DriveReconnectRequest: {
+            /**
+             * Confirm Account Change
+             * @default false
+             */
+            confirm_account_change: boolean;
+        };
+        /** DriveReloginResult */
+        DriveReloginResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Account Hint */
+            account_hint?: string | null;
+            /** Obtained At */
+            obtained_at: string;
+            /**
+             * Account Changed
+             * @default false
+             */
+            account_changed: boolean;
+            /**
+             * Queue Resumed
+             * @default 0
+             */
+            queue_resumed: number;
+        };
         /** DriveSourceChangeDecision */
         DriveSourceChangeDecision: {
             /** Project Id */
@@ -5949,6 +6110,11 @@ export interface components {
              * @default false
              */
             queue_paused: boolean;
+            /**
+             * Can Reconnect
+             * @default false
+             */
+            can_reconnect: boolean;
         };
         /** DropFile */
         DropFile: {
@@ -13709,7 +13875,9 @@ export interface operations {
     };
     put_credentials_api_admin_drive_credentials_put: {
         parameters: {
-            query?: never;
+            query?: {
+                confirm_account_change?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -13734,6 +13902,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriveCredentialsSaved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -13985,6 +14162,89 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriveQueueList"];
+                };
+            };
+        };
+    };
+    auth_status_api_admin_drive_auth_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveAuthStatus"];
+                };
+            };
+        };
+    };
+    reconnect_api_admin_drive_reconnect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DriveReconnectRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveReloginResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_api_admin_drive_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username: string;
+                    /** Format: password */
+                    password: string;
+                    /** @default false */
+                    confirm_account_change?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveReloginResult"];
                 };
             };
         };

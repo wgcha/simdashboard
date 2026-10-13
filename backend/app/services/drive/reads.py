@@ -67,6 +67,7 @@ from ...database_connection import connect, connection_held
 from ..storage import server_local
 from ..storage.provider import SpdmStorageError
 from ..storage.server_local import BlobStore
+from . import auth as drive_auth
 from . import gateway as drive_gateway
 from .config import validate_drive_rel_path
 
@@ -498,6 +499,10 @@ def _log_call_failure(op: str, rel: str, code: str, message: str) -> None:
 def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
     if connection_held():
         raise RuntimeError("drive call while the thread holds a database connection")
+    if not drive_auth.wait_account_switch():
+        # Issue #50: a manual re-login is still checking the account the worker now holds.
+        _log_call_failure(op, rel, "DRIVE_BUSY", "account switch pending")
+        raise SpdmStorageError("DRIVE_BUSY", "드라이브 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.")
     try:
         gateway = drive_gateway.get_drive_gateway()
     except drive_gateway.DriveStartupError as exc:
@@ -506,7 +511,13 @@ def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
     if gateway is None:
         raise SpdmStorageError("DRIVE_MODE_DISABLED", "SCX 드라이브 모드가 아닙니다.")
     try:
-        return fn(gateway)
+        try:
+            return fn(gateway)
+        except Exception as error:  # noqa: BLE001
+            # Issue #50 §3.5: one refresh_now per AUTH_REQUIRED episode, then this call once more.
+            if drive_gateway.drive_error_code(error) != "AUTH_REQUIRED" or not drive_auth.auto_refresh_once(gateway):
+                raise
+            return fn(drive_gateway.get_drive_gateway() or gateway)
     except SpdmStorageError as error:
         _log_call_failure(op, rel, str(error.code), drive_gateway.safe_error_message(error))
         raise

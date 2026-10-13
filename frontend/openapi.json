@@ -7210,6 +7210,18 @@
         ],
         "summary": "Put Credentials",
         "operationId": "put_credentials_api_admin_drive_credentials_put",
+        "parameters": [
+          {
+            "name": "confirm_account_change",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Confirm Account Change"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -7217,6 +7229,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DriveCredentialsSaved"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -7588,12 +7610,135 @@
         }
       }
     },
+    "/api/admin/drive/auth": {
+      "get": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Auth Status",
+        "operationId": "auth_status_api_admin_drive_auth_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveAuthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/reconnect": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Reconnect",
+        "description": "[저장된 토큰으로 다시 연결]: ``refresh_now`` with the stored refresh token; no input.",
+        "operationId": "reconnect_api_admin_drive_reconnect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DriveReconnectRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveReloginResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/login": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Login",
+        "description": "[계정으로 로그인]: the adapter gets new tokens from the HPC SSO with ID and password.\n\nThe body is never stored, logged, audited or echoed (spec §3.3); HTTP is refused in ``https_only``.",
+        "operationId": "login_api_admin_drive_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "password": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "format": "password",
+                    "writeOnly": true
+                  },
+                  "confirm_account_change": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "username",
+                  "password"
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveReloginResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/drive/status": {
       "get": {
         "tags": [
           "drive"
         ],
         "summary": "User Status",
+        "description": "Any signed-in user (SecurityMiddleware); ``can_reconnect`` marks global admins (banner action).",
         "operationId": "user_status_api_drive_status_get",
         "responses": {
           "200": {
@@ -17033,6 +17178,180 @@
         ],
         "title": "DriveAdminStatus"
       },
+      "DriveAuthCapabilities": {
+        "properties": {
+          "refresh": {
+            "type": "boolean",
+            "title": "Refresh",
+            "default": false
+          },
+          "password": {
+            "type": "boolean",
+            "title": "Password",
+            "default": false
+          },
+          "mfa": {
+            "type": "boolean",
+            "title": "Mfa",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "DriveAuthCapabilities"
+      },
+      "DriveAuthStatus": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/DriveAuthCapabilities"
+          },
+          "adapter_supported": {
+            "type": "boolean",
+            "title": "Adapter Supported"
+          },
+          "capabilities_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capabilities Error"
+          },
+          "connected_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connected Account"
+          },
+          "account_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Hint"
+          },
+          "credentials_present": {
+            "type": "boolean",
+            "title": "Credentials Present",
+            "default": false
+          },
+          "obtained_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Obtained At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "last_refresh_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Refresh At"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "last_error_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error At"
+          },
+          "password_login": {
+            "type": "string",
+            "title": "Password Login"
+          },
+          "password_login_allowed": {
+            "type": "boolean",
+            "title": "Password Login Allowed",
+            "default": false
+          },
+          "password_login_blocked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password Login Blocked"
+          },
+          "attempts_left": {
+            "type": "integer",
+            "title": "Attempts Left",
+            "default": 0
+          },
+          "max_attempts": {
+            "type": "integer",
+            "title": "Max Attempts",
+            "default": 0
+          },
+          "locked_until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked Until"
+          }
+        },
+        "type": "object",
+        "required": [
+          "capabilities",
+          "adapter_supported",
+          "password_login"
+        ],
+        "title": "DriveAuthStatus",
+        "description": "Reconnect dialog (issue #50): what the adapter supports and why account login may be refused."
+      },
       "DriveBatchError": {
         "properties": {
           "id": {
@@ -17768,6 +18087,56 @@
         ],
         "title": "DriveQueueSkipped"
       },
+      "DriveReconnectRequest": {
+        "properties": {
+          "confirm_account_change": {
+            "type": "boolean",
+            "title": "Confirm Account Change",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "DriveReconnectRequest"
+      },
+      "DriveReloginResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          },
+          "account_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Hint"
+          },
+          "obtained_at": {
+            "type": "string",
+            "title": "Obtained At"
+          },
+          "account_changed": {
+            "type": "boolean",
+            "title": "Account Changed",
+            "default": false
+          },
+          "queue_resumed": {
+            "type": "integer",
+            "title": "Queue Resumed",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "obtained_at"
+        ],
+        "title": "DriveReloginResult"
+      },
       "DriveSourceChangeDecision": {
         "properties": {
           "project_id": {
@@ -18289,6 +18658,11 @@
           "queue_paused": {
             "type": "boolean",
             "title": "Queue Paused",
+            "default": false
+          },
+          "can_reconnect": {
+            "type": "boolean",
+            "title": "Can Reconnect",
             "default": false
           }
         },

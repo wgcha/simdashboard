@@ -17,6 +17,8 @@ export type DriveUploadBatch = components['schemas']['DriveUploadBatch']
 export type DriveQueueList = components['schemas']['DriveQueueList']
 export type DriveQueueItem = components['schemas']['DriveQueueItem']
 export type DriveQueueBulkResult = components['schemas']['DriveQueueBulkResult']
+export type DriveAuthStatus = components['schemas']['DriveAuthStatus']
+export type DriveReloginResult = components['schemas']['DriveReloginResult']
 
 /** Korean messages for drive error codes (integration 06 §2). */
 export const DRIVE_ERROR_MESSAGES: Record<string, string> = {
@@ -59,6 +61,20 @@ export const DRIVE_ERROR_MESSAGES: Record<string, string> = {
   DRIVE_CHECK_FOLDER_INVALID: '시험 폴더 경로가 올바르지 않습니다.',
   DRIVE_ROOT_NOT_SET: 'SPDM 루트(SIMDASH_SCX_DRIVE_ROOT)가 설정되지 않았습니다.',
   GLOBAL_ADMIN_REQUIRED: '전체 관리자만 사용할 수 있습니다.',
+  // Re-login (issue #50, docs/plans/scx-drive-relogin-spec.md §2.4·§3.2)
+  AUTH_INVALID_CREDENTIALS: '아이디 또는 비밀번호가 맞지 않습니다.',
+  AUTH_ACCOUNT_LOCKED: 'HPC 계정이 잠겼거나 비활성 상태입니다. HPC 관리자에게 문의하세요.',
+  AUTH_MFA_REQUIRED: '이 계정은 추가 인증이 필요해 대시보드에서 로그인할 수 없습니다.',
+  AUTH_METHOD_UNSUPPORTED: '이 방식의 재연결을 지원하지 않습니다. 토큰 붙여넣기를 사용하세요.',
+  AUTH_REFRESH_EXPIRED: '저장된 토큰이 만료되었습니다. 계정으로 로그인하세요.',
+  RATE_LIMITED: 'HPC SSO가 시도 횟수를 제한했습니다. 잠시 후 다시 시도하세요.',
+  DRIVE_LOGIN_LOCKED: '로그인 시도가 너무 많아 잠시 잠갔습니다(HPC 계정 잠금 방지).',
+  DRIVE_LOGIN_INVALID: '아이디(128자 이하)와 비밀번호(256자 이하)를 입력하세요.',
+  DRIVE_PASSWORD_LOGIN_DISABLED: '이 접속에서는 계정 로그인을 사용할 수 없습니다.',
+  DRIVE_ADAPTER_UPDATE_REQUIRED: '설치된 드라이브 어댑터가 재연결을 지원하지 않습니다(어댑터 업데이트 필요).',
+  DRIVE_ACCOUNT_CHANGE_CONFIRM: '연결 계정이 바뀝니다.',
+  DRIVE_AUTH_BUSY: '다른 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.',
+  DRIVE_CREDENTIALS_MISSING: '저장된 토큰이 없습니다. 계정으로 로그인하거나 토큰을 붙여 넣으세요.',
   NOT_REJECTED: '같은 이름 쓰기가 거부되지 않았습니다(덮어쓰기 금지 확인 필요).',
 }
 
@@ -88,6 +104,14 @@ export function driveErrorText(reason: unknown, fallback: string): string {
   return reason instanceof Error && reason.message ? reason.message : fallback
 }
 
+/** The ``detail`` object of a failed drive API call (``{code, message, ...}``), when there is one. */
+export function driveErrorDetail(reason: unknown): Record<string, unknown> | null {
+  if (!(reason instanceof ApiError)) return null
+  const outer = reason.detail
+  const detail = outer && typeof outer === 'object' && 'detail' in outer ? (outer as { detail: unknown }).detail : outer
+  return detail && typeof detail === 'object' && !Array.isArray(detail) ? detail as Record<string, unknown> : null
+}
+
 export const DRIVE_STATE_LABELS: Record<DriveHealthState, string> = {
   OK: '연결됨',
   DEGRADED: '불안정',
@@ -104,12 +128,25 @@ export const driveApi = {
   adminStatus: async () => unwrapGenerated(await apiClient.GET('/api/admin/drive/status')) as DriveAdminStatus,
   userStatus: async (signal?: AbortSignal) => unwrapGenerated(await apiClient.GET('/api/drive/status', { signal })) as DriveUserStatus,
   /** ``bundleText`` is the TokenBundle JSON printed by ``python -m scx_drive_adapter login``. */
-  registerCredentials: async (bundleText: string) => {
+  registerCredentials: async (bundleText: string, confirmAccountChange = false) => {
     let body: unknown
     try { body = JSON.parse(bundleText) } catch { throw new ApiError('토큰 JSON을 해석할 수 없습니다. login 명령이 출력한 JSON 전체를 붙여 넣으세요.', 400, null) }
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ApiError('토큰 JSON은 객체여야 합니다.', 400, null)
-    return unwrapGenerated(await apiClient.PUT('/api/admin/drive/credentials', { body: body as { server_url: string; access_token: string; refresh_token: string } })) as DriveCredentialsSaved
+    return unwrapGenerated(await apiClient.PUT('/api/admin/drive/credentials', {
+      params: { query: confirmAccountChange ? { confirm_account_change: true } : {} },
+      body: body as { server_url: string; access_token: string; refresh_token: string },
+    })) as DriveCredentialsSaved
   },
+  /** Re-login status (issue #50): adapter capabilities, connected account, whether account login is allowed here. */
+  authStatus: async () => unwrapGenerated(await apiClient.GET('/api/admin/drive/auth')) as DriveAuthStatus,
+  /** [저장된 토큰으로 다시 연결]: refresh with the stored refresh token. */
+  reconnect: async (confirmAccountChange = false) => unwrapGenerated(await apiClient.POST('/api/admin/drive/reconnect', {
+    body: { confirm_account_change: confirmAccountChange },
+  })) as DriveReloginResult,
+  /** [계정으로 로그인]: the password goes to the server once and is never kept by this module. */
+  login: async (username: string, password: string, confirmAccountChange = false) => unwrapGenerated(await apiClient.POST('/api/admin/drive/login', {
+    body: { username, password, confirm_account_change: confirmAccountChange },
+  })) as DriveReloginResult,
   deleteCredentials: async () => {
     const { response, error } = await apiClient.DELETE('/api/admin/drive/credentials')
     if (!response.ok) throw new ApiError(apiErrorMessage(error, `요청 실패 (${response.status})`), response.status, error)
