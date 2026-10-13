@@ -66,8 +66,18 @@
 | `Dedicated application roles exist without the target database` | 이전 시도에서 역할만 남음 | pgAdmin에서 `simdashboard_owner`·`simdashboard_app` 역할 삭제 후 재실행(데이터 없는 경우만) |
 | `pg_dump … 실행 파일을 찾지 못했습니다` | PostgreSQL `bin`이 PATH에 없음 | `.env`에 `POSTGRES_BIN=C:\Program Files\PostgreSQL\18\bin` 추가 |
 | `.setup-recovery-required.json` 생김 | 설정 중단 | 파일 안내를 먼저 확인. 임의로 지우지 않는다 |
+| `Service credential activation failed`, 표식 파일 `reason: PermissionError` | 설치 폴더 권한이 "수정"만 있고 "모든 권한"이 아닐 때, 2026-10-13 이전 스크립트가 만든 임시 파일을 바꿔 넣지 못함 | 최신 코드로 갱신 후 §6 순서로 재시도 |
 
-## 6. 다음 단계
+## 6. 연결 정보 저장 실패 후 재시도
+
+DB·역할은 만들어졌지만 `.env`·`.postgres-owner.env` 저장이 실패한 경우(데이터 없음 전제):
+
+1. `.setup-recovery-required.json` 내용을 확인한 뒤 다른 이름으로 보관한다.
+2. 설치 폴더의 `.env.tmp`, `.postgres-owner.env.tmp`, `.*.restore` 잔여 파일을 지운다. 지워지지 않으면 `icacls <파일> /grant %USERNAME%:F` 후 삭제한다.
+3. 관리자 psql에서 `DROP DATABASE simulation_dashboard;`, `DROP ROLE simdashboard_app;`, `DROP ROLE simdashboard_owner;`
+4. `deploy.bat`을 다시 실행한다.
+
+## 7. 다음 단계
 
 - SCX 드라이브를 쓰는 PC: [SCX 드라이브 기능 안내](features/scx-drive.md) §2(어댑터 휠·워커 런타임·`.env` 설정·토큰 등록).
 - 업데이트: `update.bat`(DB 백업 → migration → 재시작 자동).
