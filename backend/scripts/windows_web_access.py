@@ -46,6 +46,16 @@ def _app_base_path() -> str | None:
     return "/" + "/".join(segments) + "/"
 
 
+def _frontend_port() -> int | None:
+    raw = os.getenv("WINDOWS_WEB_PORT", "").strip()
+    if not raw:
+        return DEFAULT_FRONTEND_PORT
+    if not raw.isdigit():
+        return None
+    port = int(raw)
+    return port if 1 <= port <= 65535 else None
+
+
 def _listener_host() -> str:
     """Use LAN for an authenticated Windows installation, local for dev."""
     configured_host = os.getenv("WINDOWS_WEB_HOST")
@@ -73,6 +83,10 @@ def main() -> int:
     if app_base_path is None:
         print("WINDOWS_WEB_BASE_PATH must be an absolute safe URL path.", file=sys.stderr)
         return 2
+    frontend_port = _frontend_port()
+    if frontend_port is None:
+        print("WINDOWS_WEB_PORT must be a TCP port number between 1 and 65535.", file=sys.stderr)
+        return 2
     if mode == "lan" and args.check_auth:
         auth_mode = os.getenv("AUTH_MODE", "disabled").strip().lower()
         if auth_mode not in {"password", "oidc"}:
@@ -82,14 +96,14 @@ def main() -> int:
             print("LAN HTTP access cannot use AUTH_COOKIE_SECURE=true; use an HTTPS reverse proxy.", file=sys.stderr)
             return 2
     # Keep the Windows profile portable: enabling the LAN listener on a new
-    # server is enough to expose the standard HTTP /home/ address.  The
-    # launcher still accepts an explicit frontend port for existing setups.
+    # server is enough to expose the standard HTTP /home/ address.  Servers
+    # where port 80 is taken (IIS, another web app) set WINDOWS_WEB_PORT.
     print(
         json.dumps(
             {
                 "host": host,
                 "mode": mode,
-                "frontend_port": DEFAULT_FRONTEND_PORT,
+                "frontend_port": frontend_port,
                 "app_base_path": app_base_path,
             },
             separators=(",", ":"),

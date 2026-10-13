@@ -1503,3 +1503,4 @@
 - 2026-10-13: 이관 내보내기 PermissionError 진단 — postgres_transfer 오류가 예외 이름만 출력해 원인 불명. OSError는 코드·경로를 출력하도록 변경. Windows에서 os.kill(pid,0)이 TerminateProcess를 호출하는 문제를 OpenProcess 조회로 교체. test_postgres_transfer 25 통과, Windows 실기 미검증.
 - 2026-10-13: 이관 내보내기 "쓰기 방지된 미디어 path=M:\PostgreSQL" — POSTGRES_BIN·PATH에 pg_dump가 없을 때 모든 드라이브 문자를 훑다 빈 카드리더 등에서 OSError. 접근 불가 드라이브는 건너뛰도록 수정, 테스트 추가(31 통과).
 - 2026-10-13: 이관 도구가 .env의 POSTGRES_BIN을 읽지 않던 문제(dotenv_values만 사용, os.getenv 조회) 수정 — main에서 POSTGRES_BIN만 환경에 반영. 테스트 32 통과.
+- 2026-10-13: 이슈 #52 — 새 서버에서 프런트엔드 80 포트 사용 중으로 시작 실패. 소스 배포는 80 고정(start.ps1 매개변수만)이라 `.env`의 WINDOWS_WEB_PORT(1–65535) 설정 추가, 문서·.env.example 갱신, 테스트 34 통과. 같은 이슈의 pg_dump 버전 불일치는 PG17(PATH)·PG18(5434) 공존 — POSTGRES_BIN 지정 안내.
