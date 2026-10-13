@@ -10,6 +10,7 @@
 | 결과 등록·검수·Case 가시화 | [현재 결과 등록 계약](features/result-registration.md) | DB·경로가 바뀌면 [배포 정책](windows-deployment-policy.md), 과거 검증 근거는 [#32 완료 기록](archive/2026/result-registration-review-plan.md) |
 | UI 크기·밀도·본문 폭 | [UI 개선 기준·데스크톱 적용 정책](dashboard/ui-density-improvement-plan.md) | 구현 경계는 [P0 계약](dashboard/ui-density-p0-contract.md), 완료 근거는 [P1~P5 기록](archive/README.md#2026-문서) |
 | 배포·업데이트 | [Windows 배포 정책](windows-deployment-policy.md) | [설치·업데이트 시나리오](windows-deployment-scenarios.md), 폐쇄망이면 [패키지 설치](windows-server-offline-installation.md) |
+| 새 PC PostgreSQL 최초 설정 | [PostgreSQL 최초 설정 가이드](windows-postgresql-first-setup.md) | 기존 DuckDB 이관은 [PostgreSQL 빠른 시작](windows-postgresql-quickstart.md), PC 간 데이터 이관은 [PC 간 이관 가이드](postgresql-pc-transfer-guide.md) |
 | 대시보드 조회·비교 | [대시보드 기능 안내](dashboard/README.md) | 등록 방식 변경은 [결과 등록 계약](features/result-registration.md) |
 | Case 결과·소재물성 화면·자동 반영·보고서·Final | [Case 결과 흐름 재설계 계획](plans/case-results-workflow-redesign.md) | 위치 정본은 [공용 위치 계약](features/folder-schema-refresh.md), 보고서 형식·HTML 영상 상한은 [Case 결과 보고서](features/case-report.md), 폴더 이름 경고는 [폴더 이름 경고](features/folder-name-warnings.md), Case 여러 개 비교는 [Case 비교](features/case-compare.md), 사용환경 소재(OptiStruct)는 [사용환경 소재](features/materials-optistruct.md) |
 | 알림(상단 알림 아이콘·알림 페이지·이벤트별 수신자)·전체 글자 크기 조절 숨김 | [알림 기능 안내](features/notifications.md) | DB 변경은 [배포 정책](windows-deployment-policy.md), 드라이브 이벤트는 [SCX 드라이브 기능 안내](features/scx-drive.md) |
