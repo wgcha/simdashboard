@@ -326,11 +326,23 @@ $backendProcess = $null
 $frontendProcess = $null
 $temporaryPidFile = "$PidFile.tmp"
 try {
-    $backendProcess = Start-Process -FilePath $Python `
-        -ArgumentList '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', ([string]$BackendPort) `
-        -WorkingDirectory $Backend -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput (Join-Path $Backend 'uvicorn.log') `
-        -RedirectStandardError (Join-Path $Backend 'uvicorn-error.log')
+    # Backend logs are UTF-8 (Korean log text is readable with Get-Content -Encoding UTF8),
+    # not the console code page (cp949). Only the backend process gets these values.
+    $previousPythonUtf8 = $env:PYTHONUTF8
+    $previousPythonIoEncoding = $env:PYTHONIOENCODING
+    $env:PYTHONUTF8 = '1'
+    $env:PYTHONIOENCODING = 'utf-8'
+    try {
+        $backendProcess = Start-Process -FilePath $Python `
+            -ArgumentList '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', ([string]$BackendPort) `
+            -WorkingDirectory $Backend -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $Backend 'uvicorn.log') `
+            -RedirectStandardError (Join-Path $Backend 'uvicorn-error.log')
+    }
+    finally {
+        if ($null -eq $previousPythonUtf8) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $env:PYTHONUTF8 = $previousPythonUtf8 }
+        if ($null -eq $previousPythonIoEncoding) { Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue } else { $env:PYTHONIOENCODING = $previousPythonIoEncoding }
+    }
     Wait-HttpReady -Name 'Backend' -Role 'backend' -Uri "http://127.0.0.1:$BackendPort/api/health" -Process $backendProcess -TimeoutSeconds $StartupTimeoutSeconds
 
     $previousBasePath = $env:VITE_APP_BASE_PATH

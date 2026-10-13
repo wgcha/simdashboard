@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def isolated_config(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(windows_web_access, 'ROOT', tmp_path)
-    for name in ('WINDOWS_WEB_HOST', 'WINDOWS_WEB_BASE_PATH', 'AUTH_MODE', 'AUTH_COOKIE_SECURE', 'DATABASE_URL', 'AUTH_SECRET_KEY'):
+    for name in ('WINDOWS_WEB_HOST', 'WINDOWS_WEB_BASE_PATH', 'WINDOWS_WEB_PORT', 'AUTH_MODE', 'AUTH_COOKIE_SECURE', 'DATABASE_URL', 'AUTH_SECRET_KEY'):
         # Track even previously absent keys so dotenv additions are undone.
         monkeypatch.setenv(name, '')
         monkeypatch.delenv(name)
@@ -149,3 +149,18 @@ def test_invalid_base_path_is_rejected_without_echoing_input(isolated_config, mo
     code, output, error = invoke(monkeypatch, capsys)
     assert code != 0 and not output
     assert base_path not in error
+
+
+def test_frontend_port_can_be_configured(isolated_config, monkeypatch, capsys):
+    (isolated_config / '.env').write_text('WINDOWS_WEB_PORT=8080\n')
+    code, output, error = invoke(monkeypatch, capsys)
+    assert code == 0 and not error
+    assert json.loads(output)['frontend_port'] == 8080
+
+
+@pytest.mark.parametrize('value', ['0', '65536', 'eighty', '-1'])
+def test_invalid_frontend_port_is_rejected(isolated_config, monkeypatch, capsys, value):
+    (isolated_config / '.env').write_text(f'WINDOWS_WEB_PORT={value}\n')
+    code, output, error = invoke(monkeypatch, capsys)
+    assert code == 2 and not output
+    assert 'WINDOWS_WEB_PORT' in error

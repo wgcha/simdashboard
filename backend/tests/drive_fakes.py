@@ -14,6 +14,9 @@ deletion (``delete``), persistent error injection (``fail_always`` per op, e.g.
 BUSY/TIMEOUT/AUTH_REQUIRED) and an ``on_call`` hook so tests can assert the
 calling thread holds no database connection.
 
+Issue #51 (scan limits): ``call_delay_s`` adds a per-call latency per operation
+(e.g. ``{"list_dir": 0.05}``) so a slow remote drive can exceed scan time limits.
+
 Stage D3 additions (write path): ``copy_unsupported`` (``copy_within`` answers
 INTERNAL like a drive without server-side copy, contract C7 unknown),
 ``fail_path`` (an error for one operation on one path, consumed per call, e.g.
@@ -39,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import threading
+import time
 import types
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -191,6 +195,7 @@ class MemoryDrive:
     auth_result_dict: bool = False
     unknown_op: bool = False
     auth_calls: list[tuple[str, str]] = field(default_factory=list)
+    call_delay_s: dict[str, float] = field(default_factory=dict)
     _ids: Any = field(default_factory=lambda: itertools.count(1))
     _clock: Any = field(default_factory=lambda: itertools.count(1))
 
@@ -295,6 +300,9 @@ class FakeWorkerDriveGateway:
         if self.closed:
             raise DriveError(ErrorCode.UNAVAILABLE, "gateway closed")
         self.drive.calls.append((op, rel))
+        delay = self.drive.call_delay_s.get(op)
+        if delay:
+            time.sleep(delay)
         if self.drive.on_call is not None:
             self.drive.on_call(op, rel)
         loaded = self.token_store.load()

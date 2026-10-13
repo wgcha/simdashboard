@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..database_connection import connect
-from . import folder_discovery, folder_discovery_environment, spdm_storage
+from . import folder_discovery, folder_discovery_environment, folder_discovery_scan, spdm_storage
 from .folder_discovery_scan import root_identity, scan, stat_fingerprint
 
 MIN_INTERVAL_SECONDS = 20.0
@@ -262,9 +262,11 @@ def log_outcome(project_id: str, request_id: str, environment: str, result: dict
         _logged[log_key] = now
     from .drive.gateway import mask_secrets
 
-    logger.warning("Folder %s %s: project=%s request=%s environment=%s code=%s message=%s cause=%s",
+    issues = getattr(exc, "issues", None) if exc is not None else None
+    detail = f" issues={mask_secrets(folder_discovery_scan.issue_summary(issues))[:400]}" if issues else ""
+    logger.warning("Folder %s %s: project=%s request=%s environment=%s code=%s message=%s cause=%s%s",
                    source, status, project_id, request_id, str(environment).upper(), code,
-                   mask_secrets(str(result.get("message") or ""))[:200], _cause(exc))
+                   mask_secrets(str(result.get("message") or ""))[:200], _cause(exc), detail)
     return True
 
 

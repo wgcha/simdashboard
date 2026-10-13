@@ -26,7 +26,14 @@ def _windows_installation_roots() -> list[Path]:
 def _installed_windows_tools(name: str) -> list[Path]:
     candidates = []
     for root in _windows_installation_roots():
-        candidates.extend(root.glob(f"*/bin/{name}.exe"))
+        try:
+            if not root.is_dir():
+                continue
+            candidates.extend(root.glob(f"*/bin/{name}.exe"))
+        except OSError:
+            # Card readers, empty optical drives and disconnected network letters raise
+            # (e.g. "write-protected media"); they cannot hold the PostgreSQL install.
+            continue
     # Compare version components numerically (18 sorts after 9.6).
     return sorted(candidates, key=lambda path: tuple(int(part) for part in re.findall(r"\d+", path.parent.parent.name)), reverse=True)
 

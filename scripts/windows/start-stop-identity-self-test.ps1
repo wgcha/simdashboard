@@ -56,4 +56,11 @@ $script:fakeIdentity = [pscustomobject]@{ CommandLine = $script:fakeCommand; Exe
 Assert-Guard (Test-CurrentServerRecord $record 8000 backend $script:fakeExecutable) $false 'start foreign executable'
 Assert-Guard (Test-RecordedServerIdentity $record 8000 backend) $false 'stop foreign workspace'
 
+# Backend logs must be UTF-8 so Korean log text stays readable (issue #51).
+$startText = Get-Content -Raw -LiteralPath $startPath
+foreach ($needle in @("`$env:PYTHONUTF8 = '1'", "`$env:PYTHONIOENCODING = 'utf-8'", '$previousPythonUtf8', '$previousPythonIoEncoding')) {
+    if ($startText.IndexOf($needle, [StringComparison]::Ordinal) -lt 0) { throw "start.ps1 backend UTF-8 log contract is missing: $needle" }
+}
+if ($startText.IndexOf("`$env:PYTHONUTF8 = '1'", [StringComparison]::Ordinal) -gt $startText.IndexOf("'app.main:app'", [StringComparison]::Ordinal)) { throw 'start.ps1 must set the UTF-8 log environment before starting the backend.' }
+
 Write-Host 'Windows start/stop process identity self-test passed.' -ForegroundColor Green

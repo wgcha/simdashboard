@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 import time
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -21,6 +24,69 @@ MAX_FOLDERS = 5000
 MAX_ENTRIES = 50000
 MAX_DEPTH = 64
 MAX_SECONDS = 15
+
+# SCX drive mode (issue #51): every folder is one remote ``list_dir`` round trip, so the local
+# 15 s bound made request scans INCOMPLETE on a real drive. The drive bounds are configurable.
+DRIVE_MAX_SECONDS_ENV = "SIMDASH_DRIVE_SCAN_MAX_SECONDS"
+DRIVE_MAX_ENTRIES_ENV = "SIMDASH_DRIVE_SCAN_MAX_ENTRIES"
+DRIVE_MAX_FOLDERS_ENV = "SIMDASH_DRIVE_SCAN_MAX_FOLDERS"
+DRIVE_DEFAULT_MAX_SECONDS = 180
+DRIVE_DEFAULT_MAX_ENTRIES = 200_000
+DRIVE_DEFAULT_MAX_FOLDERS = 20_000
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ScanLimits:
+    max_seconds: float
+    max_entries: int
+    max_folders: int
+
+
+def _env_bound(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %s", name, raw, default)
+        return default
+    if not minimum <= value <= maximum:
+        logger.warning("%s=%s is outside %s..%s; using %s", name, value, minimum, maximum, default)
+        return default
+    return value
+
+
+def drive_limits() -> ScanLimits:
+    """SCX drive scan bounds (``SIMDASH_DRIVE_SCAN_MAX_*``; an invalid value falls back to the default)."""
+    return ScanLimits(
+        max_seconds=_env_bound(DRIVE_MAX_SECONDS_ENV, DRIVE_DEFAULT_MAX_SECONDS, 15, 3600),
+        max_entries=_env_bound(DRIVE_MAX_ENTRIES_ENV, DRIVE_DEFAULT_MAX_ENTRIES, 1000, 2_000_000),
+        max_folders=_env_bound(DRIVE_MAX_FOLDERS_ENV, DRIVE_DEFAULT_MAX_FOLDERS, 100, 200_000),
+    )
+
+
+def limits_for(fs) -> ScanLimits:
+    """Scan bounds for one storage provider: local constants, larger configurable ones on the drive."""
+    from .storage.drive import DriveStorageProvider
+
+    if isinstance(fs, DriveStorageProvider):
+        return drive_limits()
+    return ScanLimits(max_seconds=MAX_SECONDS, max_entries=MAX_ENTRIES, max_folders=MAX_FOLDERS)
+
+
+def limits_for_root(root) -> ScanLimits:
+    return limits_for(provider_for_root(root))
+
+
+def issue_summary(issues, limit: int = 3) -> str:
+    """``CODE:path`` of the first scan issues (for logs), e.g. ``SCAN_LIMIT:P/R/Working``."""
+    items = [f"{item.get('code')}:{item.get('relative_path') or '.'}" for item in list(issues or [])[:limit]
+             if isinstance(item, dict)]
+    more = len(issues or []) - len(items)
+    return ", ".join(items) + (f" (+{more})" if more > 0 else "")
 
 
 def normal(relative: str) -> str:
@@ -48,11 +114,12 @@ def target(root: Path, relative: str) -> str:
 
 def browse(root: Path, relative: str) -> list[dict[str, Any]]:
     fs = provider_for_root(root)
+    limits = limits_for(fs)
     base = target(root, relative)
     entries = []
     started = time.monotonic()
     for index, entry in enumerate(fs.list(base)):
-        if index >= MAX_ENTRIES or time.monotonic() - started > MAX_SECONDS:
+        if index >= limits.max_entries or time.monotonic() - started > limits.max_seconds:
             raise ValueError("폴더 선택 목록의 조사 한도를 초과했습니다. 더 작은 시작 위치를 지정하세요.")
         if _is_upload_staging(entry):
             continue
@@ -66,6 +133,7 @@ def browse(root: Path, relative: str) -> list[dict[str, Any]]:
 
 def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | None], bool] | None = None) -> dict[str, Any]:
     fs = provider_for_root(root)
+    limits = limits_for(fs)
     nodes, issues = [], []
     file_state: list[dict[str, Any]] = []
     files = total_entries = 0
@@ -74,7 +142,7 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
     halted = False
     while stack and not halted:
         path, rel, depth, parent = stack.pop()
-        if len(nodes) >= MAX_FOLDERS or time.monotonic() - started > MAX_SECONDS:
+        if len(nodes) >= limits.max_folders or time.monotonic() - started > limits.max_seconds:
             issues.append({"relative_path": rel, "code": "SCAN_LIMIT", "message": "폴더 수 또는 조사 시간 한도를 초과했습니다."})
             break
         children, extensions = [], set()
@@ -90,7 +158,7 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
                     if _is_upload_staging(entry):
                         continue
                     total_entries += 1
-                    if total_entries > MAX_ENTRIES or time.monotonic() - started > MAX_SECONDS:
+                    if total_entries > limits.max_entries or time.monotonic() - started > limits.max_seconds:
                         issues.append({"relative_path": rel, "code": "ENTRY_LIMIT", "message": "전체 항목 수 또는 조사 시간 한도를 초과했습니다."})
                         halted = True
                         break

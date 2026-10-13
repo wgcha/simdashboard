@@ -28,9 +28,12 @@ _ROLE_KINDS = {
 
 
 class FolderSchemaError(ValueError):
-    def __init__(self, code: str, message: str, status_code: int = 409) -> None:
+    def __init__(self, code: str, message: str, status_code: int = 409, *,
+                 issues: list[dict[str, Any]] | None = None) -> None:
         self.code = code
         self.status_code = status_code
+        # Scan issues (code + relative_path) behind an incomplete scan, for logs (issue #51).
+        self.issues = list(issues or [])
         super().__init__(message)
 from .folder_schema_locations import resolve_request_locations as resolve_request_locations  # re-exported
 from .storage import provider_for_root
@@ -82,6 +85,8 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
     total_bytes = 0
     started = time.monotonic()
     fs = provider_for_root(root) if root is not None else None
+    max_seconds = (folder_discovery_scan.limits_for(fs).max_seconds if fs is not None
+                   else folder_discovery_scan.MAX_SECONDS)
     content_token = getattr(fs, "content_token", None) if fs is not None else None
     for item in file_state:
         relative_path = str(item.get("relative_path") or "")
@@ -122,7 +127,7 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
                         total_bytes += len(chunk)
                         if total_bytes > 256 * 1024 * 1024:
                             raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_TOTAL_LIMIT", "내용 fingerprint 전체 크기 한도를 초과했습니다.", 413)
-                        if (time.monotonic() - started > folder_discovery_scan.MAX_SECONDS
+                        if (time.monotonic() - started > max_seconds
                                 or (deadline is not None and time.monotonic() > deadline)):
                             raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_TIME_LIMIT", "내용 fingerprint 시간 한도를 초과했습니다.", 413)
                 after = fs.stat(file_path, follow_links=True, missing_ok=False)
@@ -137,7 +142,7 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
             except OSError as exc:
                 raise FolderSchemaError("FOLDER_SCHEMA_FILE_UNAVAILABLE", "내용 fingerprint 대상 파일을 읽을 수 없습니다.", 422) from exc
         content.append((_fold(relative_path), size, modified_ns, digest))
-    if (time.monotonic() - started > folder_discovery_scan.MAX_SECONDS
+    if (time.monotonic() - started > max_seconds
             or (deadline is not None and time.monotonic() > deadline)):
         raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_TIME_LIMIT", "내용 fingerprint 시간 한도를 초과했습니다.", 413)
     content.sort()
@@ -671,16 +676,25 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
                                 "최근 폴더 조사 범위가 선택한 의뢰와 겹치지 않습니다. 의뢰 폴더 또는 그 하위 폴더를 조사하세요.")
     if selected_scan.get("root_key") != root_key or selected_scan.get("environment") != environment:
         raise FolderSchemaError("FOLDER_SCHEMA_SCAN_INVALID", "선택한 폴더 조사의 저장소 또는 환경이 일치하지 않습니다.")
-    if str(selected_scan.get("status")) != "COMPLETE":
-        raise FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "최근 폴더 조사가 완료되지 않았습니다. 의뢰 폴더를 다시 조사하세요.")
+    # Issue #51: a stored scan that ended INCOMPLETE (a manual re-scan over the time limit on a slow
+    # drive) used to block every later refresh of the request forever. It is never an approval
+    # boundary (registration and role evidence only use COMPLETE scans), so it only supplies the
+    # environment profile here; the decision rests on the current request-scoped scan below.
+    stored_status = str(selected_scan.get("status"))
     profile, rules = _profile_for_scan(selected_scan, environment)
 
+    # Re-scan only the request folder when the stored scan started above it (a registration scan
+    # of the whole project): sibling requests are not part of this schema and, on a remote drive,
+    # made the re-scan slow enough to end INCOMPLETE. Roles are path-based, so the request
+    # subtree is interpreted the same way.
+    current_path = request_path if _is_ancestor(scan_path, request_path) else scan_path
     try:
-        current_scan = folder_discovery_scan.scan(root, scan_path)
+        current_scan = folder_discovery_scan.scan(root, current_path)
     except (OSError, ValueError, spdm_storage.SpdmStorageError) as exc:
         raise FolderSchemaError("FOLDER_SCHEMA_SCAN_UNAVAILABLE", "현재 의뢰 폴더를 안전하게 조사할 수 없습니다.", 422) from exc
     if current_scan.get("status") != "COMPLETE":
-        raise FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 안전하게 모두 조사할 수 없습니다.", 422)
+        raise FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 안전하게 모두 조사할 수 없습니다.", 422,
+                                issues=current_scan.get("issues"))
     interpreted = folder_discovery_environment._interpret(
         current_scan["nodes"], root_key, environment, project_id, request_id, rules,
         seed_request_path=request_path,
@@ -734,7 +748,7 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
         "profile": profile,
         "scan": {"id": str(selected_scan["id"]), "relative_path": scan_path,
                  "profile_id": profile["id"], "profile_revision": profile["revision"],
-                 "status": str(selected_scan["status"])},
+                 "status": "COMPLETE", "stored_status": stored_status},
         "nodes": scoped_nodes,
         "confirmed_roles": confirmed_roles,
         "issues": current_scan.get("issues", []),

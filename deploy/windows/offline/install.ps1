@@ -256,7 +256,8 @@ function Install-WinSwService([string]$WinSw, [string]$Name, [string]$Executable
         }
     }
     elseif (-not $old) { Copy-Item -LiteralPath $WinSw -Destination $exe }
-    $pythonPathLine = if ($Name -eq 'SimulationWorkbenchApi') { '<env name="PYTHONPATH" value="' + [Security.SecurityElement]::Escape($WorkingDirectory) + '" />' } else { '' }
+    # Backend logs are UTF-8 (read them with Get-Content -Encoding UTF8), never the console code page.
+    $pythonPathLine = if ($Name -eq 'SimulationWorkbenchApi') { '<env name="PYTHONPATH" value="' + [Security.SecurityElement]::Escape($WorkingDirectory) + '" /><env name="PYTHONUTF8" value="1" /><env name="PYTHONIOENCODING" value="utf-8" />' } else { '' }
     $dependencyLines = if ($Name -eq 'SimulationWorkbenchApi' -and $pgMode -eq 'bundled') { '<depend>SimulationWorkbenchPostgreSQL</depend>' }
                        elseif ($Name -eq 'SimulationWorkbenchProxy') { '<depend>SimulationWorkbenchApi</depend>' }
                        else { '' }

@@ -949,6 +949,54 @@ def _prefetch_tree(session: DriveReadSession, rel: str) -> None:
                     queue.append((child, depth + 1))
 
 
+def prefetch_subtree(session: DriveReadSession, rel: str, *, max_listings: int, max_seconds: float) -> dict[str, Any]:
+    """List every folder below ``rel`` into the session up front (no DB connection held).
+
+    Issue #51: a folder scan inside a read session otherwise fetches its tree miss by miss
+    (``LIST_PREFETCH_DEPTH`` levels per round, ``MAX_ROUNDS`` rounds) and a larger request
+    folder ran out of rounds, which the scan recorded as an unavailable folder (INCOMPLETE).
+    Bounded by the drive scan limits; a folder left unlisted is still fetched by a later miss.
+    A listing error is kept in the session so the scan reports it exactly as a live read would.
+    """
+    from ..storage.provider import UPLOAD_STAGING_DIR
+
+    if connection_held():
+        raise RuntimeError("drive prefetch must run without an open database connection")
+    started = time.monotonic()
+    staging = UPLOAD_STAGING_DIR.casefold()
+    parent, _ = _split(rel)
+    if parent is not None and parent not in session.listings and rel not in session.stats:
+        try:                                     # the scan first checks that ``rel`` is a folder
+            session.stats[rel] = _live_stat(session, session.spdm_root, rel)
+        except SpdmStorageError as error:
+            session.errors[("stat", rel)] = error
+    stack = [rel]
+    listed = 0
+    complete = True
+    while stack:
+        if listed >= max_listings or time.monotonic() - started > max_seconds:
+            complete = False
+            break
+        current = stack.pop()
+        if current in session.listings:
+            entries = session.listings[current]
+        elif ("list", current) in session.errors:
+            continue
+        else:
+            try:
+                entries = _live_list(session, session.spdm_root, current)
+            except SpdmStorageError as error:
+                session.errors[("list", current)] = error
+                continue
+            session.listings[current] = entries
+            listed += 1
+        for entry in entries:
+            name = str(entry.name)
+            if getattr(entry, "kind", None) == "dir" and name.casefold() != staging:
+                stack.append(f"{current}/{name}" if current else name)
+    return {"listed": listed, "complete": complete, "seconds": round(time.monotonic() - started, 3)}
+
+
 def effective_version(rel: str, entry: Any) -> tuple[Version, bool]:
     """(version the dashboard uses, masked).  Masked = registered version differs from the live one."""
     live = version_of(entry)

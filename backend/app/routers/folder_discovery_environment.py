@@ -51,8 +51,22 @@ def scoped(request, conn, request_id):
 @router.get("")
 def list_profiles(request: Request):
     with connect() as conn: admin(request, conn); return service.profiles(conn)
+def _prefetch_scan(session, payload: Scan, request: Request) -> None:
+    """scx mode: list the scanned folder's tree before the scan runs (issue #51, bounded by the drive scan limits)."""
+    from ..services import folder_discovery_scan, spdm_storage
+
+    with connect() as conn:                      # authorise before any drive listing (the body checks again)
+        admin(request, conn); scoped(request, conn, payload.request_id)
+    try:
+        relative = legacy.normal(payload.relative_path)
+    except (ValueError, spdm_storage.SpdmStorageError):
+        return                                   # the endpoint reports the invalid path
+    limits = folder_discovery_scan.drive_limits()
+    drive_reads.prefetch_subtree(session, relative, max_listings=limits.max_folders, max_seconds=limits.max_seconds)
+
+
 @router.post("/scan")
-@drive_reads.read_session()
+@drive_reads.read_session(prepare=_prefetch_scan)
 def scan(payload: Scan, request: Request):
     with connect() as conn:
         admin(request, conn); scoped(request, conn, payload.request_id)

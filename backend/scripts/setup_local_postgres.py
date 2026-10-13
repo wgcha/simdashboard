@@ -90,7 +90,9 @@ def restrict_private_file(path: Path) -> None:
             str(path),
             "/inheritance:r",
             "/grant:r",
-            f"{principal}:(R,W)",
+            # DELETE is required so the temporary file can be atomically renamed over the
+            # target (os.replace) when the parent folder grants Modify but not Full control.
+            f"{principal}:(R,W,D)",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
