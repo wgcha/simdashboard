@@ -83,7 +83,7 @@ def test_auth_status_reports_capabilities_and_the_http_block(relogin_drive, pass
         admin = _login(client, "drive-admin")
         body = client.get("/api/admin/drive/auth", headers=admin).json()
         assert body["adapter_supported"] is True
-        assert body["capabilities"] == {"refresh": True, "password": True, "mfa": False}
+        assert body["capabilities"] == {"refresh": True, "password": True, "mfa": False, "device": True}
         assert body["password_login"] == "https_only"
         assert body["password_login_blocked"] == "HTTP" and body["password_login_allowed"] is False
         assert body["attempts_left"] == 3 and body["max_attempts"] == 3

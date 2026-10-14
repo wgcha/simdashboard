@@ -36,3 +36,17 @@
 .drive-relogin-form { display:grid; gap:var(--space-2); margin-top:var(--space-2); padding-top:var(--space-2); border-top:1px solid var(--color-border); }
 .drive-relogin-form h4 { display:flex; align-items:center; gap:var(--space-2); margin:0; font-size:14px; }
 .drive-relogin-form h4 svg { width:16px; height:16px; }
+
+/* Activation-code login (2026-10-14, relogin spec §7) */
+.drive-device-login { display:grid; gap:var(--space-2); padding-top:var(--space-2); border-top:1px solid var(--color-border); }
+.drive-device-login h4 { display:flex; align-items:center; gap:var(--space-2); margin:0; font-size:15px; }
+.drive-device-login h4 svg { width:16px; height:16px; }
+.drive-device-steps { margin:0; padding-left:1.4em; display:grid; gap:var(--space-1); font-size:14px; }
+.drive-device-steps a { display:inline-flex; align-items:center; gap:4px; font-weight:600; }
+.drive-device-steps a svg { width:14px; height:14px; }
+.drive-device-address { display:block; margin-top:2px; color:var(--color-text-muted); font-size:12px; }
+.drive-device-code { display:flex; align-items:center; gap:var(--space-3); flex-wrap:wrap; }
+.drive-device-code input { width:12ch; padding:var(--space-2) var(--space-3); font:600 24px/1.2 var(--font-mono, ui-monospace, monospace);
+  letter-spacing:.12em; text-align:center; border:1px solid var(--color-border-strong, var(--color-border)); border-radius:var(--radius-sm);
+  background:var(--color-surface); color:var(--color-text); }
+.drive-device-code span { color:var(--color-text-muted); font-size:13px; }

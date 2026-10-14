@@ -46,6 +46,7 @@ from ..services.drive import auth as drive_auth
 from ..services.drive import gateway as drive_gateway
 from ..services.drive import reads as drive_reads
 from ..services.drive import sources as drive_sources
+from ..services.drive import device_login as drive_device
 from ..services.drive import upload_queue
 from ..services.drive import writes as drive_writes
 from ..services.drive.check import CheckAlreadyRunning, run_drive_check
@@ -129,6 +130,27 @@ class DriveAuthCapabilities(BaseModel):
     refresh: bool = False
     password: bool = False
     mfa: bool = False
+    device: bool = False
+
+
+class DriveDeviceLogin(BaseModel):
+    """Activation-code login (2026-10-14, spec §7).  Code and address only while it waits for approval."""
+
+    device_id: str
+    status: str                       # PENDING | SUCCEEDED | FAILED | EXPIRED | CANCELLED
+    user_code: str | None = None
+    verification_uri: str | None = None
+    verification_uri_complete: str | None = None
+    started_at: str
+    expires_at: str
+    interval: int
+    code: str | None = None
+    message: str | None = None
+    account: str | None = None
+    queue_resumed: int = 0
+    finished_at: str | None = None
+    current: str | None = None        # DRIVE_DEVICE_ACCOUNT_MISMATCH: the connected (shared) account
+    received: str | None = None       # … and the account that approved the code
 
 
 class DriveAuthStatus(BaseModel):
@@ -151,6 +173,8 @@ class DriveAuthStatus(BaseModel):
     attempts_left: int = 0
     max_attempts: int = 0
     locked_until: str | None = None
+    device_login_allowed: bool = False
+    device_login: DriveDeviceLogin | None = None
 
 
 class DriveReconnectRequest(BaseModel):
@@ -949,7 +973,8 @@ def auth_status(request: Request) -> DriveAuthStatus:
         last_error_at=memory["last_error_at"] or health.get("last_error_at"),
         password_login=settings.password_login, password_login_allowed=blocked is None and supported and caps["password"],
         password_login_blocked=blocked, attempts_left=left, max_attempts=settings.login_max_attempts,
-        locked_until=_stamp(locked_until),
+        locked_until=_stamp(locked_until), device_login_allowed=supported and caps.get("device", False),
+        device_login=drive_device.current(),
     )
 
 
@@ -1124,3 +1149,87 @@ async def login(request: Request) -> DriveReloginResult:
     except HTTPException:
         raise _fail(400, "DRIVE_LOGIN_INVALID", "아이디(128자 이하)와 비밀번호(256자 이하)를 입력하세요.") from None
     return await run_in_threadpool(_login, request, raw)
+
+
+# --- activation-code login (device grant, 2026-10-14, spec §7) ----------------------------------------
+
+def _device_apply(request: Request) -> drive_device.Apply:
+    """Save an approved code like the other re-logins; the shared account is fixed (no change confirm)."""
+
+    def apply(result: drive_auth.AuthResult, gateway_store: Any) -> dict[str, Any]:
+        if not (result.bundle.account_hint or "").strip():
+            # Spec §7.3: the approver must be named, also for the very first connection.
+            if gateway_store is not None:
+                gateway_store.detach()
+            drive_gateway.reset_gateway()
+            raise drive_auth.DriveAuthError(
+                409, "DRIVE_DEVICE_ACCOUNT_MISMATCH",
+                "승인한 계정의 이름을 어댑터가 알려 주지 않아 저장하지 않았습니다(어댑터 확인 필요, 사양 §7.3).",
+                current=None, received=None)
+        try:
+            outcome = _apply_relogin(request, result, confirm=False, gateway_store=gateway_store)
+        except drive_auth.DriveAuthError as error:
+            if error.code != "DRIVE_ACCOUNT_CHANGE_CONFIRM":
+                raise
+            current, received = error.extra.get("current"), error.extra.get("received")
+            raise drive_auth.DriveAuthError(
+                409, "DRIVE_DEVICE_ACCOUNT_MISMATCH",
+                f"{received or '(계정 이름 없음)'} 계정으로 승인되어 저장하지 않았습니다. 드라이브는 공용 계정 "
+                f"{current}만 연결합니다. 인증 페이지를 연 브라우저가 다른 계정으로 로그인되어 있었을 수 있습니다. "
+                f"{current}로 로그인한 브라우저나 다른 기기(휴대폰 등)에서 다시 시도하세요.",
+                current=current, received=received) from None
+        return outcome.model_dump()
+
+    return apply
+
+
+def _device_audit(request: Request, action: str, status: int, result: str, received: str | None = None) -> None:
+    _relogin_audit(request, action, status, result=result, received=received)
+
+
+@admin_router.post("/auth/device/start", response_model=DriveDeviceLogin)
+def device_login_start(request: Request) -> DriveDeviceLogin:
+    """[코드로 로그인]: the adapter issues an activation code; a waiting one is reused."""
+    _require_admin(request)
+    _require_scx()
+    try:
+        view, created = drive_device.start(request.state.principal.user_id)
+    except drive_auth.DriveAuthError as error:
+        if error.code != "DRIVE_AUTH_BUSY":
+            drive_auth.record_failure(error.code)
+        _device_audit(request, "DRIVE_DEVICE_LOGIN_FAILED", error.status, error.code)
+        raise _auth_fail(error) from None
+    if created:
+        _device_audit(request, "DRIVE_DEVICE_LOGIN_STARTED", 200, "OK")
+    return DriveDeviceLogin(**view)
+
+
+@admin_router.post("/auth/device/{device_id}/poll", response_model=DriveDeviceLogin)
+def device_login_poll(device_id: str, request: Request) -> DriveDeviceLogin:
+    """One approval check when due (the screen calls it every ``interval`` seconds)."""
+    _require_admin(request)
+    _require_scx()
+    try:
+        view, finished = drive_device.poll(device_id[:64], _device_apply(request))
+    except drive_auth.DriveAuthError as error:
+        raise _auth_fail(error) from None
+    if finished == drive_device.SUCCEEDED:
+        _device_audit(request, "DRIVE_DEVICE_LOGIN_SUCCEEDED", 200, "OK", view.get("account"))
+    elif finished is not None:
+        if view.get("code") and view.get("code") != "DRIVE_AUTH_BUSY":
+            drive_auth.record_failure(str(view["code"]))
+        _device_audit(request, "DRIVE_DEVICE_LOGIN_FAILED", 409, str(view.get("code") or finished), view.get("received"))
+    return DriveDeviceLogin(**view)
+
+
+@admin_router.post("/auth/device/{device_id}/cancel", response_model=DriveDeviceLogin)
+def device_login_cancel(device_id: str, request: Request) -> DriveDeviceLogin:
+    _require_admin(request)
+    _require_scx()
+    try:
+        view, cancelled = drive_device.cancel(device_id[:64])
+    except drive_auth.DriveAuthError as error:
+        raise _auth_fail(error) from None
+    if cancelled:
+        _device_audit(request, "DRIVE_DEVICE_LOGIN_CANCELLED", 200, "CANCELLED")
+    return DriveDeviceLogin(**view)

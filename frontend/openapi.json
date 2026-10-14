@@ -7827,6 +7827,113 @@
         }
       }
     },
+    "/api/admin/drive/auth/device/start": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Device Login Start",
+        "description": "[코드로 로그인]: the adapter issues an activation code; a waiting one is reused.",
+        "operationId": "device_login_start_api_admin_drive_auth_device_start_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveDeviceLogin"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/auth/device/{device_id}/poll": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Device Login Poll",
+        "description": "One approval check when due (the screen calls it every ``interval`` seconds).",
+        "operationId": "device_login_poll_api_admin_drive_auth_device__device_id__poll_post",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveDeviceLogin"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/auth/device/{device_id}/cancel": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Device Login Cancel",
+        "operationId": "device_login_cancel_api_admin_drive_auth_device__device_id__cancel_post",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveDeviceLogin"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/drive/status": {
       "get": {
         "tags": [
@@ -17289,6 +17396,11 @@
             "type": "boolean",
             "title": "Mfa",
             "default": false
+          },
+          "device": {
+            "type": "boolean",
+            "title": "Device",
+            "default": false
           }
         },
         "type": "object",
@@ -17436,6 +17548,21 @@
               }
             ],
             "title": "Locked Until"
+          },
+          "device_login_allowed": {
+            "type": "boolean",
+            "title": "Device Login Allowed",
+            "default": false
+          },
+          "device_login": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriveDeviceLogin"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -17705,6 +17832,144 @@
           "test"
         ],
         "title": "DriveCredentialsSaved"
+      },
+      "DriveDeviceLogin": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "user_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Code"
+          },
+          "verification_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Uri"
+          },
+          "verification_uri_complete": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Uri Complete"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          },
+          "interval": {
+            "type": "integer",
+            "title": "Interval"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account"
+          },
+          "queue_resumed": {
+            "type": "integer",
+            "title": "Queue Resumed",
+            "default": 0
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "received": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Received"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "status",
+          "started_at",
+          "expires_at",
+          "interval"
+        ],
+        "title": "DriveDeviceLogin",
+        "description": "Activation-code login (2026-10-14, spec §7).  Code and address only while it waits for approval."
       },
       "DriveErrorInfo": {
         "properties": {

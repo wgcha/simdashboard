@@ -75,6 +75,8 @@ class ErrorCode(str, Enum):
     AUTH_METHOD_UNSUPPORTED = "AUTH_METHOD_UNSUPPORTED"
     AUTH_REFRESH_EXPIRED = "AUTH_REFRESH_EXPIRED"
     RATE_LIMITED = "RATE_LIMITED"
+    AUTH_DEVICE_EXPIRED = "AUTH_DEVICE_EXPIRED"
+    AUTH_DEVICE_DENIED = "AUTH_DEVICE_DENIED"
 
 
 RETRYABLE = {ErrorCode.LOCKED, ErrorCode.BUSY, ErrorCode.OVERLOADED, ErrorCode.TIMEOUT, ErrorCode.UNAVAILABLE}
@@ -187,7 +189,8 @@ class MemoryDrive:
     fail_path: dict[tuple[str, str], list[ErrorCode]] = field(default_factory=dict)
     lost_response: dict[str, ErrorCode] = field(default_factory=dict)
     # issue #50 re-login
-    auth_caps: dict[str, bool] = field(default_factory=lambda: {"refresh": True, "password": True, "mfa": False})
+    auth_caps: dict[str, bool] = field(default_factory=lambda: {"refresh": True, "password": True, "mfa": False,
+                                                                 "device": True})
     sso_accounts: dict[str, tuple[str, str]] = field(default_factory=dict)
     auth_fail_next: dict[str, ErrorCode] = field(default_factory=dict)
     refresh_expired: bool = False
@@ -196,6 +199,14 @@ class MemoryDrive:
     unknown_op: bool = False
     auth_calls: list[tuple[str, str]] = field(default_factory=list)
     call_delay_s: dict[str, float] = field(default_factory=dict)
+    # 2026-10-14 device-code login (spec §7): who approves, how many PENDING answers first, the outcome.
+    device_account: str | None = "spdm-shared"
+    device_pending_polls: int = 1
+    device_slow_down: bool = False
+    device_outcome: str = "OK"             # OK | DENIED | EXPIRED
+    device_start_result: dict[str, Any] | None = None
+    device_rotate_while_pending: bool = False   # the current session's token rotates during a PENDING poll
+    device_logins: dict[str, dict[str, Any]] = field(default_factory=dict)
     _ids: Any = field(default_factory=lambda: itertools.count(1))
     _clock: Any = field(default_factory=lambda: itertools.count(1))
 
@@ -529,9 +540,61 @@ class FakeReloginOps:
         return self._answer(bundle)
 
 
+class FakeDeviceLoginOps:
+    """Device-code login worker ops (spec §7.2): never opens a browser, never returns a device_code."""
+
+    drive: MemoryDrive
+
+    def device_login_start(self) -> dict[str, Any]:
+        self._auth_op("device_login_start")
+        login_id = f"login-{next(self.drive._ids)}"
+        self.drive.device_logins[login_id] = {"polls": 0, "cancelled": False}
+        if self.drive.device_start_result is not None:
+            return {"login_id": login_id, **self.drive.device_start_result}
+        return {"login_id": login_id, "user_code": "WDJB-MJHT",
+                "verification_uri": "https://sso.example.test/realms/hpc/device",
+                "verification_uri_complete": "https://sso.example.test/realms/hpc/device?user_code=WDJB-MJHT",
+                "expires_in": 600, "interval": 5}
+
+    def device_login_poll(self, login_id: str) -> Any:
+        self._auth_op("device_login_poll")
+        state = self.drive.device_logins.get(login_id)
+        if state is None or state["cancelled"]:
+            raise DriveError(ErrorCode.NOT_FOUND, "unknown device login")
+        state["polls"] += 1
+        if state["polls"] <= self.drive.device_pending_polls:
+            if self.drive.device_rotate_while_pending and self._bundle is not None:
+                current = self._bundle
+                self.drive.sessions += 1
+                self.token_store.save(TokenBundle(server_url=current.server_url,
+                                                  access_token=f"{current.access_token}-r{self.drive.sessions}",
+                                                  refresh_token=f"{current.refresh_token}-r{self.drive.sessions}",
+                                                  obtained_at=datetime.now(timezone.utc), account_hint=current.account_hint))
+            return {"status": "SLOW_DOWN" if self.drive.device_slow_down and state["polls"] == 1 else "PENDING"}
+        del self.drive.device_logins[login_id]
+        if self.drive.device_outcome == "DENIED":
+            raise DriveError(ErrorCode.AUTH_DEVICE_DENIED, "access_denied")
+        if self.drive.device_outcome == "EXPIRED":
+            raise DriveError(ErrorCode.AUTH_DEVICE_EXPIRED, "expired_token")
+        self.drive.sessions += 1
+        bundle = TokenBundle(server_url=self.config.adapter.server_url,
+                             access_token=f"eyJdevice.access-SECRET-{self.drive.sessions}",
+                             refresh_token=f"device-refresh-SECRET-{self.drive.sessions}",
+                             obtained_at=datetime.now(timezone.utc), account_hint=self.drive.device_account)
+        answer = self._answer(bundle)
+        return {"status": "OK", **answer} if isinstance(answer, dict) else answer
+
+    def device_login_cancel(self, login_id: str) -> dict[str, Any]:
+        self._auth_op("device_login_cancel")
+        state = self.drive.device_logins.get(login_id)
+        if state is not None:
+            state["cancelled"] = True
+        return {}
+
+
 def make_fake_adapter_module(drive: MemoryDrive, *, relogin: bool = True) -> types.ModuleType:
     module = types.ModuleType("scx_drive_adapter")
-    bases = (FakeReloginOps, FakeWorkerDriveGateway) if relogin else (FakeWorkerDriveGateway,)
+    bases = (FakeDeviceLoginOps, FakeReloginOps, FakeWorkerDriveGateway) if relogin else (FakeWorkerDriveGateway,)
     gateway_cls = type("WorkerDriveGateway", bases, {"drive": drive, "instances": []})
     for name, value in {
         "Priority": Priority, "ErrorCode": ErrorCode, "DriveError": DriveError, "DriveEntry": DriveEntry,

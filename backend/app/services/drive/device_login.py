@@ -44,6 +44,8 @@ _USER_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 -]{2,31}$")
 _PENDING_WORDS = {"PENDING", "AUTHORIZATION_PENDING", "WAITING"}
 _SLOW_WORDS = {"SLOW_DOWN"}
 _EXPIRED_CODES = {"AUTH_DEVICE_EXPIRED", "NOT_FOUND"}
+_DEVICE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+CANCEL_WAIT_SECONDS = 15.0
 
 
 @dataclass
@@ -180,7 +182,7 @@ def start(started_by: str) -> tuple[dict[str, Any], bool]:
         try:
             raw = drive_auth._method(gateway, "device_login_start")()
         except Exception as error:  # noqa: BLE001
-            raise drive_auth._adapter_failure(gateway, "device_login_start", error) from None
+            raise _device_failure(gateway, "device_login_start", error) from None
     finally:
         drive_auth.operation_lock.release()
     login_id, user_code = _field(raw, "login_id"), _field(raw, "user_code")
@@ -205,23 +207,44 @@ def start(started_by: str) -> tuple[dict[str, Any], bool]:
     return session.view(), True
 
 
+def _device_failure(gateway: Any, name: str, error: BaseException) -> DriveAuthError:
+    """A missing device op only means "no code login": the other re-login capabilities stay."""
+    if isinstance(error, drive_auth.AdapterUnsupported) or drive_auth._unsupported(error):
+        return DriveAuthError(409, "DRIVE_ADAPTER_UPDATE_REQUIRED",
+                              "설치된 드라이브 어댑터가 코드 로그인을 지원하지 않습니다. 어댑터 업데이트 필요 (이슈 #52).")
+    return drive_auth._adapter_failure(gateway, name, error)
+
+
 def _session_for(device_id: str) -> DeviceSession:
     session = _session
-    if session is None or not secrets.compare_digest(session.device_id, device_id):
+    if session is None or not _DEVICE_ID.match(device_id) \
+            or not secrets.compare_digest(session.device_id.encode(), device_id.encode()):
         raise DriveAuthError(404, "DRIVE_DEVICE_LOGIN_NOT_FOUND",
                              "진행 중인 코드 로그인이 없습니다(다른 관리자가 새로 시작했거나 끝났습니다). 다시 시작하세요.")
     return session
 
 
-def cancel(device_id: str) -> dict[str, Any]:
+def cancel(device_id: str) -> tuple[dict[str, Any], bool]:
+    """(view, cancelled now); a finished session is returned unchanged.
+
+    Waits briefly for an approval check in flight, so a cancel never races a login being saved."""
+    locked = drive_auth.operation_lock.acquire(timeout=CANCEL_WAIT_SECONDS)
+    try:
+        return _cancel(device_id)
+    finally:
+        if locked:
+            drive_auth.operation_lock.release()
+
+
+def _cancel(device_id: str) -> tuple[dict[str, Any], bool]:
     with _lock:
         session = _session_for(device_id)
         if session.status != PENDING:
-            return session.view()
+            return session.view(), False
         _finish_locked(session, CANCELLED, "DRIVE_DEVICE_LOGIN_CANCELLED", "코드 로그인을 취소했습니다.")
         view, login_id = session.view(), session.login_id
     _adapter_cancel(login_id)
-    return view
+    return view, True
 
 
 Apply = Callable[[drive_auth.AuthResult, Any], dict[str, Any]]
@@ -252,13 +275,22 @@ def poll(device_id: str, apply: Apply) -> tuple[dict[str, Any], str | None]:
         with _lock:
             return session.view(), None          # another re-login runs: try again next time
     try:
+        with _lock:
+            # Cancelled, replaced or expired while waiting for the lock: no adapter call.
+            if _session is not session or session.status != PENDING:
+                return session.view(), None
+        store: Any = None
+        answered = False
         try:
             gateway = drive_auth._current_gateway()
             store = drive_gateway.gateway_token_store()
             with drive_auth.account_switch():
                 raw, captured = _poll_adapter(gateway, store, login_id)
+                answered = True
                 state = str(_field(raw, "status") or "").strip().upper() if raw is not None else ""
-                if not _has_token(raw) and not captured and state in _PENDING_WORDS | _SLOW_WORDS:
+                # PENDING/SLOW_DOWN is authoritative: a bundle captured meanwhile is a rotation of the
+                # current session (already saved by the store), never this code's approval.
+                if not _has_token(raw) and state in _PENDING_WORDS | _SLOW_WORDS:
                     with _lock:
                         if state in _SLOW_WORDS:
                             session.interval = min(MAX_INTERVAL, session.interval + SLOW_DOWN_STEP)
@@ -267,12 +299,25 @@ def poll(device_id: str, apply: Apply) -> tuple[dict[str, Any], str | None]:
                 result = drive_auth._result_bundle(raw, captured, store)
                 outcome = apply(result, store)
         except DriveAuthError as error:
-            status = EXPIRED if error.code in _EXPIRED_CODES else FAILED
-            message = drive_auth.AUTH_ERRORS["AUTH_DEVICE_EXPIRED"][1] if error.code == "NOT_FOUND" else error.message
-            code = "AUTH_DEVICE_EXPIRED" if error.code == "NOT_FOUND" else error.code
+            # NOT_FOUND: the worker no longer knows this login (restarted) — the code is gone.
+            gone = error.code in _EXPIRED_CODES or error.extra.get("adapter_code") == "NOT_FOUND"
+            status = EXPIRED if gone else FAILED
+            code = "AUTH_DEVICE_EXPIRED" if gone else error.code
+            message = drive_auth.AUTH_ERRORS["AUTH_DEVICE_EXPIRED"][1] if gone else error.message
             with _lock:
                 if session.status == PENDING:
                     _finish_locked(session, status, code, message, **error.extra)
+                return session.view(), session.status
+        except Exception as error:  # noqa: BLE001 - e.g. a DB error during the account check
+            logger.error("SCX drive device login failed unexpectedly (%s)", type(error).__name__)
+            if answered:
+                # The worker may hold the approved but unchecked tokens: drop that session.
+                if store is not None:
+                    store.detach()
+                drive_gateway.reset_gateway()
+            with _lock:
+                if session.status == PENDING:
+                    _finish_locked(session, FAILED, "DRIVE_INTERNAL", "코드 로그인 처리 중 오류가 발생했습니다. 다시 시작하세요.")
                 return session.view(), session.status
     finally:
         drive_auth.operation_lock.release()
@@ -301,4 +346,4 @@ def _poll_adapter(gateway: Any, store: Any, login_id: str) -> tuple[Any, list[An
     except DriveAuthError:
         raise
     except Exception as error:  # noqa: BLE001 - only the code leaves this function
-        raise drive_auth._adapter_failure(gateway, "device_login_poll", error) from None
+        raise _device_failure(gateway, "device_login_poll", error) from None

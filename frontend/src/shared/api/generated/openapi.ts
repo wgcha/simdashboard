@@ -2777,6 +2777,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/drive/auth/device/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Device Login Start
+         * @description [코드로 로그인]: the adapter issues an activation code; a waiting one is reused.
+         */
+        post: operations["device_login_start_api_admin_drive_auth_device_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/auth/device/{device_id}/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Device Login Poll
+         * @description One approval check when due (the screen calls it every ``interval`` seconds).
+         */
+        post: operations["device_login_poll_api_admin_drive_auth_device__device_id__poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/auth/device/{device_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Device Login Cancel */
+        post: operations["device_login_cancel_api_admin_drive_auth_device__device_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drive/status": {
         parameters: {
             query?: never;
@@ -5653,6 +5710,11 @@ export interface components {
              * @default false
              */
             mfa: boolean;
+            /**
+             * Device
+             * @default false
+             */
+            device: boolean;
         };
         /**
          * DriveAuthStatus
@@ -5704,6 +5766,12 @@ export interface components {
             max_attempts: number;
             /** Locked Until */
             locked_until?: string | null;
+            /**
+             * Device Login Allowed
+             * @default false
+             */
+            device_login_allowed: boolean;
+            device_login?: components["schemas"]["DriveDeviceLogin"] | null;
         };
         /** DriveBatchError */
         DriveBatchError: {
@@ -5782,6 +5850,45 @@ export interface components {
             /** Obtained At */
             obtained_at: string;
             test: components["schemas"]["DriveTestResult"];
+        };
+        /**
+         * DriveDeviceLogin
+         * @description Activation-code login (2026-10-14, spec §7).  Code and address only while it waits for approval.
+         */
+        DriveDeviceLogin: {
+            /** Device Id */
+            device_id: string;
+            /** Status */
+            status: string;
+            /** User Code */
+            user_code?: string | null;
+            /** Verification Uri */
+            verification_uri?: string | null;
+            /** Verification Uri Complete */
+            verification_uri_complete?: string | null;
+            /** Started At */
+            started_at: string;
+            /** Expires At */
+            expires_at: string;
+            /** Interval */
+            interval: number;
+            /** Code */
+            code?: string | null;
+            /** Message */
+            message?: string | null;
+            /** Account */
+            account?: string | null;
+            /**
+             * Queue Resumed
+             * @default 0
+             */
+            queue_resumed: number;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Current */
+            current?: string | null;
+            /** Received */
+            received?: string | null;
         };
         /** DriveErrorInfo */
         DriveErrorInfo: {
@@ -14378,6 +14485,88 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriveReloginResult"];
+                };
+            };
+        };
+    };
+    device_login_start_api_admin_drive_auth_device_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveDeviceLogin"];
+                };
+            };
+        };
+    };
+    device_login_poll_api_admin_drive_auth_device__device_id__poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveDeviceLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    device_login_cancel_api_admin_drive_auth_device__device_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveDeviceLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

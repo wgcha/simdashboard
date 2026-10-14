@@ -125,6 +125,9 @@ def reset_state() -> None:
     global _status
     _status = _Status()
     limiter.reset()
+    from . import device_login   # the waiting activation code belonged to the stopped worker
+
+    device_login.reset()
 
 
 def forget_capabilities() -> None:
@@ -295,7 +298,7 @@ def _adapter_failure(gateway: Any, name: str, error: BaseException, redact: tupl
     detail = drive_gateway.safe_error_message(error)
     for value in redact:
         if value:
-            detail = detail.replace(value, "***")
+            detail = "***".join(detail.split(value))
     logger.warning("SCX drive %s failed: code=%s type=%s message=%s", name, adapter_code or "-",
                    type(error).__name__, detail)
     _record_error(code)

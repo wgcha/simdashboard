@@ -122,6 +122,9 @@ DRIVE_ERROR_MAP: dict[str, DriveErrorMapping] = {
     "AUTH_MFA_REQUIRED": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
     "AUTH_METHOD_UNSUPPORTED": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
     "RATE_LIMITED": DriveErrorMapping("DRIVE_BUSY", 503, True, 5),
+    # Device-code login (relogin spec §7): only device_login_poll raises them; the login ends there.
+    "AUTH_DEVICE_EXPIRED": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
+    "AUTH_DEVICE_DENIED": DriveErrorMapping("DRIVE_AUTH_REQUIRED", 503, False),
 }
 # Adapter codes that mean "credentials needed" (queue pauses, banner asks for re-login).
 AUTH_FAILURE_CODES = frozenset({"AUTH_REQUIRED", "AUTH_REFRESH_EXPIRED", "AUTH_INVALID_CREDENTIALS",

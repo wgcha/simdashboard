@@ -19,6 +19,7 @@ export type DriveQueueItem = components['schemas']['DriveQueueItem']
 export type DriveQueueBulkResult = components['schemas']['DriveQueueBulkResult']
 export type DriveAuthStatus = components['schemas']['DriveAuthStatus']
 export type DriveReloginResult = components['schemas']['DriveReloginResult']
+export type DriveDeviceLogin = components['schemas']['DriveDeviceLogin']
 
 /** Korean messages for drive error codes (integration 06 §2). */
 export const DRIVE_ERROR_MESSAGES: Record<string, string> = {
@@ -75,6 +76,12 @@ export const DRIVE_ERROR_MESSAGES: Record<string, string> = {
   DRIVE_ACCOUNT_CHANGE_CONFIRM: '연결 계정이 바뀝니다.',
   DRIVE_AUTH_BUSY: '다른 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.',
   DRIVE_CREDENTIALS_MISSING: '저장된 토큰이 없습니다. 계정으로 로그인하거나 토큰을 붙여 넣으세요.',
+  // Activation-code login (2026-10-14, relogin spec §7)
+  AUTH_DEVICE_EXPIRED: '활성화 코드가 만료되었습니다. 다시 시작하세요.',
+  AUTH_DEVICE_DENIED: '인증 페이지에서 승인을 거부했습니다.',
+  DRIVE_DEVICE_ACCOUNT_MISMATCH: '공용 계정이 아닌 계정으로 승인되어 저장하지 않았습니다.',
+  DRIVE_DEVICE_LOGIN_NOT_FOUND: '진행 중인 코드 로그인이 없습니다. 다시 시작하세요.',
+  DRIVE_DEVICE_LOGIN_CANCELLED: '코드 로그인을 취소했습니다.',
   NOT_REJECTED: '같은 이름 쓰기가 거부되지 않았습니다(덮어쓰기 금지 확인 필요).',
 }
 
@@ -147,6 +154,15 @@ export const driveApi = {
   login: async (username: string, password: string, confirmAccountChange = false) => unwrapGenerated(await apiClient.POST('/api/admin/drive/login', {
     body: { username, password, confirm_account_change: confirmAccountChange },
   })) as DriveReloginResult,
+  /** [코드로 로그인]: the adapter issues an activation code (a waiting one is reused). */
+  deviceLoginStart: async () => unwrapGenerated(await apiClient.POST('/api/admin/drive/auth/device/start')) as DriveDeviceLogin,
+  /** One approval check; the server asks the adapter only when ``interval`` has passed. */
+  deviceLoginPoll: async (deviceId: string) => unwrapGenerated(await apiClient.POST('/api/admin/drive/auth/device/{device_id}/poll', {
+    params: { path: { device_id: deviceId } },
+  })) as DriveDeviceLogin,
+  deviceLoginCancel: async (deviceId: string) => unwrapGenerated(await apiClient.POST('/api/admin/drive/auth/device/{device_id}/cancel', {
+    params: { path: { device_id: deviceId } },
+  })) as DriveDeviceLogin,
   deleteCredentials: async () => {
     const { response, error } = await apiClient.DELETE('/api/admin/drive/credentials')
     if (!response.ok) throw new ApiError(apiErrorMessage(error, `요청 실패 (${response.status})`), response.status, error)

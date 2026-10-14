@@ -1,6 +1,6 @@
 # SCX 드라이브 재연결 사양: 저장 토큰 재연결 · 계정 로그인 (대시보드 + 어댑터)
 
-- 상태: 대시보드 R1·R3 구현(2026-10-13, 가짜 어댑터로 시험). 어댑터 R2는 어댑터 팀 완료 보고. R4(회사 PC 실제 SSO 확인) 미실시. 운영 안내는 [SCX 드라이브 기능](../features/scx-drive.md) §4.1.
+- 상태: 대시보드 R1·R3 구현(2026-10-13, 가짜 어댑터로 시험). 어댑터 R2는 어댑터 팀 완료 보고. R4(회사 PC 실제 SSO 확인) 미실시. 2026-10-14: 실제 SSO가 비밀번호 로그인을 거부해 §7 코드 로그인 추가(대시보드 구현·가짜 어댑터 시험 완료, 어댑터 구현 대기). 운영 안내는 [SCX 드라이브 기능](../features/scx-drive.md) §4.1.
 - 배경: HPC 드라이브는 사내 SSO가 아닌 **HPC 내부의 독립 SSO**를 쓴다. 지금은 관리자 PC 브라우저에서 `scx_drive_adapter login`으로 토큰을 받아 붙여 넣는데, 브라우저에 다른 계정 로그인이 남아 있으면 **다른 계정 토큰이 발급**되고, 사내 정책상 시크릿 창·브라우저 프로필을 쓸 수 없다.
 - 목표: 연결 실패(`AUTH_REQUIRED` 등) 때 대시보드 화면에서 바로 복구한다.
   1. **저장 토큰으로 다시 연결**: 저장된 refresh 토큰으로 강제 갱신해 다시 붙는다(입력 없음).
@@ -156,3 +156,60 @@
 | 3. 대시보드 접속 | **HTTPS**. `SIMDASH_DRIVE_PASSWORD_LOGIN` 기본 `https_only` |
 | 4. 공용 계정 식별자 | **별도 설정 없음**. 사용자는 아이디·비밀번호만 입력한다. `SIMDASH_SCX_EXPECTED_ACCOUNT` 대신, 처음 로그인(또는 토큰 등록)에 성공한 계정을 "연결 계정"으로 기억해 아이디 칸에 미리 채우고, 다른 계정으로 바뀌면 저장 전에 "연결 계정이 ○○에서 △△로 바뀝니다. 계속할까요?"를 확인한다(확인 없으면 409 `DRIVE_ACCOUNT_CHANGE_CONFIRM`, 저장하지 않음). 붙여넣기 등록에도 같은 확인 |
 | 5. 권한 | **전역 관리자만** |
+
+## 7. 코드 로그인(device grant) 추가 (2026-10-14, 이슈 #52)
+
+- 배경: 실제 서버에서 `login --username`이 `AUTH_METHOD_UNSUPPORTED`(drive-desktop 클라이언트의 비밀번호 로그인 꺼짐). SDK(`siemens_scx 1.0.0`)는 device code 방식만 지원한다. → 대시보드에서 **활성화 코드로 공용 계정을 연결**한다.
+- 사용자 결정(2026-10-14): 연결 계정은 **공용 계정 하나로 고정**. 코드 로그인으로 다른 계정이 승인되면 저장하지 않는다(변경 확인 없음).
+
+### 7.1 흐름
+
+1. 관리자가 [코드로 로그인] → 대시보드가 `device_login_start()` 호출.
+2. 화면에 활성화 코드·인증 주소·남은 시간 표시. 관리자는 아무 브라우저(다른 PC·휴대폰 가능)에서 HPC SSO에 **공용 계정**으로 로그인하고 코드를 입력.
+3. 화면이 `interval`초마다 확인 → 대시보드가 `device_login_poll(login_id)` 1회 호출.
+4. 승인되면 어댑터가 워커 세션을 새 토큰으로 바꾸고 `tokens` 알림 → 대시보드가 계정을 확인해 저장, 대기열 재개.
+5. 취소·만료 → `device_login_cancel(login_id)`. 화면을 닫아도 취소하지 않고, 다시 열면 같은 코드로 이어 본다(만료까지).
+
+### 7.2 어댑터 메서드·워커 op
+
+| op | args | result |
+|---|---|---|
+| `auth_capabilities` | `{}` | `{refresh, password, mfa, device}` — `device: true` 추가. 서버가 비밀번호 로그인을 막으므로 `password: false` 권장 |
+| `device_login_start` | `{}` | `{login_id, user_code, verification_uri, verification_uri_complete?, expires_in, interval}` |
+| `device_login_poll` | `{"login_id"}` | 대기 `{"status": "PENDING"}` · 간격 늘림 `{"status": "SLOW_DOWN"}` · 성공 `{"status": "OK", "account_hint", "obtained_at", "expires_at"}` + `tokens` 알림 |
+| `device_login_cancel` | `{"login_id"}` | `{}` (없는 id도 오류 없이) |
+
+- `device_login_start`
+  - **브라우저를 열지 않는다**(서버 PC에서 열리면 쓸모가 없다). 코드와 주소만 돌려준다.
+  - `login_id`: 어댑터 내부 식별자(200자 이하). 대시보드 서버 밖(브라우저)으로 나가지 않는다.
+  - `user_code`: 영문·숫자·하이픈·공백 3~32자. `verification_uri(_complete)`: http(s) 주소(아니면 대시보드가 링크를 만들지 않고 코드만 표시, http면 암호화되지 않은 주소 경고).
+  - `expires_in`·`interval`: 초. 대시보드는 각각 30~1800(기본 600), 2~30(기본 5)으로 제한한다.
+- `device_login_poll`
+  - 호출 1번에 SSO 토큰 요청 **최대 1번**, 몇 초 안에 반환(어댑터 안에서 승인을 기다리지 않음).
+  - 성공 시 워커 세션을 새 토큰으로 교체하고 기존처럼 `tokens` 알림으로 토큰을 넘긴다. 결과에 토큰 원문을 넣지 않는다(`TokenBundle` 반환도 허용).
+  - 승인 전에는 기존 세션(기존 토큰)을 그대로 쓴다.
+- 오류 코드(contract §6 `ErrorCode`에 추가)
+
+| 코드 | 의미(OAuth 오류) | 대시보드 표시 |
+|---|---|---|
+| `AUTH_DEVICE_EXPIRED` | `expired_token` | "활성화 코드가 만료되었습니다. 다시 시작하세요." |
+| `AUTH_DEVICE_DENIED` | `access_denied` | "인증 페이지에서 승인을 거부했습니다." |
+| `NOT_FOUND` | 모르는·정리된 `login_id`(워커 재시작 등) | 만료로 처리 |
+| 기존 `UNAVAILABLE`·`TIMEOUT`·`RATE_LIMITED` 등 | SSO 연결 문제 | 기존과 같음 |
+
+### 7.3 규칙
+
+- `device_code`는 토큰을 받는 비밀값이다. 결과·로그·예외 메시지에 넣지 않는다. `user_code`도 로그에 남기지 않는 것을 권장한다.
+- `account_hint` **필수**: 승인된 사용자 이름(CLI `login`의 UserInfoAction 값). 공용 계정 고정이므로 연결 계정과 다르거나 비어 있으면 대시보드는 저장하지 않고 워커 세션을 다시 시작해 그 토큰을 버린다.
+- 대시보드는 한 번에 1건만 진행한다. 어댑터는 새 `start` 때 이전 대기 건을 정리해도 된다. 워커 종료 시 대기 건은 폐기(이후 `poll` → `NOT_FOUND`).
+- op가 없는 이전 어댑터는 지금처럼 "unknown op" 오류 → 대시보드는 "어댑터 업데이트 필요"와 토큰 붙여넣기만 표시.
+
+### 7.4 구현 참고(어댑터)
+
+SDK가 코드 발급과 대기를 나눠 쓰는 기능을 주지 않으면, SDK가 이미 가져온 OIDC 정보의 `device_authorization_endpoint`에 `client_id=drive-desktop`(SDK와 같은 scope, 같은 CA 번들)로 요청하고, `poll`은 token 주소에 `grant_type=urn:ietf:params:oauth:grant-type:device_code`로 1회 요청한다(RFC 8628). 받은 토큰은 기존 토큰 등록과 같은 경로로 세션에 넣는다.
+
+### 7.5 어댑터 시험(가짜 SSO)
+
+- 대기→성공, `slow_down`, 만료, 거부, 모르는 `login_id`, 취소.
+- 결과·로그에 `device_code`·토큰 원문 없음. 브라우저 열기(`webbrowser.open`) 호출 0회.
+- (선택) CLI `login --no-browser`: 코드·주소만 출력하고 확인을 반복 — 서버에서 1~4단계를 먼저 확인하는 용도.

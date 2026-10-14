@@ -93,3 +93,66 @@ test.describe('SCX 드라이브 다시 연결 (이슈 #50)', () => {
     await expect(page.locator('body')).not.toContainText(PASSWORD)
   })
 })
+
+// 2026-10-14 (relogin spec §7): the HPC SSO refuses passwords for the drive client, so the shared
+// account is connected with an activation code. All drive APIs are mocked.
+const DEVICE_AUTH = { ...AUTH, capabilities: { refresh: true, password: false, mfa: false, device: true },
+  password_login_allowed: false, device_login_allowed: true, device_login: null }
+
+async function mockDevice(page: Page, final: 'SUCCEEDED' | 'MISMATCH') {
+  const seen: Seen[] = []
+  let polls = 0
+  const pending = { device_id: 'dev-1', status: 'PENDING', user_code: 'WDJB-MJHT', verification_uri: 'https://sso.example.test/device',
+    verification_uri_complete: 'https://sso.example.test/device?user_code=WDJB-MJHT', started_at: '2026-10-14T09:00:00+00:00',
+    expires_at: new Date(Date.now() + 600_000).toISOString(), interval: 2, code: null, message: null, account: null,
+    queue_resumed: 0, finished_at: null, current: null, received: null }
+  await page.route('**/api/drive/status', (route) => route.fulfill({ json: { mode: 'scx', state: 'AUTH_REQUIRED', writes_enabled: true, writes_available: true, queue_paused: true, can_reconnect: true } }))
+  await page.route('**/api/admin/drive/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    seen.push({ method: request.method(), path, body: request.postData() })
+    if (path.endsWith('/status')) return route.fulfill({ json: ADMIN_STATUS })
+    if (path.endsWith('/auth')) return route.fulfill({ json: DEVICE_AUTH })
+    if (path.endsWith('/queue')) return route.fulfill({ json: { counts: {}, paused: true, worker_running: true, writes_enabled: true, items: [] } })
+    if (path.endsWith('/auth/device/start')) return route.fulfill({ json: pending })
+    if (path.endsWith('/auth/device/dev-1/poll')) {
+      polls += 1
+      if (polls < 2) return route.fulfill({ json: pending })
+      const done = final === 'SUCCEEDED'
+        ? { ...pending, status: 'SUCCEEDED', user_code: null, verification_uri: null, verification_uri_complete: null, account: 'spdm-shared', queue_resumed: 2 }
+        : { ...pending, status: 'FAILED', user_code: null, verification_uri: null, verification_uri_complete: null, code: 'DRIVE_DEVICE_ACCOUNT_MISMATCH',
+            message: 'someone-else 계정으로 승인되어 저장하지 않았습니다. 드라이브는 공용 계정 spdm-shared만 연결합니다.', current: 'spdm-shared', received: 'someone-else' }
+      return route.fulfill({ json: done })
+    }
+    return route.fulfill({ status: 404, json: { detail: 'unmocked' } })
+  })
+  return seen
+}
+
+test.describe('SCX 드라이브 코드 로그인 (이슈 #52)', () => {
+  test('비밀번호 칸 대신 활성화 코드와 인증 주소를 보여 주고 승인되면 연결된다', async ({ page }) => {
+    const seen = await mockDevice(page, 'SUCCEEDED')
+    const dialog = await openFromBanner(page)
+    await expect(dialog.getByTestId('drive-login-form')).toHaveCount(0)
+    const panel = dialog.getByTestId('drive-device-login')
+    await expect(panel).toContainText('spdm-shared')
+    await panel.getByTestId('drive-device-start').click()
+    await expect(panel.getByTestId('drive-device-code')).toHaveValue('WDJB-MJHT')
+    const link = panel.getByTestId('drive-device-link')
+    await expect(link).toHaveAttribute('href', 'https://sso.example.test/device?user_code=WDJB-MJHT')
+    await expect(link).toHaveAttribute('target', '_blank')
+    await expect(link).toHaveAttribute('rel', /noopener/)
+    await expect(dialog.getByTestId('drive-relogin-result')).toContainText('spdm-shared 계정으로 연결됨 · 대기열 2개 항목을 재개했습니다', { timeout: 15_000 })
+    await expect(panel.getByTestId('drive-device-code')).toHaveCount(0)
+    expect(seen.filter((item) => item.path.endsWith('/poll')).length).toBeGreaterThanOrEqual(2)
+  })
+
+  test('다른 계정으로 승인되면 저장하지 않았다고 알리고 다시 받을 수 있다', async ({ page }) => {
+    await mockDevice(page, 'MISMATCH')
+    const dialog = await openFromBanner(page)
+    const panel = dialog.getByTestId('drive-device-login')
+    await panel.getByTestId('drive-device-start').click()
+    await expect(panel.getByTestId('drive-device-error')).toContainText('공용 계정 spdm-shared만 연결합니다', { timeout: 15_000 })
+    await expect(panel.getByTestId('drive-device-start')).toHaveText(/코드 다시 받기/)
+  })
+})

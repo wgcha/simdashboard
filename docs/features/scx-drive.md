@@ -127,6 +127,27 @@
 | POST | `/api/admin/drive/login` | `{username(≤128), password(≤256), confirm_account_change?}` → 위와 같음. 오류: 401 `AUTH_INVALID_CREDENTIALS`, 409 `AUTH_ACCOUNT_LOCKED`·`AUTH_MFA_REQUIRED`·`AUTH_METHOD_UNSUPPORTED`·`DRIVE_ACCOUNT_CHANGE_CONFIRM`·`DRIVE_ADAPTER_UPDATE_REQUIRED`, 429 `RATE_LIMITED`·`DRIVE_LOGIN_LOCKED`, 403 `DRIVE_PASSWORD_LOGIN_DISABLED` |
 | PUT | `/api/admin/drive/credentials?confirm_account_change=true` | 다른 계정 토큰 붙여넣기 확인 |
 
+### 4.2 코드로 로그인 (2026-10-14, 이슈 #52)
+
+HPC SSO가 drive-desktop 클라이언트의 아이디·비밀번호 로그인을 막아(`AUTH_METHOD_UNSUPPORTED`) **활성화 코드(device grant)**로 공용 계정을 연결한다. 사양·어댑터 계약: [재연결 사양 §7](../plans/scx-drive-relogin-spec.md#7-코드-로그인device-grant-추가-2026-10-14-이슈-52). 어댑터가 `auth_capabilities.device=true`와 `device_login_start/poll/cancel`을 제공해야 보인다(없으면 기존 화면 그대로).
+
+1. **드라이브 관리 → 다시 연결 → [코드로 로그인]** (배너 [다시 연결]로도 열림). 어댑터가 비밀번호를 지원하지 않으면 비밀번호 칸 대신 이 구역만 보인다.
+2. 화면의 **[인증 페이지 열기]**를 아무 브라우저에서 열고(다른 PC·휴대폰 가능) **공용 계정**으로 HPC SSO에 로그인한 뒤 화면의 코드를 입력한다.
+3. 화면이 `interval`초(보통 5초)마다 확인하고, 승인되면 "○○ 계정으로 연결됨"과 대기열 재개를 보여 준다. 남은 시간이 지나면 만료 — [코드 다시 받기].
+
+- **공용 계정 고정**(사용자 결정 2026-10-14): 연결 계정과 다른(또는 이름 없는) 계정으로 승인되면 409 `DRIVE_DEVICE_ACCOUNT_MISMATCH`로 저장하지 않고 워커 세션을 버린다(변경 확인 없음). 이 PC 브라우저가 개인 계정으로 SSO에 로그인되어 있으면 이렇게 되므로, 그때는 휴대폰 등 다른 기기에서 주소를 연다. 연결 계정이 아직 없으면 처음 승인한 계정이 연결 계정이 된다. 공용 계정 자체를 바꾸려면 토큰 붙여넣기의 변경 확인을 쓴다.
+- HTTP 접속에서도 쓸 수 있다(대시보드에 비밀번호가 지나가지 않음). 코드는 전역 관리자 화면에만 보이고 로그·감사에 남기지 않는다. 어댑터 내부 `login_id`는 브라우저로 보내지 않는다.
+- 한 번에 1건(대시보드 전체). 진행 중에 다시 시작하면 같은 코드를 보여 주고, 다른 관리자도 같은 진행을 이어 본다. 대시보드 재시작·드라이브 중지 때 진행 중 코드는 버려진다.
+- 감사: `DRIVE_DEVICE_LOGIN_STARTED`·`SUCCEEDED`·`FAILED`(결과 코드·받은 계정)·`CANCELLED`.
+
+| 메서드 | 경로 | 내용 |
+|---|---|---|
+| POST | `/api/admin/drive/auth/device/start` | 코드 발급(진행 중이면 그것을 반환) → `{device_id, status, user_code, verification_uri(_complete), expires_at, interval, …}` |
+| POST | `/api/admin/drive/auth/device/{device_id}/poll` | `interval`이 지났을 때만 어댑터에 1회 확인. `status`: `PENDING`/`SUCCEEDED`/`FAILED`/`EXPIRED`/`CANCELLED`, 실패 시 `code`·`message`(불일치면 `current`·`received`) |
+| POST | `/api/admin/drive/auth/device/{device_id}/cancel` | 취소(어댑터에도 취소 전달) |
+
+`GET /api/admin/drive/auth`에 `capabilities.device`, `device_login_allowed`, 진행 중·최근(10분) `device_login`이 추가된다.
+
 ## 5. 드라이브 점검 (결정 D7)
 
 **드라이브 관리 → 드라이브 점검**에 SPDM 루트 기준 시험 폴더(예 `_simdash_test`)를 넣고 **점검 실행**. 한 번에 하나만 실행된다(409 `DRIVE_CHECK_RUNNING`).

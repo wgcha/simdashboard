@@ -3,8 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '../../shared/components/Button'
 import {
   driveApi, driveCodeMessage, driveErrorDetail, driveErrorText,
-  type DriveAuthStatus, type DriveReloginResult,
+  type DriveAuthStatus, type DriveDeviceLogin, type DriveReloginResult,
 } from '../../shared/api/drive'
+import { DriveDeviceLoginPanel } from './DriveDeviceLogin'
 
 /**
  * Re-login inside 드라이브 관리 (issue #50, docs/plans/scx-drive-relogin-spec.md §3.4):
@@ -70,6 +71,14 @@ export function DriveReloginSection({ busy, run, onChanged }: {
     onChanged()
     await load()
   }
+  const deviceFinished = useCallback((login: DriveDeviceLogin) => {
+    if (login.status === 'SUCCEEDED') {
+      const queue = login.queue_resumed ? ` · 대기열 ${login.queue_resumed}개 항목을 재개했습니다` : ''
+      setResult(`${login.account ?? '(계정 이름 없음)'} 계정으로 연결됨${queue}.`); setFailure('')
+      onChanged()
+    }
+    void load()
+  }, [load, onChanged])
   const fail = (reason: unknown, fallback: string) => {
     const detail = driveErrorDetail(reason)
     setResult('')
@@ -119,7 +128,10 @@ export function DriveReloginSection({ busy, run, onChanged }: {
   const blocked = blockedText(status)
   const canRefresh = status.adapter_supported && status.capabilities.refresh && status.credentials_present
   const loginAllowed = status.password_login_allowed && status.attempts_left > 0
-  const loginVisible = showLogin || !canRefresh || Boolean(status.last_error_code)
+  // The HPC SSO refuses passwords for the drive client (issue #52): code login replaces the form.
+  const deviceAllowed = Boolean(status.device_login_allowed)
+  const passwordFormUsable = status.capabilities.password || !deviceAllowed
+  const loginVisible = passwordFormUsable && (showLogin || !canRefresh || Boolean(status.last_error_code))
   return <section className="drive-admin-section" aria-labelledby="drive-relogin-title" data-testid="drive-relogin">
     <h3 id="drive-relogin-title"><RotateCcw aria-hidden="true" /> 다시 연결</h3>
     <dl className="drive-admin-facts">
@@ -133,8 +145,10 @@ export function DriveReloginSection({ busy, run, onChanged }: {
       <Button variant="primary" disabled={Boolean(busy) || !canRefresh} onClick={reconnect} data-testid="drive-reconnect">
         <RotateCcw aria-hidden="true" /> {busy === '다시 연결' ? '연결 중…' : '저장된 토큰으로 다시 연결'}
       </Button>
-      {!loginVisible ? <Button variant="ghost" disabled={Boolean(busy)} onClick={() => setShowLogin(true)}>계정으로 로그인</Button> : null}
+      {passwordFormUsable && !loginVisible ? <Button variant="ghost" disabled={Boolean(busy)} onClick={() => setShowLogin(true)}>계정으로 로그인</Button> : null}
     </div>
+    {deviceAllowed ? <DriveDeviceLoginPanel connectedAccount={status.connected_account} initial={status.device_login}
+      disabled={Boolean(busy)} onFinished={deviceFinished} /> : null}
     {!status.credentials_present ? <small>저장된 토큰이 없어 계정으로 로그인하거나 토큰을 붙여 넣어야 합니다.</small> : null}
     {loginVisible ? <form className="drive-relogin-form" data-testid="drive-login-form" autoComplete="off"
       onSubmit={(event) => { event.preventDefault(); login() }}>
