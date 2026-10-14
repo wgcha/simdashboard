@@ -1,7 +1,7 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loginWorkspace } from './workspace-test-helpers'
+import { expectLoadCase, loginWorkspace } from './workspace-test-helpers'
 
 async function fixture(page: Page, info: TestInfo, configured: boolean) {
   const suffix = `${Date.now()}-${info.workerIndex}`
@@ -93,19 +93,18 @@ test('confirmed folders process results without reentering paths and distinguish
   expect(labels.filter((label) => label.includes('001') && label.includes('동일 하중'))).toHaveLength(2)
   expect(new Set(labels).size).toBe(labels.length)
   await expect(page.getByLabel('의뢰 선택', { exact: true }).locator('option:checked')).toContainText('R002')
-  // The regular results workspace must import a changed file and select its new exact Run.
+  // A changed file becomes a new exact Run. The per-load-case [현재 하중 경우 결과 파일 확인] button was
+  // replaced by the request-wide [새 결과 확인] and the 5-minute server check (2026-10-14); the import stays an API.
   await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '의뢰 개요', exact: true }).click()
   await expect(panel).toBeHidden()
+  await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toHaveCount(0)
   writeFileSync(join(data.root, data.loadPaths[0], 'results/result.csv'), 'force\n84\n')
-  const workspaceRefresh = page.waitForResponse((response) => response.url().endsWith(`/load-cases/${binding.load_case_id}/results/refresh`) && response.request().method() === 'POST')
-  await page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true }).click()
-  const workspaceResponse = await workspaceRefresh
+  const workspaceResponse = await page.request.post(`/api/semantic-mapping/load-cases/${binding.load_case_id}/results/refresh`)
   expect(workspaceResponse.ok(), await workspaceResponse.text()).toBeTruthy()
   const changed = await workspaceResponse.json()
   expect(changed.display_run_id).not.toBe(processed.display_run_id)
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: /^기존 Run 대시보드/ }).click()
   await expect(panel.locator('.semantic-result-kpi strong')).toHaveText('84.00')
-  await expect(page).toHaveURL(new RegExp(`run=${changed.display_run_id}`))
-  await panel.scrollIntoViewIfNeeded()
   await page.screenshot({ path: info.outputPath('automatic-folder-result.png') })
   await page.reload()
   await expect(panel.locator('.semantic-result-kpi strong')).toHaveText('84.00')
@@ -169,8 +168,8 @@ test('existing result folders accept one reviewed bulk configuration without rec
 
 test('a viewer can read saved results but cannot trigger file imports', async ({ page }) => {
   await loginWorkspace(page, 'e2e-viewer', '/workspace/requests?project=project-tv-001&request=request-drop-001&loadCase=loadcase-drop-bottom-001&view=custom')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-drop-bottom-001')
-  await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toBeDisabled()
+  await expectLoadCase(page, 'loadcase-drop-bottom-001')
+  await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toHaveCount(0)
   const stored = await page.request.get('/api/semantic-mapping/results?load_case_id=loadcase-drop-bottom-001')
   expect(stored.ok(), await stored.text()).toBeTruthy()
   const importing = await page.request.post('/api/semantic-mapping/load-cases/loadcase-drop-bottom-001/results/refresh')

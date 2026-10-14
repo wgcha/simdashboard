@@ -15,7 +15,7 @@ export async function mockResultEnvironments(page: Page, environments: Array<'US
 }
 
 /** Routes hidden from the sidebar (AppSidebar SIDEBAR_HIDDEN_MENUS); opened by in-app URL navigation. */
-const HIDDEN_SIDEBAR_PATHS = new Set(['/workspace/requests/new', '/workspace/admin/work-types', '/workspace/project/result-layouts', '/workspace/catalog/variables', '/workspace/examples'])
+const HIDDEN_SIDEBAR_PATHS = new Set(['/workspace/execution', '/workspace/requests/new', '/workspace/admin/work-types', '/workspace/project/result-layouts', '/workspace/catalog/variables', '/workspace/examples'])
 
 /** Navigate through the real sidebar, including its collapsed utility groups. */
 export async function openWorkspaceRoute(page: Page, pathname: string) {
@@ -42,15 +42,17 @@ export async function openWorkspaceRoute(page: Page, pathname: string) {
     await link.click()
     return
   }
+  // 작업 실행 is hidden from the request journey (2026-10-14); /workspace/execution stays reachable by URL.
   const embeddedRequestTabs: Record<string, string> = {
-    '/workspace/execution': '작업 실행',
     '/workspace/data': '결과 등록',
   }
   const requestTab = embeddedRequestTabs[pathname]
   if (!requestTab && HIDDEN_SIDEBAR_PATHS.has(pathname)) {
     // Hidden from the sidebar (SIDEBAR_HIDDEN_MENUS, 2026-10-06) but still reachable by URL:
     // navigate in-app so client state (font size, theme, login) is kept.
-    await page.evaluate((target) => { window.history.pushState({}, '', target); window.dispatchEvent(new PopStateEvent('popstate')) }, pathname)
+    // The request workspace tabs keep the request context (query) like the former journey button.
+    const keepSearch = pathname === '/workspace/execution'
+    await page.evaluate(({ target, keep }) => { window.history.pushState({}, '', keep ? target + window.location.search : target); window.dispatchEvent(new PopStateEvent('popstate')) }, { target: pathname, keep: keepSearch })
     await expect(page).toHaveURL(new RegExp(`${pathname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\?|$)`))
     return
   }
@@ -66,6 +68,18 @@ export async function openWorkspaceRoute(page: Page, pathname: string) {
   if (await mobileClose.isVisible()) await mobileClose.click()
   await expect(journey).toBeVisible()
   await journey.getByRole('button', { name: requestTab, exact: true }).click()
+}
+
+/**
+ * The request header no longer shows a load-case selector outside the legacy Run review (2026-10-14);
+ * the selected load case is exposed on the context strip instead ('' = none selected).
+ */
+export async function expectLoadCase(page: Page, loadCaseId: string) {
+  await expect(page.locator('.request-context-strip')).toHaveAttribute('data-load-case-id', loadCaseId)
+}
+
+export async function selectedLoadCase(page: Page): Promise<string> {
+  return (await page.locator('.request-context-strip').getAttribute('data-load-case-id')) ?? ''
 }
 
 export async function openSidebarUtilities(page: Page) {

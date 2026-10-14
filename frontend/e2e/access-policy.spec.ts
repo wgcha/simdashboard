@@ -19,7 +19,7 @@ test('일반 사용자는 대시보드와 업무 실행 메뉴만 본다', async
   await expect(page.getByRole('link', { name: '결과 대시보드', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: '내 작업', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: '해석 작업 실행', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '작업 실행', exact: true })).toBeEnabled()
+  await expect(page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '작업 실행', exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: '새 의뢰', exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: '사용자·프로젝트 권한', exact: true })).toHaveCount(0)
 })

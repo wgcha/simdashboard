@@ -11,8 +11,8 @@ for (const viewport of [
   test(`P1 ${viewport.width}px keeps workspace gutters aligned and font preferences intact`, async ({ page }) => {
     await page.setViewportSize(viewport)
     await loginWorkspace(page)
-    const journey = page.getByRole('navigation', { name: '의뢰 작업 여정' })
-    await journey.getByRole('button', { name: '작업 실행', exact: true }).click()
+    // 작업 실행 left the request journey (2026-10-14); the page stays reachable by URL.
+    await openWorkspaceRoute(page, '/workspace/execution')
     await expect(page.locator('.work-item-detail')).toBeVisible()
     const selectedRequest = await page.getByLabel('의뢰 선택', { exact: true }).inputValue()
     const expectedPadding = viewport.width <= 620 ? 14 : Math.min(40, Math.max(24, viewport.width * .02))

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { PortfolioOverview } from '../src/types'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { expectLoadCase, loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
 
 test('첫 화면은 독립 결과 대시보드이며 실제 최신 Run 집계와 일치한다', async ({ page }) => {
   await page.setViewportSize({ width: 1505, height: 1045 })
@@ -54,7 +54,7 @@ test('대시보드 결과에서 의뢰와 하중 경우 및 정확한 Run으로 
   await expect(summary.getByText('Run #1', { exact: true })).toHaveCount(0)
   releaseRuns()
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(record.request_id)
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue(record.load_case_id)
+  await expectLoadCase(page, record.load_case_id)
   await expect(page.getByLabel('결과 버전 선택')).toHaveValue(record.run_id!)
   await expect(summary).toContainText('Run #3')
   await expect(summary).toContainText('표시 항목의 기준')
@@ -67,7 +67,7 @@ test('대기 의뢰로 이동 중에는 이전 의뢰의 작업을 실행할 수
   await loginWorkspace(page)
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-feature-showcase')
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-compare')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-compare')
+  await expectLoadCase(page, 'loadcase-showcase-compare')
   await openWorkspaceRoute(page, '/workspace/overview')
   let releaseContext!: () => void
   let startedContext!: () => void

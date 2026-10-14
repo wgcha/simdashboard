@@ -526,10 +526,11 @@ test('fresh request reaches the Case usage review and clears prior capture conte
   await caseResultsButton.click()
   await expect(caseBadge).toContainText('Usage Case')
   await expect(captureBadge).toContainText('usage capture')
-  await expect(page.locator('.request-results-refresh')).toHaveCount(0)
   await expect(page.getByTestId('usage-dashboard').locator('tbody tr')).toHaveCount(5)
   await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
-  await expect(page.locator('.request-results-refresh')).toHaveCount(0)
+  // The per-load-case file check is gone; the request-wide [새 결과 확인] also serves Case results (2026-10-14).
+  await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toHaveCount(0)
+  await expect(page.getByTestId('request-new-results-check')).toHaveCount(1)
   await page.reload()
   await expect(caseBadge).toContainText('Usage Case')
   await expect(captureBadge).toContainText('usage capture')

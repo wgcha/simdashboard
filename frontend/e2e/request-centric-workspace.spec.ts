@@ -2,12 +2,12 @@ import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Overview } from '../src/types'
-import { loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
+import { expectLoadCase, loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 async function selectComparisonRequest(page: Page) {
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-feature-showcase')
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-compare')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-compare')
+  await expectLoadCase(page, 'loadcase-showcase-compare')
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe('request-showcase-compare')
 }
 
@@ -56,7 +56,7 @@ test('현재 프로젝트가 접수로 이어지고 의뢰와 하중 경우가 �
   await expect(page.getByLabel('등록 하중 경우 선택')).toHaveCount(0)
   await expect(page.getByLabel('프로젝트 선택', { exact: true })).toHaveValue('project-feature-showcase')
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-compare')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-compare')
+  await expectLoadCase(page, 'loadcase-showcase-compare')
   await page.goBack()
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-compare')
 })
@@ -65,7 +65,7 @@ test('작업 계획 없는 의뢰의 실행 진입은 다른 의뢰로 바뀌지
   await loginWorkspace(page)
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-feature-showcase')
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-workflow')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-workflow')
+  await expectLoadCase(page, 'loadcase-showcase-workflow')
   await page.getByRole('button', { name: '작업 이어하기', exact: true }).click()
   const workbench = page.getByTestId('simulation-workbench')
   await expect(workbench).toContainText('작업 계획이 없어 실행할 수 없습니다')
@@ -76,7 +76,7 @@ test('작업 계획 없는 의뢰의 실행 진입은 다른 의뢰로 바뀌지
   await expect(page.getByTestId('execute-selected-task')).toHaveCount(0)
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-tv-001')
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-drop-001')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-drop-bottom-001')
+  await expectLoadCase(page, 'loadcase-drop-bottom-001')
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe('request-drop-001')
   await expect(page.getByTestId('execute-selected-task')).toBeVisible()
   await page.getByRole('button', { name: '의뢰 개요', exact: true }).click()
@@ -115,13 +115,14 @@ test('결과 문맥과 과거 Run을 새로고침 후에도 복원한다', async
   await expect(summary.locator('.result-summary-value')).toContainText(shownResult!.unit)
   await expect(page.locator('.analysis-page-jump')).toHaveCount(0)
   await capture(page, 'request-results-desktop.png')
-  await page.getByRole('button', { name: '작업 실행', exact: true }).click()
-  await expect(page.getByTestId('simulation-workbench')).toBeVisible()
+  // 작업 실행 is hidden (2026-10-14): leave the review through 의뢰 개요 instead.
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '의뢰 개요', exact: true }).click()
+  await expect(page.getByTestId('focused-request-overview')).toBeVisible()
   const resumedHistoricalOverview = page.waitForResponse((response) => {
     const url = new URL(response.url())
     return url.pathname.endsWith('/loadcase-showcase-compare/overview') && url.searchParams.get('run_id') === previous && response.ok()
   })
-  await page.getByRole('button', { name: '결과 검토', exact: true }).click()
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: /^기존 Run 대시보드/ }).click()
   await resumedHistoricalOverview
   await expect.poll(() => new URL(page.url()).searchParams.get('run')).toBe(previous)
   await expect(page.getByTestId('pending-analysis-workspace')).toBeVisible()
@@ -131,11 +132,11 @@ test('다른 의뢰로 이동한 뒤 브라우저 뒤로 가기는 이전 의뢰
   await loginWorkspace(page)
   await selectComparisonRequest(page)
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-waiting')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-waiting')
+  await expectLoadCase(page, 'loadcase-showcase-waiting')
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe('request-showcase-waiting')
   await page.goBack()
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-compare')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-compare')
+  await expectLoadCase(page, 'loadcase-showcase-compare')
 })
 
 test('결과 없는 의뢰에 이전 의뢰의 판정이나 Run을 보여주지 않는다', async ({ page }) => {
@@ -265,7 +266,7 @@ test('의뢰 변경 API 실패가 다른 의뢰의 결과를 섞어 표시하지
 test('결과 구성이 없는 의뢰는 새로고침해도 임의의 분석 화면으로 바뀌지 않는다', async ({ page }) => {
   await loginWorkspace(page)
   await selectComparisonRequest(page)
-  await page.getByRole('button', { name: '결과 검토', exact: true }).click()
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: /^기존 Run 대시보드/ }).click()
   await expect(page.getByTestId('result-layout-unconfigured')).toBeVisible()
   await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('custom')
   await expect.poll(() => new URL(page.url()).searchParams.get('page')).toBeNull()
@@ -281,9 +282,9 @@ test('결과 등록에서 검토로 이동할 때 조회가 실패하면 로딩 
   await selectComparisonRequest(page)
   await page.getByRole('button', { name: '결과 등록', exact: true }).click()
   await expect(page.getByLabel('등록 하중 경우 선택')).toHaveCount(0)
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-compare')
+  await expectLoadCase(page, 'loadcase-showcase-compare')
   await page.route('**/api/load-cases/loadcase-showcase-compare/overview*', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'E2E 결과 조회 실패' }) }))
-  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '결과 검토', exact: true }).click()
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: /^기존 Run 대시보드/ }).click()
   await expect(page.locator('.full-state.error')).toBeVisible()
   await expect(page.getByTestId('workspace-context-restoring')).toHaveCount(0)
 })

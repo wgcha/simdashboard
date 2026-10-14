@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
+import { expectLoadCase, loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 async function fontSize(page: Page, _from: number, to: number) {
   await setWorkspaceFontSize(page, to)
@@ -62,7 +62,7 @@ for (const width of [1366, 1920]) {
     await loginWorkspace(page)
     await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-feature-showcase')
     await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-compare')
-    await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-compare')
+    await expectLoadCase(page, 'loadcase-showcase-compare')
     await fontSize(page, 14, 18)
     for (const theme of ['라이트', '다크']) {
       await page.getByRole('button', { name: theme, exact: true }).click()
@@ -81,7 +81,7 @@ for (const width of [1366, 1920]) {
       await expect(data).toHaveAttribute('data-ui-density', 'v1')
       await expect(data.locator('.data-form-card h2').first()).toHaveCSS('font-size', '30px')
       await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-compare')
-      await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-compare')
+      await expectLoadCase(page, 'loadcase-showcase-compare')
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
       if (theme === '다크') await capture(page, `registration-${width}`)
       await openWorkspaceRoute(page, '/workspace/requests')
@@ -120,15 +120,14 @@ test('P4 desktop request navigation restores context after back and reload', asy
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-compare')
   await fontSize(page, 14, 18)
   const journey = page.getByRole('navigation', { name: '의뢰 작업 여정' })
-  await journey.getByRole('button', { name: '작업 실행', exact: true }).click()
-  await expect(page.getByTestId('simulation-workbench')).toBeVisible()
+  await expect(page.getByTestId('focused-request-overview')).toBeVisible()
   await journey.getByRole('button', { name: '결과 등록', exact: true }).click()
   await expect(page.locator('.data-workspace')).toBeVisible()
   await page.goBack()
-  await expect(page.getByTestId('simulation-workbench')).toBeVisible()
+  await expect(page.getByTestId('focused-request-overview')).toBeVisible()
   await page.reload()
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-compare')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-showcase-compare')
+  await expectLoadCase(page, 'loadcase-showcase-compare')
   await expect(page.locator('.app-shell')).toHaveCSS('--ui-font-size', '18pt')
   await journey.getByRole('button', { name: 'Case 결과', exact: true }).click()
   await expect(journey.getByRole('button', { name: 'Case 결과', exact: true })).toHaveAttribute('aria-current', 'step')

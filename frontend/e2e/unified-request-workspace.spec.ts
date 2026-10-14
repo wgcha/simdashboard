@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { loginWorkspace, setWorkspaceFontSize } from './workspace-test-helpers'
+import { expectLoadCase, loginWorkspace, selectedLoadCase, setWorkspaceFontSize } from './workspace-test-helpers'
 
 const context = {
   project: 'project-feature-showcase',
@@ -14,8 +14,15 @@ const context = {
 async function selectRequestContext(page: Page) {
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption(context.project)
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption(context.request)
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue(context.loadCase)
+  await expectLoadCase(page, context.loadCase)
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(context.request)
+}
+
+/** The legacy Run review tab in the journey ("결과 검토" was renamed; the name also carries the analysis type). */
+const LEGACY_REVIEW = /^기존 Run 대시보드/
+
+function journeyButton(page: Page, step: string) {
+  return journey(page).getByRole('button', step === '결과 검토' ? { name: LEGACY_REVIEW } : { name: step, exact: true })
 }
 
 function journey(page: Page) {
@@ -31,16 +38,18 @@ async function expectUnifiedContext(page: Page, activeStep: string, expected = c
     await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toHaveCount(0)
     await expect(page.getByLabel('결과 버전 선택', { exact: true })).toHaveCount(0)
   } else {
-    await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue(expected.loadCase)
+    await expectLoadCase(page, expected.loadCase)
   }
 
   const requestJourney = journey(page)
   await expect(requestJourney).toBeVisible()
-  for (const label of ['의뢰 개요', '작업 실행', '결과 등록', '결과 검토']) {
-    await expect(requestJourney.getByRole('button', { name: label, exact: true })).toHaveCount(1)
+  for (const label of ['의뢰 개요', '결과 등록', '결과 검토']) {
+    await expect(journeyButton(page, label)).toHaveCount(1)
   }
+  // 작업 실행 is hidden (2026-10-14; the route and code stay).
+  await expect(requestJourney.getByRole('button', { name: '작업 실행', exact: true })).toHaveCount(0)
   await expect(requestJourney.locator('[aria-current="step"]')).toHaveCount(1)
-  await expect(requestJourney.getByRole('button', { name: activeStep, exact: true })).toHaveAttribute('aria-current', 'step')
+  await expect(journeyButton(page, activeStep)).toHaveAttribute('aria-current', 'step')
 
   const myWork = page.getByRole('complementary', { name: '주 메뉴' }).getByRole('link', { name: '내 작업', exact: true })
   await expect(myWork).toHaveAttribute('aria-current', 'page')
@@ -48,20 +57,6 @@ async function expectUnifiedContext(page: Page, activeStep: string, expected = c
 
 async function expectNoDocumentOverflow(page: Page) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true)
-}
-
-async function expectWideWorkbenchColumns(page: Page) {
-  const workbench = page.locator('.workbench-page.assigned-only')
-  await expect(workbench).toHaveCSS('display', 'grid')
-  const detail = page.getByTestId('work-item-detail')
-  const workList = page.locator('.assigned-work-list')
-  await expect(detail).toBeVisible()
-  await expect(workList).toBeVisible()
-  const [detailBox, listBox] = await Promise.all([detail.boundingBox(), workList.boundingBox()])
-  expect(detailBox).not.toBeNull()
-  expect(listBox).not.toBeNull()
-  expect(detailBox!.x + detailBox!.width).toBeLessThanOrEqual(listBox!.x + 1)
-  expect(Math.abs(detailBox!.y - listBox!.y)).toBeLessThan(2)
 }
 
 async function captureQa(page: Page, filename: string) {
@@ -82,15 +77,10 @@ async function stubNoRegistrationTargets(page: Page) {
   }))
 }
 
-test('한 의뢰의 네 작업 탭이 같은 헤더와 문맥을 유지하고 뒤로 가기와 새로고침으로 복원된다', async ({ page }) => {
+test('한 의뢰의 작업 탭이 같은 헤더와 문맥을 유지하고 뒤로 가기와 새로고침으로 복원된다', async ({ page }) => {
   await loginWorkspace(page)
   await selectRequestContext(page)
   await expectUnifiedContext(page, '의뢰 개요')
-
-  await journey(page).getByRole('button', { name: '작업 실행', exact: true }).click()
-  await expect(page).toHaveURL(/\/workspace\/execution(?:\?|$)/)
-  await expect(page.getByTestId('simulation-workbench')).toBeVisible()
-  await expectUnifiedContext(page, '작업 실행')
 
   await stubNoRegistrationTargets(page)
   await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
@@ -102,7 +92,7 @@ test('한 의뢰의 네 작업 탭이 같은 헤더와 문맥을 유지하고 �
   await expect(page.getByRole('button', { name: /새 프로젝트|새 의뢰|새 하중경우 등록/ })).toHaveCount(0)
   await expectUnifiedContext(page, '결과 등록')
 
-  await journey(page).getByRole('button', { name: '결과 검토', exact: true }).click()
+  await journeyButton(page, '결과 검토').click()
   await expect(page).toHaveURL(/\/workspace\/requests(?:\?|$)/)
   await expect(page.getByTestId('pending-analysis-workspace')).toBeVisible()
   await expectUnifiedContext(page, '결과 검토')
@@ -111,29 +101,28 @@ test('한 의뢰의 네 작업 탭이 같은 헤더와 문맥을 유지하고 �
   await expect(page).toHaveURL(/\/workspace\/data(?:\?|$)/)
   await expectUnifiedContext(page, '결과 등록')
   await page.goBack()
-  await expect(page).toHaveURL(/\/workspace\/execution(?:\?|$)/)
-  await expectUnifiedContext(page, '작업 실행')
+  await expect(page).toHaveURL(/\/workspace\/requests(?:\?|$)/)
+  await expectUnifiedContext(page, '의뢰 개요')
 
   await page.reload()
-  await expect(page.getByTestId('simulation-workbench')).toBeVisible()
-  await expectUnifiedContext(page, '작업 실행')
+  // Restoring the request context after a reload can take longer than one assertion timeout.
+  await expect(page.locator('.request-workspace-header')).toHaveCount(1, { timeout: 20_000 })
+  await expectUnifiedContext(page, '의뢰 개요')
 })
 
-test('기본 의뢰도 작업 실행에서 결과 검토로 바로 이동한다', async ({ page }) => {
+test('기본 의뢰도 의뢰 개요에서 결과 검토로 바로 이동한다', async ({ page }) => {
   await loginWorkspace(page)
   const requestId = await page.getByLabel('의뢰 선택', { exact: true }).inputValue()
-  const loadCaseId = await page.getByLabel('하중 경우 선택', { exact: true }).inputValue()
-  await journey(page).getByRole('button', { name: '작업 실행', exact: true }).click()
-  await expect(page.getByTestId('work-item-detail')).toBeVisible()
-  await expect(page.locator('.assigned-work-list')).toBeVisible()
-  await journey(page).getByRole('button', { name: '결과 검토', exact: true }).click()
+  await expect(page.locator('.request-context-strip')).not.toHaveAttribute('data-load-case-id', '')
+  const loadCaseId = await selectedLoadCase(page)
+  await journeyButton(page, '결과 검토').click()
   await expect(page).toHaveURL(/\/workspace\/requests(?:\?|$)/)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(requestId)
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue(loadCaseId)
-  await expect(journey(page).getByRole('button', { name: '결과 검토', exact: true })).toHaveAttribute('aria-current', 'step')
+  await expectLoadCase(page, loadCaseId)
+  await expect(journeyButton(page, '결과 검토')).toHaveAttribute('aria-current', 'step')
 })
 
-test('하중 경우가 없는 의뢰도 실행과 등록 탭에서 의뢰 문맥을 잃지 않는다', async ({ page }) => {
+test('하중 경우가 없는 의뢰도 등록 탭에서 의뢰 문맥을 잃지 않는다', async ({ page }) => {
   await loginWorkspace(page)
   await page.route('**/api/requests/request-showcase-workflow/load-cases', (route) => route.fulfill({
     status: 200,
@@ -142,14 +131,9 @@ test('하중 경우가 없는 의뢰도 실행과 등록 탭에서 의뢰 문맥
   }))
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption(context.project)
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-workflow')
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toBeDisabled()
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('')
-
-  await journey(page).getByRole('button', { name: '작업 실행', exact: true }).click()
-  await expect(page.getByTestId('simulation-workbench')).toBeVisible()
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-workflow')
-  await expect(page.getByLabel('배정 작업 대상 의뢰')).toHaveCount(0)
-  await expect(journey(page).getByRole('button', { name: '작업 실행', exact: true })).toHaveAttribute('aria-current', 'step')
+  await expectLoadCase(page, '')
+  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
 
   await stubNoRegistrationTargets(page)
   await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
@@ -161,7 +145,7 @@ test('하중 경우가 없는 의뢰도 실행과 등록 탭에서 의뢰 문맥
   await expect(page.getByRole('button', { name: '업로드하고 자동 검사', exact: true })).toHaveCount(0)
   await expect(journey(page).getByRole('button', { name: '결과 등록', exact: true })).toHaveAttribute('aria-current', 'step')
 
-  await journey(page).getByRole('button', { name: '결과 검토', exact: true }).click()
+  await journeyButton(page, '결과 검토').click()
   await expect(page).toHaveURL(/\/workspace\/requests(?:\?|$)/)
   await expect(page.getByTestId('pending-analysis-workspace')).toBeVisible()
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-workflow')
@@ -171,7 +155,7 @@ test('일반 사용자는 통합 탭에서 허용된 작업만 열 수 있다', 
   await loginWorkspace(page, 'e2e-viewer')
   await selectRequestContext(page)
   const requestJourney = journey(page)
-  await expect(requestJourney.getByRole('button', { name: '작업 실행', exact: true })).toBeEnabled()
+  await expect(requestJourney.getByRole('button', { name: '작업 실행', exact: true })).toHaveCount(0)
   await expect(requestJourney.getByRole('button', { name: '결과 등록', exact: true })).toBeDisabled()
   await expect(page.getByRole('link', { name: '새 의뢰', includeHidden: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: '해석 데이터 등록', includeHidden: true })).toHaveCount(0)
@@ -209,16 +193,9 @@ for (const viewport of [
   test(`${viewport.width}px 화면에서 통합 작업공간과 글자 크기 설정이 넘치지 않는다`, async ({ page }) => {
     await page.setViewportSize(viewport)
     await loginWorkspace(page)
-    if (viewport.width === 2560 || viewport.width === 1707) {
-      await journey(page).getByRole('button', { name: '작업 실행', exact: true }).click()
-      await expectWideWorkbenchColumns(page)
-      if (viewport.width === 2560) {
-        await page.getByRole('button', { name: '라이트', exact: true }).click()
-        await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
-        await expectWideWorkbenchColumns(page)
-      }
-      await captureQa(page, `execution-${viewport.width}.png`)
-      await journey(page).getByRole('button', { name: '의뢰 개요', exact: true }).click()
+    if (viewport.width === 2560) {
+      await page.getByRole('button', { name: '라이트', exact: true }).click()
+      await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe('light')
     }
     await selectRequestContext(page)
     await expectNoDocumentOverflow(page)
@@ -231,17 +208,17 @@ for (const viewport of [
     const sidebar = page.getByRole('complementary', { name: '주 메뉴' })
     await expect(sidebar.getByRole('link', { name: '내 작업', exact: true })).toHaveAttribute('aria-current', 'page')
     const shell = page.locator('.app-shell')
-    const journeyButton = journey(page).getByRole('button', { name: '의뢰 개요', exact: true })
+    const overviewButton = journey(page).getByRole('button', { name: '의뢰 개요', exact: true })
     const originalFontSize = await shell.evaluate((element) => getComputedStyle(element).getPropertyValue('--ui-font-size').trim())
-    const originalJourneyFontPixels = Number.parseFloat(await journeyButton.evaluate((element) => getComputedStyle(element).fontSize))
+    const originalJourneyFontPixels = Number.parseFloat(await overviewButton.evaluate((element) => getComputedStyle(element).fontSize))
     expect(originalFontSize).toBe('14pt')
     await setWorkspaceFontSize(page, 15)
     const increasedFontSize = await shell.evaluate((element) => getComputedStyle(element).getPropertyValue('--ui-font-size').trim())
-    const increasedJourneyFontPixels = Number.parseFloat(await journeyButton.evaluate((element) => getComputedStyle(element).fontSize))
+    const increasedJourneyFontPixels = Number.parseFloat(await overviewButton.evaluate((element) => getComputedStyle(element).fontSize))
     expect(increasedFontSize).toBe('15pt')
     expect(increasedJourneyFontPixels).toBeGreaterThan(originalJourneyFontPixels)
 
-    await journey(page).getByRole('button', { name: '작업 실행', exact: true }).click()
+    await journeyButton(page, '결과 검토').click()
     await expect(shell).toHaveCSS('--ui-font-size', increasedFontSize)
     await expectNoDocumentOverflow(page)
     if (viewport.width === 2560) {
