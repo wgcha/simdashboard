@@ -351,3 +351,16 @@ def test_drive_calls_wait_while_an_account_switch_is_pending(monkeypatch):
             drive_reads._call(lambda gateway: gateway, op="stat")
         assert caught.value.code == "DRIVE_BUSY"
     assert not drive_auth.account_switch_active()
+
+
+def test_unreachable_sso_reports_the_adapter_code_and_logs_it(relogin_drive, password_auth, caplog):
+    caplog.set_level(logging.WARNING)
+    relogin_drive.auth_fail_next["login_password"] = ErrorCode.UNAVAILABLE
+    with _client() as client:
+        admin = _login(client, "drive-admin")
+        response = client.post("/api/admin/drive/login", headers=admin, json=_login_body("spdm-shared", HPC_PASSWORD))
+    detail = response.json()["detail"]
+    assert response.status_code == 503 and detail["code"] == "DRIVE_UNAVAILABLE"
+    assert detail["adapter_code"] == "UNAVAILABLE" and "UNAVAILABLE" in detail["message"]
+    assert "SCX drive login_password failed: code=UNAVAILABLE" in caplog.text
+    _no_password(response.text, caplog.text)

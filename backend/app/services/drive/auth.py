@@ -268,8 +268,12 @@ def _local(bundle: Any) -> LocalTokenBundle:
     return DbTokenStore.to_local(bundle)
 
 
-def _call(name: str, *args: Any) -> AuthResult:
-    """Run one adapter re-login method on the current gateway; maps errors to :class:`DriveAuthError`."""
+def _call(name: str, *args: Any, redact: tuple[str, ...] = ()) -> AuthResult:
+    """Run one adapter re-login method on the current gateway; maps errors to :class:`DriveAuthError`.
+
+    Failures are logged with the adapter code and its (sanitized) message so the admin can tell an
+    unreachable SSO from a refused login; ``redact`` values (the password) are masked once more.
+    """
     try:
         gateway = drive_gateway.get_drive_gateway()
     except drive_gateway.DriveStartupError as error:
@@ -300,13 +304,23 @@ def _call(name: str, *args: Any) -> AuthResult:
             _remember_capabilities(gateway, dict(NO_CAPABILITIES), False)
             raise DriveAuthError(409, "DRIVE_ADAPTER_UPDATE_REQUIRED",
                                  "설치된 드라이브 어댑터가 재연결을 지원하지 않습니다. 어댑터 업데이트 필요 (이슈 #50).") from None
-        code = drive_gateway.drive_error_code(error) or "INTERNAL"
+        adapter_code = drive_gateway.drive_error_code(error)
+        code = adapter_code or "INTERNAL"
+        detail = drive_gateway.safe_error_message(error)
+        for value in redact:
+            if value:
+                detail = detail.replace(value, "***")
+        logger.warning("SCX drive %s failed: code=%s type=%s message=%s", name, adapter_code or "-",
+                       type(error).__name__, detail)
         _record_error(code)
         if code in AUTH_ERRORS:
             status, message = AUTH_ERRORS[code]
             raise DriveAuthError(status, code, message) from None
         mapping = drive_gateway.DRIVE_ERROR_MAP.get(code, drive_gateway.DRIVE_ERROR_MAP["INTERNAL"])
-        raise DriveAuthError(mapping.http_status, mapping.storage_code, "드라이브 인증 서버에 연결하지 못했습니다. 잠시 후 다시 시도하세요.") from None
+        shown = adapter_code or type(error).__name__
+        raise DriveAuthError(mapping.http_status, mapping.storage_code,
+                             f"드라이브 인증 서버에 연결하지 못했습니다(어댑터 코드: {shown}). 서버 로그(uvicorn-error.log)의 "
+                             f"'SCX drive {name} failed' 줄에 원인이 있습니다.", adapter_code=shown) from None
 
 
 def _record_error(code: str) -> None:
@@ -336,7 +350,7 @@ def refresh_now() -> AuthResult:
 def login_password(username: str, password: str) -> AuthResult:
     """Hand the password to the worker (stdin JSON) once; the caller drops its reference right after."""
     try:
-        return _call("login_password", username, password)
+        return _call("login_password", username, password, redact=(password,))
     finally:
         del password
 
