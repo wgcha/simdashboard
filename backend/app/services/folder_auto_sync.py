@@ -369,6 +369,49 @@ def invalidate_request(root_key: str, project_id: str, request_id: str) -> None:
             _memo.pop(key, None)
 
 
+ACTIVE_REGISTRATION_STATES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
+
+
+def registered_scopes(conn, *, project_id: str | None = None, request_id: str | None = None) -> list[tuple[str, str, str]]:
+    """(project_id, request_id, environment) of every request with a live folder registration."""
+    where = ["project_id IS NOT NULL", "request_id IS NOT NULL",
+             f"status IN ({','.join('?' for _ in ACTIVE_REGISTRATION_STATES)})"]
+    params: list[Any] = list(ACTIVE_REGISTRATION_STATES)
+    if project_id is not None:
+        where.append("project_id=?"); params.append(project_id)
+    if request_id is not None:
+        where.append("request_id=?"); params.append(request_id)
+    rows = conn.execute(
+        "SELECT DISTINCT project_id, request_id, environment FROM folder_environment_registrations WHERE "
+        + " AND ".join(where) + " ORDER BY project_id, request_id, environment", params).fetchall()
+    return [(str(row[0]), str(row[1]), str(row[2]).upper()) for row in rows]
+
+
+def sync_scope(project_id: str, request_id: str, environment: str, actor: str, *, force: bool = False) -> dict[str, Any]:
+    """One scope in local or scx drive mode (the drive is never read while a DB connection is held)."""
+    from .drive import reads as drive_reads
+
+    if drive_reads.active():
+        return sync_drive(project_id, request_id, environment, actor, force=force)
+    with connect() as conn:
+        return sync(conn, project_id, request_id, environment, actor, force=force)
+
+
+def sync_request(project_id: str, request_id: str, actor: str, *, force: bool = True) -> dict[str, Any]:
+    """[새 결과 확인]: every registered environment of one request, summarised for the screen."""
+    with connect() as conn:
+        scopes = registered_scopes(conn, project_id=project_id, request_id=request_id)
+    results = []
+    for _project, _request, environment in scopes:
+        result = sync_scope(project_id, request_id, environment, actor, force=force)
+        results.append({"environment": environment, **{key: result.get(key) for key in
+                        ("status", "changed", "diff", "code", "message", "checked_at", "coalesced")}})
+    added = sum(int((item.get("diff") or {}).get("added") or 0) for item in results if item.get("changed"))
+    return {"checked_at": _now_iso(), "registered": bool(scopes), "changed": any(item.get("changed") for item in results),
+            "added": added, "failed": [item for item in results if item.get("status") in {"FAILED", "CONFLICT"}],
+            "environments": results}
+
+
 def reset_for_tests() -> None:
     with _state_lock:
         _memo.clear()

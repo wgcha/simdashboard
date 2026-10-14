@@ -124,9 +124,18 @@ def global_admins(conn: Any) -> list[str]:
 
 
 def recipients(conn: Any, *, project_id: str | None = None, permission: Permission | None = PROJECT_DATA_VIEW,
-               members: bool = True, include: Iterable[str | None] = (), admins: bool = False) -> list[str]:
-    """ACTIVE users allowed to see a project event (see the module docstring)."""
+               members: bool = True, include: Iterable[str | None] = (), admins: bool = False,
+               everyone: bool = False) -> list[str]:
+    """ACTIVE users allowed to see a project event (see the module docstring).
+
+    ``everyone``: every ACTIVE account is a candidate (still filtered by ``permission``), e.g. new results
+    for all signed-in users who may view the project (user decision 2026-10-14)."""
     candidates: set[str] = {str(value) for value in include if value}
+    if everyone:
+        candidates |= {str(row[0]) for row in conn.execute(
+            "SELECT id FROM users WHERE account_status='ACTIVE' AND is_active").fetchall()}
+        if _local_admin():
+            candidates.add("local-admin")
     if members and project_id:
         candidates |= {str(row[0]) for row in conn.execute(
             "SELECT user_id FROM project_memberships WHERE project_id=?", [project_id]).fetchall()}
@@ -450,13 +459,15 @@ def drive_sources_changed(conn: Any, project_id: str, request_id: str, *, change
 
 def new_results(conn: Any, project_id: str, request_id: str, environment: str, *, cases: int, scenes: int,
                 snapshot_id: str) -> int:
-    """The auto-sync reflected new Cases/Scenes of a request (one notification per request per sync)."""
+    """The auto-sync reflected new Cases/Scenes of a request (one notification per request per sync).
+
+    Recipients: every active user who may view the project (not only its members)."""
     if not cases and not scenes:
         return 0
     parts = [f"Case {cases}개" if cases else "", f"Scene {scenes}개" if scenes else ""]
     environment_label = {"USAGE": "사용환경", "DISTRIBUTION": "유통환경"}.get(str(environment).upper(), str(environment))
     return _guarded(conn, "NEW_RESULTS", lambda: _send(
-        conn, recipients(conn, project_id=project_id), type="NEW_RESULTS", severity="INFO",
+        conn, recipients(conn, project_id=project_id, everyone=True), type="NEW_RESULTS", severity="INFO",
         title=f"새 결과 반영 · {_request_title(conn, request_id)}",
         body=f"{environment_label}: 새 {', '.join(part for part in parts if part)}가 결과 화면에 반영되었습니다.",
         link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,

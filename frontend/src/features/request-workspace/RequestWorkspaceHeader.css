@@ -65,3 +65,12 @@
 .request-workspace-header[data-ui-density="v1"] .request-context-strip select,
 .request-workspace-header[data-ui-density="v1"] .request-results-refresh,
 .request-journey[data-ui-density="v1"] button { min-height:var(--control-h-md); border-radius:var(--radius-sm); }
+
+/* Unified context strip (2026-10-14): read-only 하중 경우 and the [새 결과 확인] status. */
+.request-context-readonly { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; color: var(--color-text-muted); font-size: var(--text-caption); }
+.request-context-readonly strong { max-width: 220px; overflow: hidden; color: var(--color-text-strong); text-overflow: ellipsis; white-space: nowrap; }
+.request-new-results { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; margin-left: auto; }
+.request-new-results .request-results-refresh svg { width: 15px; height: 15px; }
+.request-new-results-status { color: var(--color-text-muted); font-size: var(--text-caption); white-space: nowrap; }
+.request-new-results-status.new { color: var(--color-success, var(--color-accent)); font-weight: 700; }
+.request-new-results-status.bad { color: var(--color-danger); }

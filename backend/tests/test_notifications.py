@@ -303,7 +303,8 @@ def test_drive_source_changes_and_missing_sources_notify_importers(scx):
     assert _rows(viewer) == [] or {row["type"] for row in _rows(viewer)} == {"NEW_RESULTS"}
 
 
-def test_auto_sync_new_scenes_notify_request_members_once_per_sync(scx):
+def test_auto_sync_new_scenes_notify_every_permitted_user_once_per_sync(scx):
+    """User decision 2026-10-14: new results go to every active user who may view the project."""
     project_id, request_id = _register(scx)
     me = _admin_id(scx)
     with connect() as conn:
@@ -316,10 +317,11 @@ def test_auto_sync_new_scenes_notify_request_members_once_per_sync(scx):
     added = _sync(scx, project_id, request_id)
     assert added["status"] == "REFRESHED"
     rows = _rows(type="NEW_RESULTS", request_id=request_id)[before:]
-    assert {row["user_id"] for row in rows} == {me, viewer} and outsider not in {row["user_id"] for row in rows}
-    assert len(rows) == 2 and "Scene 2개" in rows[0]["body"]            # one per user for the sync
+    assert {me, viewer, outsider} <= {row["user_id"] for row in rows}
+    recipients = len(rows)
+    assert len({row["user_id"] for row in rows}) == recipients and "Scene 2개" in rows[0]["body"]   # one per user
     assert _sync(scx, project_id, request_id)["status"] == "UNCHANGED"
-    assert len(_rows(type="NEW_RESULTS", request_id=request_id)) == before + 2
+    assert len(_rows(type="NEW_RESULTS", request_id=request_id)) == before + recipients
 
 
 def test_registration_capture_failure_notifies_the_registering_user(scx, monkeypatch):

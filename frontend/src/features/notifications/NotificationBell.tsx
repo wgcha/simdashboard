@@ -1,4 +1,4 @@
-import { Bell, CheckCheck, LoaderCircle } from 'lucide-react'
+import { Bell, CheckCheck, LoaderCircle, Sparkles, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -30,9 +30,30 @@ export function NotificationBell() {
   const openRef = useRef(open)
   openRef.current = open
 
+  // New-results toast (user request 2026-10-14): when the unread count grows and the newest notification
+  // is a new-results one, show it for a few seconds so nobody has to open the bell to notice.
+  const [toast, setToast] = useState<NotificationItem | null>(null)
+  const lastCount = useRef<number | null>(null)
+  const shownToast = useRef('')
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(null), 12_000)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
   const refreshCount = useCallback(async () => {
     try {
-      setUnread(await notificationsApi.unreadCount())
+      const count = await notificationsApi.unreadCount()
+      const previous = lastCount.current
+      lastCount.current = count
+      setUnread(count)
+      if (previous !== null && count > previous) {
+        const newest = (await notificationsApi.list({ unread_only: true, limit: 1 })).items[0]
+        if (newest && newest.type === 'NEW_RESULTS' && shownToast.current !== newest.id) {
+          shownToast.current = newest.id
+          setToast(newest)
+        }
+      }
     } catch (reason) {
       if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403)) setUnavailable(true)
     }
@@ -87,7 +108,15 @@ export function NotificationBell() {
   }
   const label = unread ? `알림, 읽지 않은 알림 ${unread}건` : '알림'
 
+  const toastView = toast ? <div className="notification-toast" role="status" aria-live="polite" data-testid="notification-toast">
+    <Sparkles aria-hidden="true" />
+    <div><strong>{toast.title}</strong>{toast.body ? <span>{toast.body}</span> : null}</div>
+    {toast.link ? <button type="button" onClick={() => { const item = toast; setToast(null); void openItem(item) }}>보기</button> : null}
+    <button type="button" className="notification-toast__close" aria-label="알림 닫기" onClick={() => setToast(null)}><X aria-hidden="true" /></button>
+  </div> : null
+
   return <div className="notification-bell" ref={root}>
+    {toastView}
     <button type="button" className="notification-bell__trigger" aria-label={label} title={label} aria-haspopup="dialog" aria-expanded={open}
       data-testid="notification-bell" onClick={() => setOpen((value) => !value)}>
       <Bell aria-hidden="true" />

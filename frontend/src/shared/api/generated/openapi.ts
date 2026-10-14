@@ -2083,6 +2083,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/sync-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Request
+         * @description [새 결과 확인]: check every registered environment of one request now (2026-10-14).
+         *
+         *     Same permission and coalescing as ``/sync`` (force = the short manual interval); the server
+         *     reads only the request's registered folder scopes. Returns a summary for the screen.
+         */
+        post: operations["sync_request_api_folder_discovery_environments_sync_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/discover": {
         parameters: {
             query?: never;
@@ -8258,6 +8281,13 @@ export interface components {
              */
             force: boolean;
         };
+        /** SyncRequest */
+        SyncRequest: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+        };
         /** TaskTypeRef */
         TaskTypeRef: {
             /** Id */
@@ -13031,6 +13061,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["Sync"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_request_api_folder_discovery_environments_sync_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncRequest"];
             };
         };
         responses: {

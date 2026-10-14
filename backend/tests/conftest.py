@@ -171,6 +171,8 @@ def isolated_database(request: pytest.FixtureRequest, tmp_path: Path, monkeypatc
     # compatibility mode. Bootstrap tests delete this value when asserting the
     # production-safe default.
     monkeypatch.setenv("DEPLOYMENT_PROFILE", "local")
+    # No background result auto-sync thread in tests (tests call result_auto_sync.run_once directly).
+    monkeypatch.setenv("SIMDASH_RESULT_AUTO_SYNC_SECONDS", "0")
     monkeypatch.setenv("AUTH_ALLOW_INSECURE_LOCAL", "true")
 
     postgres_test_enabled = (

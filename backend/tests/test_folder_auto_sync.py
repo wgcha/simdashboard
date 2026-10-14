@@ -205,3 +205,55 @@ def test_manual_refresh_after_log_change_keeps_result_versions(admin_client):
     assert refreshed["changed"] is False, refreshed
     with connect() as conn:
         assert conn.execute("SELECT count(*) FROM dashboard_captures").fetchone()[0] == captures
+
+
+def test_request_wide_check_reports_new_results(admin_client):
+    """[새 결과 확인] (2026-10-14): every registered environment of the request, one summary."""
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    _sync(client, project_id, request_id)
+    quiet = client.post("/api/folder-discovery/environments/sync-request",
+                        json={"project_id": project_id, "request_id": request_id})
+    assert quiet.status_code == 200, quiet.text
+    assert quiet.json()["registered"] is True and quiet.json()["changed"] is False
+    copied = root / OPTION / "8_Side"
+    copied.mkdir()
+    (copied / CSV).write_bytes(CSV_BYTES)
+    changed = client.post("/api/folder-discovery/environments/sync-request",
+                          json={"project_id": project_id, "request_id": request_id}).json()
+    assert changed["changed"] is True and changed["added"] >= 1
+    assert [item["environment"] for item in changed["environments"]] == ["DISTRIBUTION"]
+    assert "8_Side" in _scenes(client, project_id, request_id)
+    mismatch = client.post("/api/folder-discovery/environments/sync-request",
+                           json={"project_id": "other-project", "request_id": request_id})
+    assert mismatch.status_code in {403, 404}
+
+
+def test_server_auto_sync_reflects_new_results_without_a_viewer(admin_client):
+    """The background pass (every 5 minutes in production) registers results nobody is looking at."""
+    from app.services import result_auto_sync
+
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    _sync(client, project_id, request_id)
+    copied = root / OPTION / "9_Top"
+    copied.mkdir()
+    (copied / CSV).write_bytes(CSV_BYTES)
+    summary = result_auto_sync.run_once()
+    assert summary["scopes"] >= 1 and summary["refreshed"] >= 1
+    assert "9_Top" in _scenes(client, project_id, request_id)
+    with connect() as conn:
+        actors = {row[0] for row in conn.execute(
+            "SELECT created_by FROM folder_environment_scans WHERE request_id=? AND id LIKE 'folder-refresh-%'",
+            [request_id]).fetchall()}
+    assert result_auto_sync.ACTOR in actors
+
+
+def test_server_auto_sync_interval_setting(monkeypatch):
+    from app.services import result_auto_sync
+
+    for raw, expected in (("", 300), ("0", 0), ("-5", 0), ("30", 60), ("900", 900), ("x", 300)):
+        monkeypatch.setenv("SIMDASH_RESULT_AUTO_SYNC_SECONDS", raw)
+        assert result_auto_sync.interval_seconds() == expected
+    monkeypatch.setenv("SIMDASH_RESULT_AUTO_SYNC_SECONDS", "0")
+    assert result_auto_sync.start() is False

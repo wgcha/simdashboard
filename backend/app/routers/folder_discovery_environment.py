@@ -95,6 +95,28 @@ def sync(payload: Sync, request: Request):
     with connect() as conn:
         _sync_audit(request, payload, result, conn)
     return result
+class SyncRequest(BaseModel):
+    project_id: str = Field(min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+@router.post("/sync-request")
+def sync_request(payload: SyncRequest, request: Request):
+    """[새 결과 확인]: check every registered environment of one request now (2026-10-14).
+
+    Same permission and coalescing as ``/sync`` (force = the short manual interval); the server
+    reads only the request's registered folder scopes. Returns a summary for the screen.
+    """
+    with connect() as conn:
+        require_resource_permission(request, PROJECT_DATA_VIEW, "request", payload.request_id, conn=conn)
+        if not folder_auto_sync.request_in_project(conn, payload.project_id, payload.request_id):
+            raise HTTPException(404, {"code": "FOLDER_SCHEMA_SCOPE_MISMATCH", "message": "프로젝트와 의뢰 문맥이 일치하지 않습니다."})
+    result = folder_auto_sync.sync_request(payload.project_id, payload.request_id, request.state.principal.user_id)
+    if result["changed"]:
+        with connect() as conn:
+            write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                              action="FOLDER_ENVIRONMENT_AUTO_SYNCED",
+                              detail={"project_id": payload.project_id, "request_id": payload.request_id,
+                                      "manual": True, "added": result["added"]}, connection=conn)
+    return result
 def _sync_audit(request, payload: Sync, result: dict, conn) -> None:
     if not result.get("coalesced") and result["status"] in {"REFRESHED", "CONFLICT"}:
         write_audit_event(request=request, principal=request.state.principal, status_code=200,

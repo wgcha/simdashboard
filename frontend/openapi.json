@@ -6188,6 +6188,46 @@
         }
       }
     },
+    "/api/folder-discovery/environments/sync-request": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Sync Request",
+        "description": "[새 결과 확인]: check every registered environment of one request now (2026-10-14).\n\nSame permission and coalescing as ``/sync`` (force = the short manual interval); the server\nreads only the request's registered folder scopes. Returns a summary for the screen.",
+        "operationId": "sync_request_api_folder_discovery_environments_sync_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/discover": {
       "post": {
         "tags": [
@@ -25278,6 +25318,28 @@
           "environment"
         ],
         "title": "Sync"
+      },
+      "SyncRequest": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id"
+        ],
+        "title": "SyncRequest"
       },
       "TaskTypeRef": {
         "properties": {

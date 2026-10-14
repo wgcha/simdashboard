@@ -2,6 +2,7 @@ import { ResultLayoutDetailTab } from '../../features/results/ResultLayoutDetail
 import { ResultVersionSelector } from '../../features/results/ResultVersionSelector'
 import { RequestWorkspaceHeader, type RequestWorkspaceTab } from '../../features/request-workspace/RequestWorkspaceHeader'
 import type { AnalysisRequest, LoadCase, Overview, Project, Workflow } from '../../types'
+import { RequestNewResultsCheck } from '../../features/results/RequestNewResultsCheck'
 
 type Props = {
   actions: {
@@ -17,6 +18,7 @@ type Props = {
     onReviewSnapshot: () => void
     onReviewUnconfigured: () => void
     onViewOverview: () => void
+    /** After [새 결과 확인] found new results: reload projects, requests, load cases and result screens. */
     onRefreshResults?: () => void
   }
   model: {
@@ -57,7 +59,7 @@ type Props = {
 
 /** Application-level assembly keeps request navigation controls identical on all four tabs. */
 export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isCurrentReview, loadLayout, onReviewError, onRunChange }: Props) {
-  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, canRefreshResults, caseResultsMode, caseResultsMaterialsTab, resultsRefreshing, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
+  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, caseResultsMode, caseResultsMaterialsTab, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
   const completedCount = selectedWorkflow ? `${selectedWorkflow.steps.filter((step) => step.status === 'COMPLETED').length} / ${selectedWorkflow.total_count ?? selectedWorkflow.steps.length} 작업 완료` : undefined
   // Snapshot and unconfigured review layouts also render one selected immutable Run.
   const showRunSelector = activeTab === 'review' && !caseResultsMode
@@ -72,9 +74,7 @@ export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isC
     completedCount={completedCount}
     loadCases={loadCases}
     onLoadCaseChange={actions.onLoadCaseChange}
-    onRefreshResults={actions.onRefreshResults}
-    canRefreshResults={canRefreshResults}
-    resultsRefreshing={resultsRefreshing}
+    newResultsCheck={<RequestNewResultsCheck projectId={projectId} requestId={requestId} disabled={contextChanging} onChanged={actions.onRefreshResults} />}
     onOpenData={actions.onOpenData}
     onOpenWorkbench={actions.onOpenWorkbench}
     onProjectChange={actions.onProjectChange}

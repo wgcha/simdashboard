@@ -100,6 +100,16 @@ export type ProjectCleanupPreviewItem = ProjectCleanupDataSummary & { project_id
 export type ProjectCleanupPreview = { items: ProjectCleanupPreviewItem[]; totals: Record<string, number>; confirm_token: string }
 export type ProjectCleanupResult = { deleted: string[]; counts: Record<string, number> }
 
+/** [새 결과 확인] summary: every registered environment of one request (2026-10-14). */
+export type RequestResultsCheck = {
+  checked_at: string
+  registered: boolean
+  changed: boolean
+  added: number
+  failed: Array<{ environment: string; status: string | null; code: string | null; message: string | null }>
+  environments: Array<{ environment: string; status: string | null; changed: boolean | null }>
+}
+
 // Endpoints added by the depth-schema contract are not in the generated OpenAPI client yet.
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await apiFetch(path, init)
@@ -114,6 +124,9 @@ export const folderEnvironmentApi = {
   },
   sync: async (body: { project_id: string; request_id: string; environment: FolderEnvironment; force?: boolean }, signal?: AbortSignal): Promise<FolderEnvironmentSync> => {
     return unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/sync', { body: { ...body, force: body.force ?? false }, signal })) as FolderEnvironmentSync
+  },
+  syncRequest: async (body: { project_id: string; request_id: string }, signal?: AbortSignal): Promise<RequestResultsCheck> => {
+    return unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/sync-request', { body, signal })) as RequestResultsCheck
   },
   discover: async (body: { force?: boolean } = {}, signal?: AbortSignal): Promise<FolderDiscoveryResult> => {
     return unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/discover', { body: { force: body.force ?? false }, signal })) as FolderDiscoveryResult

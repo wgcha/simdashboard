@@ -107,9 +107,13 @@ async def lifespan(_: FastAPI):
         start_resume_scan()
     # D3: the single drive upload queue worker (scx mode with SIMDASH_DRIVE_WRITES_ENABLED only).
     drive_upload_queue.start()
+    # Results appear without anyone viewing them: server-side folder sync every 5 minutes (2026-10-14).
+    from .services import result_auto_sync
+    result_auto_sync.start()
     try:
         yield
     finally:
+        result_auto_sync.stop()
         drive_upload_queue.stop()
         drive_gateway.shutdown()
 
