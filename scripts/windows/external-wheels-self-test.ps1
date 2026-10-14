@@ -41,11 +41,15 @@ exit /b 0
 @echo off
 >>"%WORKBENCH_EXTWHEEL_LOG%" echo python %*
 if /I "%~3"=="pip" goto pip
+if /I "%~nx2"=="install_pure_wheels.py" goto unpack
 if defined WORKBENCH_EXTWHEEL_IMPORT_EXIT echo ModuleNotFoundError: No module named 'scx_drive_adapter' 1>&2
 if defined WORKBENCH_EXTWHEEL_IMPORT_EXIT exit /b %WORKBENCH_EXTWHEEL_IMPORT_EXIT%
 exit /b 0
 :pip
 if defined WORKBENCH_EXTWHEEL_INSTALL_EXIT exit /b %WORKBENCH_EXTWHEEL_INSTALL_EXIT%
+exit /b 0
+:unpack
+if defined WORKBENCH_EXTWHEEL_UNPACK_EXIT exit /b %WORKBENCH_EXTWHEEL_UNPACK_EXIT%
 exit /b 0
 '@
     $absent = Join-Path $base 'absent\external-wheels'
@@ -83,12 +87,22 @@ exit /b 0
     Assert-True ($result.Installed -and $result.AdapterImported) 'pip path did not install the adapter wheel'
     Assert-True ($calls -match 'python -I -m pip --isolated install --no-deps --no-index .*vd_scx_drive_adapter') "pip install arguments are wrong: $calls"
 
-    # Install failure: warning in none mode, error in scx mode.
+    # uv refused (e.g. launcher .exe blocked by antivirus): offline unpack without console scripts.
+    $env:WORKBENCH_EXTWHEEL_INSTALL_EXIT = '2'
+    Reset-Log
+    $result = Install-ExternalWheels -Python $python -WheelDirectory $filled -DriveMode scx -Uv $uv
+    $calls = Get-Log
+    Assert-True ($result.Installed -and $result.Fallback -and $result.AdapterImported -and -not $result.Error) 'uv failure was not recovered by the offline unpack'
+    Assert-True ($calls -match 'python -I .*install_pure_wheels\.py.*vd_scx_drive_adapter-0\.2\.0-py3-none-any\.whl') "offline unpack arguments are wrong: $calls"
+
+    # Install failure (uv and the unpack): warning in none mode, error in scx mode.
     $env:WORKBENCH_EXTWHEEL_INSTALL_EXIT = '3'
+    $env:WORKBENCH_EXTWHEEL_UNPACK_EXIT = '3'
     $result = Install-ExternalWheels -Python $python -WheelDirectory $filled -DriveMode none -Uv $uv -WarningAction SilentlyContinue
     Assert-True (-not $result.Installed -and $result.Error -match 'exit code 3') 'none-mode install failure was not reported as a non-fatal result'
     Assert-Throws { Install-ExternalWheels -Python $python -WheelDirectory $filled -DriveMode scx -Uv $uv } 'SIMDASH_DRIVE_GATEWAY=scx'
     Remove-Item Env:WORKBENCH_EXTWHEEL_INSTALL_EXIT
+    Remove-Item Env:WORKBENCH_EXTWHEEL_UNPACK_EXIT
 
     # Import failure after a successful install.
     $env:WORKBENCH_EXTWHEEL_IMPORT_EXIT = '1'
@@ -119,7 +133,7 @@ exit /b 0
 }
 finally {
     [Environment]::SetEnvironmentVariable('SIMDASH_DRIVE_GATEWAY', $savedGateway)
-    foreach ($name in @('WORKBENCH_EXTWHEEL_LOG', 'WORKBENCH_EXTWHEEL_INSTALL_EXIT', 'WORKBENCH_EXTWHEEL_IMPORT_EXIT')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    foreach ($name in @('WORKBENCH_EXTWHEEL_LOG', 'WORKBENCH_EXTWHEEL_INSTALL_EXIT', 'WORKBENCH_EXTWHEEL_IMPORT_EXIT', 'WORKBENCH_EXTWHEEL_UNPACK_EXIT')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
     if (Test-Path -LiteralPath $base) {
         $resolved = [IO.Path]::GetFullPath($base).TrimEnd('\')

@@ -33,6 +33,7 @@
    - 폴더가 없거나 비어 있고 `SIMDASH_DRIVE_GATEWAY`가 `none`이면 아무것도 하지 않는다(기본 동작 불변).
    - `none` 모드에서 wheel 설치·import가 실패하면 경고만 하고 업데이트를 계속한다.
    - `scx` 모드(`.env` 값 기준)에서 wheel이 없거나 설치·import가 실패하면 설치·업데이트가 그 단계에서 **명확한 오류로 중단**된다. wheel을 넣고 다시 실행한다.
+   - 회사 PC에서 `uv`가 `Failed to update Windows PE resources … os error -2147024891`(접근 거부)로 실패하면(백신 등이 실행 파일 런처 생성을 막는 경우), 스크립트가 자동으로 wheel의 라이브러리 파일만 오프라인으로 풀어 설치한다(`scripts/windows/install_pure_wheels.py`, 순수 Python wheel만, 콘솔 명령 런처는 만들지 않음). 대시보드는 `import scx_drive_adapter`만 쓰므로 기능 차이는 없다.
    `siemens_scx`는 대시보드 가상환경에 **설치하지 않는다**(pydantic·PyJWT 버전 충돌, contract §10.1). SDK wheel을 `external-wheels`에 넣지 않는다.
 3. **암호화 키 만들기** (`AUTH_SECRET_KEY`와 다른 값)
    ```powershell

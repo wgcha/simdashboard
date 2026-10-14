@@ -11,6 +11,7 @@
 # mode a missing or broken adapter is an error; otherwise it is a warning.
 
 $script:AdapterModule = 'scx_drive_adapter'
+$script:PureWheelInstaller = Join-Path $PSScriptRoot 'install_pure_wheels.py'
 
 function Get-ExternalWheelsDriveMode {
     [CmdletBinding()]
@@ -68,7 +69,7 @@ function Install-ExternalWheels {
     )
 
     $wheels = @(Get-ExternalWheelFiles -WheelDirectory $WheelDirectory)
-    $result = [pscustomobject]@{ DriveMode = $DriveMode; Directory = $WheelDirectory; Wheels = $wheels; Installed = $false; AdapterImported = $false; Skipped = $false; Error = '' }
+    $result = [pscustomobject]@{ DriveMode = $DriveMode; Directory = $WheelDirectory; Wheels = $wheels; Installed = $false; AdapterImported = $false; Skipped = $false; Fallback = $false; Error = '' }
     if ($wheels.Count -eq 0) {
         if ($DriveMode -eq 'scx') {
             throw ("SIMDASH_DRIVE_GATEWAY=scx but no adapter wheel was found in '$WheelDirectory'. Copy vd_scx_drive_adapter-<version>-py3-none-any.whl into that folder once and rerun. " +
@@ -92,6 +93,16 @@ function Install-ExternalWheels {
         }
         $exitCode = [int]$LASTEXITCODE
         foreach ($line in $output) { Write-Host "    $line" }
+        if ($exitCode -ne 0 -and $Uv -and (Test-Path -LiteralPath $script:PureWheelInstaller -PathType Leaf)) {
+            # uv writes console-script launchers by patching an .exe in %TEMP%; some company PCs
+            # (antivirus/AppLocker) refuse that.  The dashboard only imports the adapter, so unpack the
+            # pure-Python wheel without console scripts instead (local files only, no network).
+            Write-Host "  uv could not install the wheel(s) (exit code $exitCode); retrying without console scripts (offline unpack)."
+            $output = @(& $Python -I $script:PureWheelInstaller @wheels 2>&1)
+            $exitCode = [int]$LASTEXITCODE
+            foreach ($line in $output) { Write-Host "    $line" }
+            if ($exitCode -eq 0) { $result.Fallback = $true }
+        }
         if ($exitCode -ne 0) { $failure = "external wheel installation failed (exit code $exitCode)" }
         else { $result.Installed = $true }
 
