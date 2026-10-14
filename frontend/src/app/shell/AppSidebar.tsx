@@ -104,6 +104,8 @@ export const SIDEBAR_HIDDEN_MENUS: ReadonlySet<AppSidebarMenuId> = new Set<AppSi
   'workbench_admin',
   // Opened from the top bar bell (2026-10-08), never a sidebar entry.
   'notifications',
+  // 해석 작업 실행 is a demo page not used in the current scenario (user decision 2026-10-14).
+  'workbench',
 ])
 
 function groupForMenu(id: string): MenuGroupId | undefined {

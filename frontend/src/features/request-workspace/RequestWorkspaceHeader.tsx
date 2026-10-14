@@ -104,7 +104,6 @@ export function RequestWorkspaceHeader({
 
     <nav className={`request-journey${caseResultsMode ? ' request-journey--case' : ''}`} data-ui-density="v1" aria-label="의뢰 작업 여정">
       <JourneyItem icon={CircleDot} label="의뢰 개요" active={currentTab === 'overview'} disabled={contextChanging} onClick={onViewOverview} />
-      <JourneyItem icon={Play} label="작업 실행" active={currentTab === 'execution'} disabled={contextChanging || requestUnavailable || !canOpenWorkbench} onClick={onOpenWorkbench} />
       <JourneyItem icon={ClipboardPlus} label="결과 등록" active={currentTab === 'import'} disabled={contextChanging || requestUnavailable || !canOpenData} onClick={onOpenData} />
       <div className={`request-journey-item result-review ${currentTab === 'review' && !caseResultsMode ? 'active' : ''}`}>{resultReviewTab}</div>
     </nav>
@@ -121,7 +120,6 @@ export function RequestJourneyCompact({ active, disabled = false, onOpenData, on
 }) {
   return <nav className="request-journey request-journey-compact" data-ui-density="v1" aria-label="의뢰 작업 여정">
     <JourneyItem icon={CircleDot} label="의뢰 개요" active={active === 'overview'} onClick={onOpenOverview} />
-    <JourneyItem icon={Play} label="작업 실행" active={active === 'workbench'} disabled={disabled} onClick={onOpenWorkbench} />
     <JourneyItem icon={ClipboardPlus} label="결과 등록" active={active === 'data'} disabled={disabled} onClick={onOpenData} />
     <JourneyItem icon={Route} label="결과 검토" active={active === 'review'} disabled={disabled} onClick={onOpenReview} />
   </nav>

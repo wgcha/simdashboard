@@ -233,16 +233,23 @@
 .materials-pagination button:disabled { opacity: .4; cursor: not-allowed; }
 .materials-pagination svg { width: 18px; height: 18px; }
 
+/* The detail column grows with its content so the mouse wheel scrolls the page (user request 2026-10-14);
+   the Part list stays in view beside it. */
 .materials-detail-panel {
   display: grid;
   align-content: start;
   gap: var(--space-3);
-  overflow: auto;
+  overflow: visible;
   padding: var(--space-3);
   border: 0;
   background: transparent;
   box-shadow: none;
-  overscroll-behavior: contain;
+}
+.materials-workspace > .materials-list-panel {
+  position: sticky;
+  top: var(--space-2);
+  align-self: start;
+  max-height: calc(100vh - 96px);
 }
 .materials-detail-empty {
   border: 0;
@@ -407,3 +414,21 @@
 .materials-analysis--failed svg { color: var(--color-danger, #b42318); }
 .materials-analysis button { display: inline-flex; align-items: center; gap: var(--space-1); }
 .materials-analysis-source { padding: 0 var(--space-3) var(--space-2); color: var(--color-text-muted); font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Readability (user request 2026-10-14): headings and bold values wrap instead of being cut off. */
+.materials-detail-heading h2,
+.materials-detail-section h3,
+.materials-density-grid strong,
+.materials-reference-summary dd,
+.materials-failure-card > summary span,
+.materials-curve-card > header span {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.materials-density-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.materials-density-grid strong { font-size: var(--text-subheading); line-height: 1.3; }
+.materials-failure-card > summary strong,
+.materials-curve-card > header strong { flex: 0 1 auto; font-size: var(--text-body); }
+.materials-detail-section h3 { line-height: 1.35; }

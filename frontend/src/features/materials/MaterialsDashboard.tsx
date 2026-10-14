@@ -122,18 +122,18 @@ function downloadCsv(rows: MaterialsPart[], materialById: Map<string, MaterialsM
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function FieldTable({ title, fields, rawFields, source }: { title: string; fields: Record<string, unknown>; rawFields?: Record<string, unknown>; source?: MaterialsSource | null }) {
+function FieldTable({ title, fields, rawFields }: { title: string; fields: Record<string, unknown>; rawFields?: Record<string, unknown> }) {
   const values = entries(fields)
   const raw = rawFields ?? {}
   return <section className="materials-detail-section">
-    <header><h3>{title}</h3>{source && <small title={sourceLabel(source)}>{sourceLabel(source)}</small>}</header>
+    <header><h3>{title}</h3></header>
     {values.length ? <dl className="materials-fields">{values.map(([name, value]) => <div key={name} title={text(value)}><dt>{name}</dt><dd>{text(value)}{raw[name] !== undefined && raw[name] !== null && raw[name] !== '' && String(raw[name]) !== String(value) ? <small>원본: {text(raw[name])}</small> : null}</dd></div>)}</dl> : <p className="materials-empty-inline">표시할 물성이 없습니다.</p>}
   </section>
 }
 
 function CurveCard({ curve, uses }: { curve: MaterialsFunction; uses: MaterialsFunction['uses'] }) {
   const points = curve.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
-  if (!points.length) return <article className="materials-curve-card"><header><strong>{curve.card ?? 'FUNCT'} {curve.id}</strong><span>{curve.title ?? '이름 없음'}</span></header><p>표시할 점이 없습니다. 출처: {sourceLabel(curve.source)}</p></article>
+  if (!points.length) return <article className="materials-curve-card"><header><strong>{curve.card ?? 'FUNCT'} {curve.id}</strong><span>{curve.title ?? '이름 없음'}</span></header><p>표시할 점이 없습니다.</p></article>
   let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y
   points.forEach((point) => { minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x); minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y) })
   const xRange = maxX - minX || 1, yRange = maxY - minY || 1
@@ -148,7 +148,6 @@ function CurveCard({ curve, uses }: { curve: MaterialsFunction; uses: MaterialsF
       <polyline points={coords} />
     </svg>
     <div className="materials-curve-range"><span>{numberLabel(minX)} → {numberLabel(maxX)}</span><span>{numberLabel(minY)} → {numberLabel(maxY)}</span></div>
-    <small title={sourceLabel(curve.source)}>{sourceLabel(curve.source)}</small>
   </article>
 }
 
@@ -188,7 +187,7 @@ function MaterialsDetails({ part, material, property, deck }: { part: MaterialsP
       <code>{deck.solver === 'OPTISTRUCT' ? `COMP ${part.id}` : `/PART/${part.id}`}</code>
     </header>
     <section className="materials-detail-section materials-reference-summary">
-      <header><h3>참조 상태</h3><small title={sourceLabel(part.source)}>{sourceLabel(part.source)}</small></header>
+      <header><h3>참조 상태</h3></header>
       <dl>
         <div><dt>Property</dt><dd title={property?.title ?? part.property_id ?? undefined}>{property ? `${property.subtype ?? 'PROP'} · ${property.title ?? property.id}` : part.property_id ? `누락 · ${part.property_id}` : '참조 없음'}</dd></div>
         <div><dt>Material</dt><dd title={material?.title ?? part.material_id ?? undefined}>{material ? `${material.subtype ?? 'MAT'} · ${material.title ?? material.id}` : part.material_id ? `누락 · ${part.material_id}` : '참조 없음'}</dd></div>
@@ -198,7 +197,7 @@ function MaterialsDetails({ part, material, property, deck }: { part: MaterialsP
     </section>
     {material ? <>
       <section className="materials-detail-section">
-        <header><h3>Material · {material.subtype ?? '유형 미상'} / {material.id}</h3><small title={sourceLabel(material.source)}>{sourceLabel(material.source)}</small></header>
+        <header><h3>Material · {material.subtype ?? '유형 미상'} / {material.id}</h3></header>
         <div className="materials-density-grid">
           <div><span>{deck.solver === 'OPTISTRUCT' ? '원본 RHO' : '원본 RHO_I'}</span><strong title={material.density?.raw ?? undefined}>{material.density?.raw ?? '—'}</strong><small>{material.density?.unit ?? '원본 단위 미상'}</small></div>
           <div><span>환산 밀도</span><strong>{numberLabel(material.density?.converted_value ?? null)}</strong><small>{material.density?.converted_unit ?? '환산 불가'}</small></div>
@@ -206,7 +205,7 @@ function MaterialsDetails({ part, material, property, deck }: { part: MaterialsP
           <div><span>Material ID</span><strong>{material.id}</strong><small>{material.law_id == null ? material.subtype ?? 'LAW 미지정' : `LAW ${material.law_id}`}</small></div>
         </div>
       </section>
-      <FieldTable title="Material 물성 필드" fields={material.fields} rawFields={material.raw_fields} source={material.source} />
+      <FieldTable title="Material 물성 필드" fields={material.fields} rawFields={material.raw_fields} />
       <section className="materials-detail-section">
         <header><h3>Failure 모델</h3><small>{material.failures.length}개</small></header>
         {material.failures.length ? <div className="materials-failure-list">{material.failures.map((failure) => <FailureCard key={`${failure.id}-${failure.subtype}`} failure={failure} />)}</div> : <p className="materials-empty-inline">연결된 Failure 모델이 없습니다.</p>}
@@ -221,14 +220,14 @@ function MaterialsDetails({ part, material, property, deck }: { part: MaterialsP
         {curves.length ? <div className="materials-curves">{curves.map(({ curve, uses }) => <CurveCard key={curve.id} curve={curve} uses={uses} />)}</div> : <p className="materials-empty-inline">이 Material, Property 또는 Failure가 참조하는 함수 곡선이 없습니다.</p>}
       </section>
     </> : <section className="materials-detail-missing"><AlertTriangle /><div><strong>{part.material_id ? `Material ${part.material_id}을 찾을 수 없습니다.` : '이 Part에는 Material 참조가 없습니다.'}</strong><span>참조를 추정해 연결하지 않고 원본 덱의 ID 관계를 그대로 표시합니다.</span></div></section>}
-    {property && <FieldTable title={`Property · ${property.subtype ?? '유형 미상'} / ${property.id}`} fields={property.fields} rawFields={property.raw_fields} source={property.source} />}
+    {property && <FieldTable title={`Property · ${property.subtype ?? '유형 미상'} / ${property.id}`} fields={property.fields} rawFields={property.raw_fields} />}
   </aside>
 }
 
 function FailureCard({ failure }: { failure: MaterialsFailure }) {
   return <details className="materials-failure-card">
     <summary><strong>FAIL {failure.id}</strong><span>{failure.subtype ?? '유형 미상'} · {failure.title ?? '이름 없음'}</span></summary>
-    <FieldTable title="Failure 필드" fields={failure.fields} rawFields={failure.raw_fields} source={failure.source} />
+    <FieldTable title="Failure 필드" fields={failure.fields} rawFields={failure.raw_fields} />
   </details>
 }
 
