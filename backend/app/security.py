@@ -36,6 +36,8 @@ PUBLIC_API_PATHS = {
     "/api/auth/oidc/callback",
 }
 PENDING_ALLOWED_PATHS = {"/api/auth/me", "/api/auth/logout", "/api/auth/status"}
+# While an administrator-reset password must be replaced, nothing else is reachable.
+PASSWORD_CHANGE_ALLOWED_PATHS = PENDING_ALLOWED_PATHS | {"/api/auth/password"}
 DEVICE_API_PATHS = {
     "/api/local-execution/device/pair-preview",
     "/api/local-execution/device/pair",
@@ -57,6 +59,8 @@ class Principal:
     # Retained only while password users and callers migrate away from the
     # viewer/editor/admin contract. It is never the source for new permissions.
     legacy_role: Role | None = None
+    # Set by an administrator's password reset: only auth/me, logout and the password change work.
+    must_change_password: bool = False
 
     @property
     def role(self) -> Role:
@@ -145,6 +149,10 @@ def create_access_token(principal: Principal) -> tuple[str, int]:
 
 
 def _token_user_id(token: str) -> str:
+    return _token_claims(token)[0]
+
+
+def _token_claims(token: str) -> tuple[str, int]:
     settings = security_settings()
     if not settings.secret_key:
         raise AuthenticationError("인증 설정이 준비되지 않았습니다.")
@@ -156,30 +164,38 @@ def _token_user_id(token: str) -> str:
         claims = json.loads(_b64url_decode(payload))
         if int(claims["exp"]) <= int(time.time()):
             raise AuthenticationError("인증 토큰이 만료되었습니다.")
-        return str(claims["sub"])
+        return str(claims["sub"]), int(claims.get("iat") or 0)
     except AuthenticationError:
         raise
     except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise AuthenticationError("인증 토큰이 올바르지 않습니다.") from exc
 
 
-def _load_principal(user_id: str) -> Principal:
+def _load_principal(user_id: str, token_issued_at: int | None = None) -> Principal:
     with connect() as conn:
         row = conn.execute(
             """
             SELECT id, username, display_name, account_status, is_global_admin,
-                   employee_id, legacy_role, is_active
+                   employee_id, legacy_role, is_active, must_change_password, sessions_revoked_at
             FROM users WHERE id=?
             """,
             [user_id],
         ).fetchone()
     if not row or row[3] not in {"PENDING", "ACTIVE", "SUSPENDED"}:
         raise AuthenticationError("사용할 수 없는 계정입니다.")
+    revoked = row[9]
+    if token_issued_at is not None and revoked is not None:
+        revoked_utc = revoked.replace(tzinfo=timezone.utc) if revoked.tzinfo is None else revoked.astimezone(timezone.utc)
+        # ``iat`` has whole-second resolution, so a token from the reset's own second is also refused
+        # (fail closed; a sign-in with the temporary password in that same second just signs in again).
+        if token_issued_at <= int(revoked_utc.timestamp()):
+            # Administrator password reset: sessions signed in before it end (stolen tokens included).
+            raise AuthenticationError("비밀번호가 초기화되어 다시 로그인해야 합니다.")
     account_status: AccountStatus = row[3]
     if not row[7] and account_status == "ACTIVE":
         account_status = "SUSPENDED"
     legacy_role = row[6] if row[6] in ROLE_LEVEL else None
-    return Principal(row[0], row[1], row[2], account_status, bool(row[4]), row[5], legacy_role)
+    return Principal(row[0], row[1], row[2], account_status, bool(row[4]), row[5], legacy_role, bool(row[8]))
 
 
 def authenticate_request(request: Request) -> Principal:
@@ -193,7 +209,8 @@ def authenticate_request(request: Request) -> Principal:
         token = request.cookies.get(SESSION_COOKIE, "")
     if not token:
         raise AuthenticationError("Bearer 인증 토큰이 필요합니다.")
-    return _load_principal(_token_user_id(token))
+    user_id, issued_at = _token_claims(token)
+    return _load_principal(user_id, issued_at)
 
 
 def authenticate_credentials(username: str, password: str) -> Principal | None:
@@ -201,7 +218,7 @@ def authenticate_credentials(username: str, password: str) -> Principal | None:
         row = conn.execute(
             """
             SELECT id, username, password_hash, display_name, legacy_role, is_active,
-                   account_status, is_global_admin, employee_id
+                   account_status, is_global_admin, employee_id, must_change_password
             FROM users WHERE username=?
             """,
             [username.strip().lower()],
@@ -215,7 +232,7 @@ def authenticate_credentials(username: str, password: str) -> Principal | None:
     ):
         return None
     legacy_role = row[4] if row[4] in ROLE_LEVEL else None
-    return Principal(row[0], row[1], row[3], "ACTIVE", bool(row[7]), row[8], legacy_role)
+    return Principal(row[0], row[1], row[3], "ACTIVE", bool(row[7]), row[8], legacy_role, bool(row[9]))
 
 
 def write_audit_event(
@@ -345,6 +362,23 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             except Exception:
                 logger.exception("Failed to persist suspended-account audit event")
             response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="strict")
+            response.headers["X-Request-Id"] = request.state.request_id
+            return response
+        if principal.must_change_password and path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+            response = JSONResponse(
+                {
+                    "detail": {
+                        "code": "PASSWORD_CHANGE_REQUIRED",
+                        "message": "관리자가 비밀번호를 초기화했습니다. 새 비밀번호를 설정한 뒤 사용하세요.",
+                    }
+                },
+                status_code=403,
+            )
+            try:
+                write_audit_event(request=request, principal=principal, status_code=403,
+                                  action="PASSWORD_CHANGE_REQUIRED_BLOCKED")
+            except Exception:
+                logger.exception("Failed to persist password-change-required audit event")
             response.headers["X-Request-Id"] = request.state.request_id
             return response
         response = await call_next(request)

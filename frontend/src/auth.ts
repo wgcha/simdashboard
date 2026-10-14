@@ -11,6 +11,8 @@ export type AuthUser = {
   employee_id: string | null
   account_status: AccountStatus
   is_global_admin: boolean
+  /** Administrator reset (2026-10-14): only the new-password screen is available. */
+  must_change_password?: boolean
   memberships: ProjectMembership[]
   company_permissions: string[]
   role?: UserRole

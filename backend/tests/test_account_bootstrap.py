@@ -29,7 +29,7 @@ def test_password_auth_needs_secret_and_active_password_admin(monkeypatch):
     monkeypatch.delenv("AUTH_SECRET_KEY", raising=False)
     with TestClient(app) as client:
         assert client.get("/api/auth/status").json()["setup_reason"] == "AUTH_SECRET_REQUIRED"
-        assert client.post("/api/auth/register", json={"username": "member.01", "display_name": "Member", "password": "long-enough-password"}).status_code == 503
+        assert client.post("/api/auth/register", json={"username": "member.01", "display_name": "Member", "password": "long-enough-passw0rd"}).status_code == 503
 
     monkeypatch.setenv("AUTH_SECRET_KEY", "bootstrap-test-secret-key-that-is-at-least-32")
     suffix = uuid4().hex[:10]
@@ -57,5 +57,5 @@ def test_registration_username_accepts_requested_ascii_symbols(monkeypatch):
     with connect() as conn:
         conn.execute("INSERT INTO users (id, username, password_hash, display_name, legacy_role, is_active, created_at, updated_at, account_status, is_global_admin) VALUES (?, ?, ?, ?, 'admin', true, ?, ?, 'ACTIVE', true)", [f"admin-{suffix}", f"admin-{suffix}", hash_password("username-admin-password"), "Admin", now, now])
     with TestClient(app) as client:
-        assert client.post("/api/auth/register", json={"username": "a._-9", "display_name": "Member", "password": "long-enough-password"}).status_code == 201
-        assert client.post("/api/auth/register", json={"username": "bad/name", "display_name": "Member", "password": "long-enough-password"}).status_code == 422
+        assert client.post("/api/auth/register", json={"username": "a._-9", "display_name": "Member", "password": "long-enough-passw0rd"}).status_code == 201
+        assert client.post("/api/auth/register", json={"username": "bad/name", "display_name": "Member", "password": "long-enough-passw0rd"}).status_code == 422

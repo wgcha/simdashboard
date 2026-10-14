@@ -123,7 +123,7 @@ def change_password(
         return PasswordChangeResult.CURRENT_PASSWORD_INVALID
     changed = connection.execute(
         """
-        UPDATE users SET password_hash=?, updated_at=?
+        UPDATE users SET password_hash=?, updated_at=?, must_change_password=false
         WHERE id=? AND password_hash=?
         RETURNING id
         """,
@@ -137,3 +137,55 @@ def change_password(
 def _is_unique_violation(exc: Exception) -> bool:
     message = str(exc).lower()
     return any(marker in message for marker in ("duplicate", "unique constraint", "unique violation", "23505"))
+
+
+TEMPORARY_PASSWORD_LENGTH = 14
+_TEMPORARY_SPECIALS = "!@#$%^&*-_=+"
+_TEMPORARY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+
+def temporary_password() -> str:
+    """One-time password for an administrator reset: letters, digits and a special character (policy)."""
+    import secrets
+
+    while True:
+        chars = [secrets.choice(_TEMPORARY_ALPHABET) for _ in range(TEMPORARY_PASSWORD_LENGTH - 2)]
+        chars += [secrets.choice("23456789"), secrets.choice(_TEMPORARY_SPECIALS)]
+        secrets.SystemRandom().shuffle(chars)
+        candidate = "".join(chars)
+        if any(ch.isalpha() for ch in candidate):
+            return candidate
+
+
+class PasswordResetResult(StrEnum):
+    RESET = "reset"
+    NOT_FOUND = "not_found"
+    NOT_PASSWORD_ACCOUNT = "not_password_account"
+    STALE = "stale"
+
+
+def reset_password_by_admin(
+    connection: ConnectionLike, *, user_id: str, expected_updated_at: datetime, new_password: str
+) -> tuple[PasswordResetResult, datetime | None]:
+    """Replace the password with ``new_password`` and require a change at the next use (optimistic check)."""
+    row = connection.execute("SELECT password_hash, updated_at FROM users WHERE id=?", [user_id]).fetchone()
+    if not row:
+        return PasswordResetResult.NOT_FOUND, None
+    if not row[0]:
+        return PasswordResetResult.NOT_PASSWORD_ACCOUNT, None
+    expected = expected_updated_at.replace(tzinfo=None) if expected_updated_at.tzinfo is None else \
+        expected_updated_at.astimezone(timezone.utc).replace(tzinfo=None)
+    current = row[1]
+    if current is not None and getattr(current, "tzinfo", None) is not None:
+        current = current.astimezone(timezone.utc).replace(tzinfo=None)
+    if current != expected:
+        return PasswordResetResult.STALE, None
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    changed = connection.execute(
+        "UPDATE users SET password_hash=?, must_change_password=true, sessions_revoked_at=?, updated_at=? "
+        "WHERE id=? AND updated_at=? RETURNING id",
+        [hash_password(new_password), now, now, user_id, row[1]],
+    ).fetchone()
+    if not changed:
+        return PasswordResetResult.STALE, None
+    return PasswordResetResult.RESET, now

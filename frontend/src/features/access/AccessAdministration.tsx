@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, LoaderCircle, RefreshCw, RotateCcw, Save, Search, ShieldCheck, Users } from 'lucide-react'
+import { AlertTriangle, Check, Copy, KeyRound, LoaderCircle, RefreshCw, RotateCcw, Save, Search, ShieldCheck, Users, X } from 'lucide-react'
 
 import { api } from '../../api'
 import type { ProjectRole } from '../../auth'
 import type { MenuPolicy } from '../auth/access'
+import './AccessAdministration.css'
 
 type AdminUser = Awaited<ReturnType<typeof api.adminUsers>>[number]
 type ProjectMember = Awaited<ReturnType<typeof api.projectMembers>>[number]
@@ -86,6 +87,27 @@ export function AccessAdminPage({ projectId, projects = [], canApproveUsers, onA
     } catch (error) { setMessage(error instanceof Error ? error.message : '전역 관리자 상태를 변경하지 못했습니다.') } finally { setMutationPending(false) }
   }
 
+  // Shown once after [비밀번호 초기화]; cleared when dismissed and never stored (2026-10-14).
+  const [issued, setIssued] = useState<{ name: string; username: string; password: string } | null>(null)
+  const [copied, setCopied] = useState(false)
+  const resetPassword = async (user: AdminUser) => {
+    if (mutationPending) return
+    if (userReadOnly) return setMessage('사용자 목록을 먼저 새로고침하세요.')
+    if (reason.trim().length < 2) return setMessage('변경 사유를 두 글자 이상 입력하세요.')
+    if (!window.confirm(`${user.display_name}(${user.username})의 비밀번호를 초기화할까요? 기존 비밀번호는 더 이상 쓸 수 없고, 임시 비밀번호로 로그인하면 새 비밀번호를 정해야 합니다.`)) return
+    setMutationPending(true)
+    try {
+      const result = await api.resetUserPassword(user.id, { expected_updated_at: user.updated_at, reason: reason.trim() })
+      setCopied(false)
+      setIssued({ name: user.display_name, username: user.username, password: result.temporary_password })
+      await reload()
+    } catch (error) { setMessage(error instanceof Error ? error.message : '비밀번호를 초기화하지 못했습니다.') } finally { setMutationPending(false) }
+  }
+  const copyIssued = async () => {
+    if (!issued) return
+    try { await navigator.clipboard.writeText(issued.password); setCopied(true) } catch { setCopied(false) }
+  }
+
   const changeRole = async (member: ProjectMember) => {
     if (mutationPending) return
     if (memberReadOnly || !projectId) return setMessage('프로젝트 역할 목록을 먼저 새로고침하세요.')
@@ -124,7 +146,13 @@ export function AccessAdminPage({ projectId, projects = [], canApproveUsers, onA
     <header className="content-head"><div><div className="eyebrow"><span>ACCESS CONTROL</span></div><h1>사용자·프로젝트 권한</h1><p>계정 상태와 프로젝트 역할을 서로 독립적으로 관리합니다.</p><label><span>관리할 프로젝트</span><select aria-label="관리할 프로젝트" value={projectId} onChange={(event) => onProjectChange(event.target.value)} disabled={mutationPending || !projects.length}><option value="">프로젝트 선택</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></div><button className="ghost-button" onClick={() => void reload()} disabled={loading || mutationPending}><RefreshCw className={loading ? 'spin' : ''} /> 새로고침</button></header>
     {!projectId && <p role="status">관리할 프로젝트를 선택하면 프로젝트별 역할을 확인하고 배정할 수 있습니다.</p>}
     {message ? <div className="edit-banner" role="alert"><AlertTriangle /> {message}</div> : null}
-    {canApproveUsers ? <section className="access-admin-card"><header><div><span>GLOBAL USERS</span><h2>계정 승인·전역 관리자·프로젝트 배정 확인</h2><p>미배정 사용자는 역할을 고른 뒤 확인하면 프로젝트에 추가됩니다. 이미 배정된 사용자는 아래 역할 목록에서 변경 후 확인하세요.</p></div></header><div className="access-admin-toolbar"><label><Search /><input aria-label="사용자 검색" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="이름·아이디·임직원 ID" /></label><label><span>변경 사유</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label><button disabled={mutationPending} onClick={() => void reload()}>검색</button></div><div className="access-admin-table">{users.map((user) => { const member = members.find((item) => item.user_id === user.id); const selectedRole = pendingRoles[user.id] ?? ''; return <article key={user.id}><div><strong>{user.display_name}</strong><span>{user.username} · {user.employee_id || '임직원 ID 없음'}</span></div><b>{user.is_global_admin ? '전역 관리자' : user.account_status}</b><div className="access-admin-actions"><button disabled={mutationPending || userReadOnly || user.account_status === 'ACTIVE'} onClick={() => void changeStatus(user, 'ACTIVE')}><Check /> 승인</button><button disabled={mutationPending || userReadOnly || user.account_status === 'SUSPENDED'} onClick={() => void changeStatus(user, 'SUSPENDED')}>중지</button><button disabled={mutationPending || userReadOnly} onClick={() => void toggleGlobalAdmin(user)}><ShieldCheck /> {user.is_global_admin ? '전역 관리자 해제' : '전역 관리자 지정'}</button>{member ? <span className="access-admin-role-status">{roleLabels[member.role]}</span> : <><select aria-label={`${user.display_name} 프로젝트 역할`} value={selectedRole} disabled={mutationPending || userReadOnly || memberReadOnly || !projectId || user.account_status !== 'ACTIVE' || addingUserId === user.id} onChange={(event) => setPendingRoles((current) => ({ ...current, [user.id]: event.target.value as ProjectRole }))}><option value="">역할 선택</option><option value="general">일반 사용자</option><option value="power">파워 사용자</option><option value="admin">프로젝트 관리자</option></select><button type="button" disabled={mutationPending || userReadOnly || memberReadOnly || !projectId || !selectedRole || user.account_status !== 'ACTIVE' || addingUserId === user.id} onClick={() => void addMember(user, selectedRole as ProjectRole)}>확인</button>{addingUserId === user.id && <LoaderCircle className="spin" aria-label="프로젝트 추가 중" />}</>}</div></article> })}</div></section> : null}
+    {issued ? <div className="access-admin-temp-password" role="status" data-testid="temporary-password">
+      <KeyRound aria-hidden="true" />
+      <div><strong>{issued.name}({issued.username}) 임시 비밀번호</strong><code>{issued.password}</code><span>이 화면을 닫으면 다시 볼 수 없습니다. 본인에게 직접 전달하세요. 임시 비밀번호로 로그인하면 새 비밀번호를 정해야 합니다.</span></div>
+      <button type="button" onClick={() => void copyIssued()}><Copy aria-hidden="true" /> {copied ? '복사됨' : '복사'}</button>
+      <button type="button" aria-label="임시 비밀번호 닫기" onClick={() => { setIssued(null); setCopied(false) }}><X aria-hidden="true" /></button>
+    </div> : null}
+    {canApproveUsers ? <section className="access-admin-card"><header><div><span>GLOBAL USERS</span><h2>계정 승인·전역 관리자·프로젝트 배정 확인</h2><p>미배정 사용자는 역할을 고른 뒤 확인하면 프로젝트에 추가됩니다. 이미 배정된 사용자는 아래 역할 목록에서 변경 후 확인하세요.</p></div></header><div className="access-admin-toolbar"><label><Search /><input aria-label="사용자 검색" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="이름·아이디·임직원 ID" /></label><label><span>변경 사유</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label><button disabled={mutationPending} onClick={() => void reload()}>검색</button></div><div className="access-admin-table">{users.map((user) => { const member = members.find((item) => item.user_id === user.id); const selectedRole = pendingRoles[user.id] ?? ''; return <article key={user.id}><div><strong>{user.display_name}</strong><span>{user.username} · {user.employee_id || '임직원 ID 없음'}</span></div><b>{user.is_global_admin ? '전역 관리자' : user.account_status}</b><div className="access-admin-actions"><button disabled={mutationPending || userReadOnly || user.account_status === 'ACTIVE'} onClick={() => void changeStatus(user, 'ACTIVE')}><Check /> 승인</button><button disabled={mutationPending || userReadOnly || user.account_status === 'SUSPENDED'} onClick={() => void changeStatus(user, 'SUSPENDED')}>중지</button><button disabled={mutationPending || userReadOnly} onClick={() => void toggleGlobalAdmin(user)}><ShieldCheck /> {user.is_global_admin ? '전역 관리자 해제' : '전역 관리자 지정'}</button>{user.has_password ? <button disabled={mutationPending || userReadOnly} title={user.must_change_password ? '임시 비밀번호 발급됨 · 아직 새 비밀번호를 정하지 않았습니다' : undefined} onClick={() => void resetPassword(user)}><KeyRound /> 비밀번호 초기화{user.must_change_password ? ' (변경 대기)' : ''}</button> : null}{member ? <span className="access-admin-role-status">{roleLabels[member.role]}</span> : <><select aria-label={`${user.display_name} 프로젝트 역할`} value={selectedRole} disabled={mutationPending || userReadOnly || memberReadOnly || !projectId || user.account_status !== 'ACTIVE' || addingUserId === user.id} onChange={(event) => setPendingRoles((current) => ({ ...current, [user.id]: event.target.value as ProjectRole }))}><option value="">역할 선택</option><option value="general">일반 사용자</option><option value="power">파워 사용자</option><option value="admin">프로젝트 관리자</option></select><button type="button" disabled={mutationPending || userReadOnly || memberReadOnly || !projectId || !selectedRole || user.account_status !== 'ACTIVE' || addingUserId === user.id} onClick={() => void addMember(user, selectedRole as ProjectRole)}>확인</button>{addingUserId === user.id && <LoaderCircle className="spin" aria-label="프로젝트 추가 중" />}</>}</div></article> })}</div></section> : null}
     <section className="access-admin-card"><header><div><span>PROJECT MEMBERS</span><h2>프로젝트 역할 확인</h2><p>역할을 선택해도 저장되지 않습니다. 변경사항을 확인하면 역할이 바뀌고, 취소하면 저장된 역할로 돌아갑니다.</p></div><strong>{members.length}명</strong></header><div className="access-admin-table">{(['general', 'power', 'admin'] as ProjectRole[]).map((role) => { const grouped = members.filter((member) => member.role === role); return <section key={role} aria-label={roleLabels[role]}><header><strong>{roleLabels[role]}</strong><span>{grouped.length}명</span></header>{grouped.length ? grouped.map((member) => { const draftRole = roleDrafts[member.user_id]; const hasRoleChange = Boolean(draftRole && draftRole !== member.role); return <article key={member.user_id}><div><strong>{member.display_name}</strong><span>{member.username} · {member.employee_id || '-'}</span>{hasRoleChange ? <span className="access-admin-role-status" role="status">저장 전: {roleLabels[draftRole!]}</span> : null}</div><div className="access-admin-actions"><label><span className="sr-only">프로젝트 역할</span><select value={draftRole ?? member.role} disabled={mutationPending || memberReadOnly || !projectId} onChange={(event) => setRoleDrafts((current) => ({ ...current, [member.user_id]: event.target.value as ProjectRole }))}><option value="general">일반 사용자</option><option value="power">파워 사용자</option><option value="admin">프로젝트 관리자</option></select></label><button type="button" disabled={mutationPending || memberReadOnly || !projectId || !hasRoleChange} onClick={() => void changeRole(member)}>확인</button><button type="button" disabled={mutationPending || memberReadOnly || !projectId || !draftRole} onClick={() => setRoleDrafts((current) => { const next = { ...current }; delete next[member.user_id]; return next })}>취소</button></div></article> }) : <p>배정된 사용자가 없습니다.</p>}</section> })}</div></section>
   </section>
 }

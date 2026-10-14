@@ -144,6 +144,7 @@ def initialize_database() -> None:
                 "folder_link_reservations": {"root_key", "path_key", "project_id", "request_id", "environment",
                                              "created_by", "created_at", "expires_at"},
                 "drive_connected_account": {"id", "account_hint", "updated_by", "updated_at"},
+                "users": {"must_change_password", "sessions_revoked_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1904,6 +1905,9 @@ def ensure_access_control_schema(
         "approved_by": "VARCHAR",
         "approved_at": "TIMESTAMP",
         "last_login_at": "TIMESTAMP",
+        # Local development equivalent of additive migration 0043 (forced password change).
+        "must_change_password": "BOOLEAN DEFAULT false",
+        "sessions_revoked_at": "TIMESTAMP",
     }
     for column_name, definition in additions.items():
         if column_name not in user_columns:

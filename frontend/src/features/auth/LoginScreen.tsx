@@ -2,6 +2,8 @@ import { useState, type FormEvent } from 'react'
 import { AlertTriangle, Check, LoaderCircle, Lock, Moon, Sun, UserPlus } from 'lucide-react'
 
 import type { RegisterAccountResult } from '../../shared/api/account'
+import { PasswordRules, passwordMeetsRules } from './passwordPolicy'
+import './ChangePasswordForm.css'
 
 type LoginScreenProps = {
   mode: 'password' | 'oidc'
@@ -40,6 +42,10 @@ export function LoginScreen({ mode, error, onLogin, onRegister, registrationEnab
         setLocalError('비밀번호와 확인 비밀번호가 일치하지 않습니다.')
         return
       }
+      if (!passwordMeetsRules(password, username)) {
+        setLocalError('비밀번호가 규칙에 맞지 않습니다. 아래 규칙을 확인하세요.')
+        return
+      }
       setSubmitting(true)
       try {
         const result = await onRegister({ username: username.trim(), display_name: displayName.trim(), password })
@@ -69,9 +75,11 @@ export function LoginScreen({ mode, error, onLogin, onRegister, registrationEnab
       <p>{registerMode ? '개인 계정을 등록하면 전역 관리자의 승인 후 업무 공간을 사용할 수 있습니다.' : mode === 'oidc' ? '회사 인트라넷 계정으로 로그인하세요. 최초 로그인 후 전역 관리자의 승인이 필요합니다.' : '승인된 개인 계정으로 로그인하세요. 처음 방문했다면 회원가입을 신청할 수 있습니다.'}</p>
       {registrationNotice && !registerMode && <div className="login-success" role="status"><Check /> <span>{registrationNotice}<br /><small>승인이 완료되면 이 화면에서 로그인하세요.</small></span></div>}
       {mode === 'password' && registerMode ? <>
-        <label><span>사용자 이름</span><input autoFocus autoComplete="username" minLength={3} maxLength={80} pattern="[A-Za-z0-9._\-]{3,80}" title="영문·숫자·마침표(.)·대시(-)·밑줄(_)을 사용한 3~80자입니다. 한글과 공백은 사용할 수 없습니다." placeholder="영문·숫자·.·-·_ (3~80자)" value={username} onChange={(event) => { setUsername(event.target.value); setLocalError('') }} required /></label>
+        <label><span>아이디 (AD ID)</span><input autoFocus autoComplete="username" minLength={3} maxLength={80} pattern="[A-Za-z0-9._\-]{3,80}" title="회사 AD ID(윈도우 로그인 아이디)를 입력하세요. 영문·숫자·마침표(.)·대시(-)·밑줄(_) 3~80자입니다." placeholder="예: hong.gildong" aria-describedby="register-id-help" value={username} onChange={(event) => { setUsername(event.target.value); setLocalError('') }} required /></label>
+        <small id="register-id-help" className="login-field-help">회사 AD ID(윈도우 로그인 아이디)를 입력하세요. 관리자가 승인할 때 이 아이디로 본인을 확인합니다.</small>
         <label><span>표시 이름</span><input autoComplete="name" maxLength={200} value={displayName} onChange={(event) => { setDisplayName(event.target.value); setLocalError('') }} required /></label>
-        <label><span>비밀번호</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} placeholder="8자 이상" value={password} onChange={(event) => { setPassword(event.target.value); setLocalError('') }} required /></label>
+        <label><span>비밀번호</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} placeholder="8자 이상 · 영문·숫자·특수문자" value={password} onChange={(event) => { setPassword(event.target.value); setLocalError('') }} required /></label>
+        <PasswordRules password={password} username={username} />
         <label><span>비밀번호 확인</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} value={confirmation} onChange={(event) => { setConfirmation(event.target.value); setLocalError('') }} required /></label>
       </> : mode === 'password' ? <>
         <label><span>사용자 이름</span><input autoFocus autoComplete="username" value={username} onChange={(event) => { setUsername(event.target.value); setLocalError('') }} required /></label>

@@ -54,6 +54,7 @@ import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfo
 import { ReportExportDialog } from './features/reports/ReportExportDialog'
 import { useReportExportController } from './features/reports/useReportExportController'
 import { ApprovalPendingScreen, AuthStatusErrorScreen, LoginScreen, ServerSetupScreen } from './features/auth/LoginScreen'
+import { ForcedPasswordChangeScreen } from './features/auth/ForcedPasswordChangeScreen'
 import { useAuthSession } from './features/auth/useAuthSession'
 import { accountApi } from './shared/api/account'
 import { hasPermission, isPersonalOnlyAccount, visibleMenuItems, type MenuId, type MenuPolicy } from './features/auth/access'
@@ -868,6 +869,7 @@ function App() {
   if (authRequired && !authUser) {
     return <LoginScreen mode={authMode === 'oidc' ? 'oidc' : 'password'} error={authError} onLogin={handleLogin} onRegister={accountApi.register} registrationEnabled={registrationEnabled} theme={theme} onThemeChange={setTheme} />
   }
+  if (authUser?.must_change_password) return <ForcedPasswordChangeScreen username={authUser.username} onLogout={() => void logout()} />
   if (authUser?.account_status === 'PENDING') {
     return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />
   }

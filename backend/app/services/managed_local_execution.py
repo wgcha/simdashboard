@@ -207,6 +207,8 @@ def _authenticate_session(conn: ConnectionLike, binding_id: str, user_id: str, s
         raise _error(403, "ACCOUNT_NOT_ACTIVE", str(exc)) from exc
     if principal.account_status != "ACTIVE":
         raise _error(403, "ACCOUNT_NOT_ACTIVE", "활성 계정만 관리형 PC를 사용할 수 있습니다.")
+    if principal.must_change_password:
+        raise _error(403, "PASSWORD_CHANGE_REQUIRED", "비밀번호가 초기화되어 새 비밀번호를 설정해야 합니다.")
     return principal
 
 

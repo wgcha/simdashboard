@@ -2,9 +2,14 @@ import { useState, type FormEvent } from 'react'
 import { AlertTriangle, Check, KeyRound, LoaderCircle } from 'lucide-react'
 
 import { accountApi } from '../../shared/api/account'
+import { PasswordRules, passwordMeetsRules } from './passwordPolicy'
 import './ChangePasswordForm.css'
 
-export function ChangePasswordForm() {
+/**
+ * ``forced`` (administrator reset, 2026-10-14): the current password is the temporary one, and
+ * ``onChanged`` lets the caller continue into the dashboard once the new password is saved.
+ */
+export function ChangePasswordForm({ forced = false, username = '', onChanged }: { forced?: boolean; username?: string; onChanged?: () => void } = {}) {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
@@ -24,6 +29,10 @@ export function ChangePasswordForm() {
       setError('현재 비밀번호와 새 비밀번호를 입력하세요.')
       return
     }
+    if (!passwordMeetsRules(newPassword, username)) {
+      setError('새 비밀번호가 규칙에 맞지 않습니다. 아래 규칙을 확인하세요.')
+      return
+    }
     setBusy(true)
     try {
       await accountApi.changePassword({ current_password: currentPassword, new_password: newPassword })
@@ -31,6 +40,7 @@ export function ChangePasswordForm() {
       setNewPassword('')
       setConfirmation('')
       setNotice('비밀번호를 변경했습니다.')
+      onChanged?.()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '비밀번호를 변경하지 못했습니다.')
     } finally {
@@ -40,11 +50,12 @@ export function ChangePasswordForm() {
 
   return <section className="change-password-form" aria-labelledby="change-password-heading">
     <header>
-      <div><span className="change-password-eyebrow"><KeyRound aria-hidden="true" /> ACCOUNT SECURITY</span><h2 id="change-password-heading">비밀번호 변경</h2><p>현재 비밀번호를 확인한 뒤 새 비밀번호로 변경합니다.</p></div>
+      <div><span className="change-password-eyebrow"><KeyRound aria-hidden="true" /> ACCOUNT SECURITY</span><h2 id="change-password-heading">{forced ? '새 비밀번호 설정' : '비밀번호 변경'}</h2><p>{forced ? '관리자가 비밀번호를 초기화했습니다. 전달받은 임시 비밀번호를 현재 비밀번호에 입력하고 새 비밀번호를 정하세요.' : '현재 비밀번호를 확인한 뒤 새 비밀번호로 변경합니다.'}</p></div>
     </header>
     <form onSubmit={submit}>
-      <label><span>현재 비밀번호</span><input type="password" autoComplete="current-password" maxLength={256} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required disabled={busy} /></label>
-      <label><span>새 비밀번호</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} placeholder="8자 이상" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required disabled={busy} /></label>
+      <label><span>{forced ? '임시 비밀번호' : '현재 비밀번호'}</span><input type="password" autoComplete="current-password" maxLength={256} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required disabled={busy} /></label>
+      <label><span>새 비밀번호</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} placeholder="8자 이상 · 영문·숫자·특수문자" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required disabled={busy} /></label>
+      <PasswordRules password={newPassword} username={username} />
       <label><span>새 비밀번호 확인</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required disabled={busy} /></label>
       {error && <p className="change-password-feedback error" role="alert"><AlertTriangle aria-hidden="true" />{error}</p>}
       {notice && <p className="change-password-feedback success" role="status"><Check aria-hidden="true" />{notice}</p>}

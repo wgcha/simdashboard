@@ -72,7 +72,9 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert reservations and reservations.down_revision == "0040_notifications"
     connected_account = script.get_revision("0042_drive_connected_account")
     assert connected_account and connected_account.down_revision == "0041_folder_link_reservations"
-    assert tuple(script.get_heads()) == ("0042_drive_connected_account",)
+    password_change = script.get_revision("0043_password_change_required")
+    assert password_change and password_change.down_revision == "0042_drive_connected_account"
+    assert tuple(script.get_heads()) == ("0043_password_change_required",)
 
 
 def test_result_location_links_migration_widens_alembic_version_before_other_ddl(monkeypatch: pytest.MonkeyPatch) -> None:

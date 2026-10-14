@@ -19,6 +19,7 @@
 | Folder Schema 위치·Refresh | [공용 위치·Refresh 계약](features/folder-schema-refresh.md) | 결과 등록은 [현재 결과 등록 계약](features/result-registration.md), 배포 영향은 [Windows 배포 정책](windows-deployment-policy.md) |
 | 폴더 역할(깊이 스키마)·자동 탐색·등록 삭제 | [깊이 스키마 계약](contracts/depth-schema.md) | 결정 이력은 [결정 기록](decisions.md), 결과 화면 환경 판정은 [환경 자동 판정 계약](contracts/case-results-environment.md), 의뢰 진척은 [폴더 진척 계약](contracts/folder-request-progress.md), 저장소 접근은 [저장소 공급자 계약](contracts/storage-provider.md) |
 | Working/Final·규칙 편집·최종확정 | [최종확정 계약](features/case-finalization.md), [현재 구현 계획](plans/folder-schema-working-final-implementation.md) | 위치 정본은 [공용 위치 계약](features/folder-schema-refresh.md) |
+| 비밀번호 계정(AD ID 안내·비밀번호 규칙·관리자 초기화) | [비밀번호 계정 안내](features/password-accounts.md) | 권한 전반은 [권한 구현 가이드](access-control-and-menu-policy-implementation-guide.md) |
 | 계정·프로젝트 권한 | [권한 구현 가이드](access-control-and-menu-policy-implementation-guide.md) | 동작 요구는 [권한 명세](access-control-functional-specification.md) |
 | DB·migration·저장 경로 | [DB 통합 가이드](backend-sql-integration-guide.md), [저장 경로 계약](storage-folder-and-file-contract.md) | 현재 구성은 [아키텍처](current-architecture.md), 배포 영향은 [배포 정책](windows-deployment-policy.md) |
 | 미완료 개발 계획 | [현재 계획 목록](plans/README.md) | 계획 문서가 요구할 때만 관련 기능·정책 문서를 확인 |

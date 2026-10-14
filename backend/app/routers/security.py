@@ -327,6 +327,7 @@ def current_user(request: Request) -> dict[str, Any]:
         "employee_id": principal.employee_id,
         "account_status": principal.account_status,
         "is_global_admin": principal.is_global_admin,
+        "must_change_password": principal.must_change_password,
         "memberships": memberships,
         "company_permissions": sorted(COMPANY_PERMISSIONS),
         # One-release compatibility field; frontends use the new fields above.
@@ -365,7 +366,8 @@ def list_users(
                 f"""
                 SELECT id, username, display_name, employee_id, email, department, job_title,
                        account_status, is_global_admin, legacy_role, is_active,
-                       approved_by, approved_at, last_login_at, created_at, updated_at
+                       approved_by, approved_at, last_login_at, created_at, updated_at,
+                       password_hash IS NOT NULL AS has_password, must_change_password
                 FROM users {where} ORDER BY id LIMIT ?
                 """,
                 parameters,

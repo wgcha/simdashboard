@@ -18,7 +18,7 @@ test('개인 회원가입 신청 후 관리자 승인 안내와 로그인 화면
   await page.goto('/')
   await page.getByRole('button', { name: '개인 회원가입', exact: true }).click()
   await expect(page.getByRole('heading', { name: '개인 회원가입', exact: true })).toBeVisible()
-  await page.getByLabel('사용자 이름').fill('e2e-personal-user')
+  await page.getByLabel('아이디 (AD ID)').fill('e2e-personal-user')
   await page.getByLabel('표시 이름').fill('E2E 개인 사용자')
   const password = page.getByLabel('비밀번호', { exact: true })
   await expect(password).toHaveAttribute('minlength', '8')
@@ -27,13 +27,20 @@ test('개인 회원가입 신청 후 관리자 승인 안내와 로그인 화면
   await page.getByRole('button', { name: '회원가입 신청', exact: true }).click()
   expect(await password.evaluate((element: HTMLInputElement) => element.validity.tooShort)).toBe(true)
   expect(registration).toBeUndefined()
-  await password.fill('test1234')
-  await page.getByLabel('비밀번호 확인').fill('test1234')
+  // Policy (2026-10-14): letters, digits and a special character; rules are shown and checked first.
+  await password.fill('test12345')
+  await page.getByLabel('비밀번호 확인').fill('test12345')
+  await expect(page.getByTestId('password-rules')).toContainText('특수문자 포함')
+  await page.getByRole('button', { name: '회원가입 신청', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('규칙')
+  expect(registration).toBeUndefined()
+  await password.fill('Test-1234')
+  await page.getByLabel('비밀번호 확인').fill('Test-1234')
   await page.getByRole('button', { name: '회원가입 신청', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: '회원 로그인', exact: true })).toBeVisible()
   await expect(page.getByRole('status')).toContainText('가입 신청이 접수되었습니다.')
-  expect(registration).toEqual({ username: 'e2e-personal-user', display_name: 'E2E 개인 사용자', password: 'test1234' })
+  expect(registration).toEqual({ username: 'e2e-personal-user', display_name: 'E2E 개인 사용자', password: 'Test-1234' })
 })
 
 test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로그인을 완료한다', async ({ page, browser }) => {
@@ -49,8 +56,8 @@ test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로
 
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
   const username = `e2e-account-${suffix}`
-  const oldPassword = 'old12345'
-  const newPassword = 'new12345'
+  const oldPassword = 'Old-12345'
+  const newPassword = 'New-12345'
   await page.route('http://127.0.0.1:8766/**', (route) => route.abort('connectionrefused'))
   await page.goto('/')
   await page.getByRole('button', { name: '개인 회원가입', exact: true }).click()
@@ -61,7 +68,7 @@ test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
   await page.screenshot({ path: path.join(evidence, 'personal-signup-mobile.png') })
   await page.setViewportSize({ width: 1440, height: 960 })
-  await page.getByLabel('사용자 이름').fill(username)
+  await page.getByLabel('아이디 (AD ID)').fill(username)
   await page.getByLabel('표시 이름').fill(`E2E ${suffix}`)
   await page.getByLabel('비밀번호', { exact: true }).fill(oldPassword)
   await page.getByLabel('비밀번호 확인').fill(oldPassword)

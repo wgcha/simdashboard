@@ -1,0 +1,8 @@
+/* One-time temporary password after [비밀번호 초기화] (2026-10-14). */
+.access-admin-temp-password { display: flex; align-items: flex-start; gap: var(--space-2, 8px); margin: 0 0 var(--space-3, 12px); padding: var(--space-3, 12px); border: 1px solid var(--color-warning-border, #d97706); border-radius: var(--radius-md, 8px); background: var(--color-warning-surface, rgba(217, 119, 6, .08)); }
+.access-admin-temp-password > svg { width: 20px; height: 20px; flex: none; color: var(--color-warning-text, #b45309); }
+.access-admin-temp-password > div { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.access-admin-temp-password code { width: fit-content; padding: 4px 8px; border-radius: 4px; background: var(--color-surface-raised, #fff); color: var(--color-text-strong, #111); font: 700 16px var(--font-mono, monospace); letter-spacing: .5px; user-select: all; }
+.access-admin-temp-password span { color: var(--color-text-muted, #6b7280); font-size: 12px; }
+.access-admin-temp-password button { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+.access-admin-temp-password button svg { width: 15px; height: 15px; }

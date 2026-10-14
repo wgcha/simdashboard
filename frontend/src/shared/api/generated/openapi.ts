@@ -174,6 +174,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/users/{user_id}/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Password
+         * @description [비밀번호 초기화] (2026-10-14): a one-time temporary password, returned once, and a forced change.
+         *
+         *     Only the hash is stored; the temporary password is never logged or audited. The account must
+         *     set a new password (policy) before any other API works (``PASSWORD_CHANGE_REQUIRED``).
+         */
+        post: operations["reset_password_api_admin_users__user_id__password_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/local-helper/distribution": {
         parameters: {
             query?: never;
@@ -7035,6 +7058,16 @@ export interface components {
              */
             ok: true;
         };
+        /** PasswordResetRequest */
+        PasswordResetRequest: {
+            /**
+             * Expected Updated At
+             * Format: date-time
+             */
+            expected_updated_at: string;
+            /** Reason */
+            reason: string;
+        };
         /** PendingReviewItems */
         PendingReviewItems: {
             /** Count */
@@ -9065,6 +9098,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PasswordChangeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_password_api_admin_users__user_id__password_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

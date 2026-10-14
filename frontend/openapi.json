@@ -413,6 +413,61 @@
         }
       }
     },
+    "/api/admin/users/{user_id}/password-reset": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Reset Password",
+        "description": "[비밀번호 초기화] (2026-10-14): a one-time temporary password, returned once, and a forced change.\n\nOnly the hash is stored; the temporary password is never logged or audited. The account must\nset a new password (policy) before any other API works (``PASSWORD_CHANGE_REQUIRED``).",
+        "operationId": "reset_password_api_admin_users__user_id__password_reset_post",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Reset Password Api Admin Users  User Id  Password Reset Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/local-helper/distribution": {
       "get": {
         "tags": [
@@ -21305,6 +21360,28 @@
           "ok"
         ],
         "title": "PasswordChangeResponse"
+      },
+      "PasswordResetRequest": {
+        "properties": {
+          "expected_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expected Updated At"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 2,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_updated_at",
+          "reason"
+        ],
+        "title": "PasswordResetRequest"
       },
       "PendingReviewItems": {
         "properties": {

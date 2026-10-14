@@ -42,8 +42,8 @@ def test_password_registration_requires_admin_approval_and_supports_password_cha
             [f"bootstrap-{suffix}", f"bootstrap-{suffix}", hash_password("bootstrap-admin-password"), "Bootstrap", now, now],
         )
     username = f"member-{suffix}".ljust(80, 'a')
-    initial_password = " initial password is long enough "
-    replacement_password = "new12345"
+    initial_password = " initial pass1 is long enough! "
+    replacement_password = "New-12345"
 
     with TestClient(app) as client:
         assert client.get("/api/auth/status").json()["registration_enabled"] is True
@@ -120,7 +120,7 @@ def test_password_registration_requires_admin_approval_and_supports_password_cha
         assert client.post(
             "/api/auth/password",
             headers=headers,
-            json={"current_password": initial_password, "new_password": "another replacement password"},
+            json={"current_password": initial_password, "new_password": "another-replacement-9!"},
         ).status_code == 400
         assert client.post("/api/auth/login", json={"username": username, "password": initial_password}).status_code == 401
         assert client.post("/api/auth/login", json={"username": username, "password": replacement_password}).status_code == 200

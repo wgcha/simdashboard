@@ -155,7 +155,7 @@ type ImportResultsResponse = {
 }
 
 type FolderImportResponse = { status: 'IMPORTED'; job_id: string; run_id: string; run_no: number; schema_id: string; summary: { scalar_count: number; curve_count: number; media_count: number } }
-type AdminUser = { id: string; username: string; display_name: string; employee_id: string | null; account_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED'; is_global_admin: boolean; updated_at: string }
+type AdminUser = { id: string; username: string; display_name: string; employee_id: string | null; account_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED'; is_global_admin: boolean; updated_at: string; has_password?: boolean; must_change_password?: boolean }
 type ProjectMember = { user_id: string; username: string; display_name: string; employee_id: string | null; role: ProjectRole; updated_at: string }
 type MenuPolicyVersion = { version: number; created_by: string; created_at: string; source_version: number | null; change_note: string | null }
 type DashboardMutation = { status: string; version: number; updated_at: string }
@@ -327,6 +327,9 @@ export const api = {
     adaptMutationResult(unwrapGenerated(await apiClient.PATCH('/api/admin/users/{user_id}/status', { params: { path: { user_id: userId } }, body: payload })), 'updateUserStatus'),
   updateGlobalAdmin: async (userId: string, payload: { is_global_admin: boolean; expected_updated_at: string; reason: string }) =>
     adaptMutationResult(unwrapGenerated(await apiClient.PATCH('/api/admin/users/{user_id}/global-admin', { params: { path: { user_id: userId } }, body: payload })), 'updateGlobalAdmin'),
+  /** [비밀번호 초기화] (2026-10-14): the one-time temporary password is returned once; never store it. */
+  resetUserPassword: async (userId: string, payload: { expected_updated_at: string; reason: string }) =>
+    validatedRecord(unwrapGenerated(await apiClient.POST('/api/admin/users/{user_id}/password-reset', { params: { path: { user_id: userId } }, body: payload })), 'resetUserPassword', ['temporary_password']) as { temporary_password: string; updated_at: string | null },
   projectMembers: async (projectId: string, signal?: AbortSignal) => adaptProjectMembers(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/members', { params: { path: { project_id: projectId } }, signal }))),
   createProjectMember: async (projectId: string, userId: string, role: ProjectRole) =>
     unwrapGenerated(await apiClient.POST('/api/projects/{project_id}/members', { params: { path: { project_id: projectId } }, body: { user_id: userId, role } })),
