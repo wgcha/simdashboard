@@ -10,9 +10,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 backend/.pytest-tmp/
-backend/data/*.duckdb
-backend/data/*.wal
-backend/data/migration-*.json
+# Runtime data only (DuckDB, migration notes, drive worker cache backend/data/scx-worker/ …); nothing here is tracked.
+# An untracked file here would stop update.bat's clean-worktree check (issue #52, 2026-10-14).
+/backend/data/
 backend/backups/
 /backups/
 backend/.postgres-test/
