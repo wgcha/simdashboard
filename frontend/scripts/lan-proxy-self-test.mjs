@@ -52,7 +52,7 @@ async function getFreePort() {
   return port
 }
 
-function startVite(frontendPort, backendPort, basePath) {
+function startVite(frontendPort, backendPort, basePath, physicsAiPort) {
   const viteProcess = spawn(process.execPath, [viteBin, '--host', '0.0.0.0', '--port', String(frontendPort), '--strictPort', '--configLoader', 'runner'], {
     cwd: frontendDir,
     env: {
@@ -60,6 +60,7 @@ function startVite(frontendPort, backendPort, basePath) {
       VITE_API_TARGET: `http://127.0.0.1:${backendPort}`,
       ...(basePath ? { VITE_APP_BASE_PATH: basePath } : { VITE_APP_BASE_PATH: '' }),
       VITE_ALLOWED_HOSTS: 'explicit-lan-test.local',
+      VITE_PHYSICSAI_TARGET: physicsAiPort ? `http://127.0.0.1:${physicsAiPort}` : '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -67,6 +68,12 @@ function startVite(frontendPort, backendPort, basePath) {
   viteProcess.stdout.on('data', (chunk) => { output += chunk.toString() })
   viteProcess.stderr.on('data', (chunk) => { output += chunk.toString() })
   return { process: viteProcess, get output() { return output } }
+}
+
+// PhysicsAI stub: echoes the forwarded path, cookie and forwarding headers.
+function physicsAiRequest(req, res) {
+  res.writeHead(200, { 'content-type': 'application/json' })
+  res.end(JSON.stringify({ via: 'physicsai-stub', url: req.url, cookie: req.headers.cookie ?? null, forwardedFor: req.headers['x-forwarded-for'] ?? null, realIp: req.headers['x-real-ip'] ?? null }))
 }
 
 function request(req, res) {
@@ -105,11 +112,13 @@ async function main() {
   if (!existsSync(viteBin)) throw new Error(`Vite was not found: ${viteBin}`)
 
   const backend = http.createServer(request)
+  const physicsAiBackend = http.createServer(physicsAiRequest)
   const viteProcesses = []
   try {
     const backendPort = await listen(backend, '127.0.0.1')
     const frontendPort = await getFreePort()
-    const baseVite = startVite(frontendPort, backendPort, '/home/')
+    const physicsAiPort = await listen(physicsAiBackend, '127.0.0.1')
+    const baseVite = startVite(frontendPort, backendPort, '/home/', physicsAiPort)
     viteProcesses.push(baseVite.process)
 
     const origin = `http://${lanAddress}:${frontendPort}`
@@ -143,6 +152,15 @@ async function main() {
     const asset = await fetch(`${origin}/assets/lan-proxy.txt`)
     if (!asset.ok || (await asset.text()) !== 'asset-through-proxy') throw new Error('LAN /assets proxy did not reach the loopback backend')
 
+    // /physicsai is a root path next to /home/: forwarded unchanged with cookies, spoofable headers removed.
+    for (const path of ['/physicsai', '/physicsai/', '/physicsai/api/health?x=1']) {
+      const response = await fetch(`${origin}${path}`, { headers: { cookie: 'analysis_canvas_session=lan-test', 'x-forwarded-for': '6.6.6.6', 'x-real-ip': '6.6.6.6' } })
+      const body = response.ok ? await response.json() : null
+      if (body?.via !== 'physicsai-stub' || body.url !== path) throw new Error(`LAN /physicsai proxy did not forward ${path} unchanged`)
+      if (body.cookie !== 'analysis_canvas_session=lan-test') throw new Error('LAN /physicsai proxy did not forward the session cookie')
+      if (body.realIp !== null || (body.forwardedFor ?? '').includes('6.6.6.6')) throw new Error('LAN /physicsai proxy forwarded client-supplied forwarding headers')
+    }
+
     const defaultFrontendPort = await getFreePort()
     const defaultVite = startVite(defaultFrontendPort, backendPort)
     viteProcesses.push(defaultVite.process)
@@ -151,12 +169,15 @@ async function main() {
     if (!defaultPage.ok || !(await defaultPage.text()).includes('<title>')) throw new Error('LAN default root route did not return the Vite page')
     const defaultNestedPage = await fetch(`${defaultOrigin}/workspace/data`)
     if (!defaultNestedPage.ok || !(await defaultNestedPage.text()).includes('<title>')) throw new Error('LAN default nested route did not return the Vite page')
+    const unproxied = await fetch(`${defaultOrigin}/physicsai/`)
+    if ((await unproxied.text()).includes('physicsai-stub')) throw new Error('LAN /physicsai proxy must be absent without VITE_PHYSICSAI_TARGET')
 
-    console.log(`LAN proxy self-test passed via ${lanAddress}:${frontendPort} (base /home/ and default /; backend loopback 127.0.0.1:${backendPort})`)
+    console.log(`LAN proxy self-test passed via ${lanAddress}:${frontendPort} (base /home/ and default /; backend loopback 127.0.0.1:${backendPort}; /physicsai stub)`)
     for (const vite of [baseVite, defaultVite]) if (vite.output.includes('error')) console.warn(vite.output)
   } finally {
     for (const viteProcess of viteProcesses) if (!viteProcess.killed) viteProcess.kill()
     await new Promise((resolvePromise) => backend.close(() => resolvePromise()))
+    await new Promise((resolvePromise) => physicsAiBackend.close(() => resolvePromise()))
   }
 }
 

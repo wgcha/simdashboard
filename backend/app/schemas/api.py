@@ -233,6 +233,13 @@ class SelectionContextResponse(BaseModel):
     name: str
 
 
+class PhysicsAiLinkResponse(BaseModel):
+    """PhysicsAI 연동 링크 표시 상태(사이드바 "AI 예측")."""
+
+    enabled: bool
+    base_path: str
+
+
 class SelectionMetadataResponse(BaseModel):
     code: str | None = None
     name: str

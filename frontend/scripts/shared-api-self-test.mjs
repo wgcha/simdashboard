@@ -4,6 +4,7 @@ import { folderProgressPath, folderProgressStatusLabel, normalizeFolderProgress 
 import { folderDefaultEnvironment, keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
 import { chunkRanges, depthRules, dropEntries, dropGuide, entryRelativePath, formatBytes as dropBytes, pickedFromInput, walkEntries } from '../src/shared/api/resultDropModel.ts'
 import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, setDepthRole, sumDeleteCounts, validateLowerLevels, validateUpperLevels } from '../src/shared/api/depthSchemaModel.ts'
+import { normalizePhysicsAiLink, physicsAiNavHref, PHYSICSAI_LINK_OFF } from '../src/shared/api/physicsaiLinkModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
 const validationMessage = apiErrorMessage(validation, '요청 실패 (422)')
@@ -118,5 +119,14 @@ assert(depthRules(distributionRoles).some((rule) => rule.text === 'Run Option �
 assert(JSON.stringify(chunkRanges(10, 4)) === '[[0,4],[4,8],[8,10]]' && JSON.stringify(chunkRanges(10, 4, 4)) === '[[4,8],[8,10]]', 'chunks resume from the offset')
 assert(JSON.stringify(chunkRanges(0, 4)) === '[[0,0]]' && chunkRanges(4, 4, 4).length === 0, 'empty files send one empty chunk')
 assert(dropBytes(512) === '512 B' && dropBytes(1536) === '1.5 KB' && dropBytes(3 * 1024 ** 3) === '3.0 GB', 'byte formatting')
+
+// PhysicsAI "AI 예측" sidebar link: off by default, same-origin root path, hidden when signed out.
+assert(normalizePhysicsAiLink(null).enabled === false && normalizePhysicsAiLink({ enabled: 'true' }).enabled === false, 'unknown link payload must be off')
+assert(normalizePhysicsAiLink({ enabled: true, base_path: 'https://evil.example/' }).basePath === '/physicsai/', 'base path must stay same-origin')
+assert(normalizePhysicsAiLink({ enabled: true, base_path: '//evil.example/x' }).basePath === '/physicsai/', 'protocol-relative base path must be rejected')
+assert(physicsAiNavHref(PHYSICSAI_LINK_OFF, true) === null, 'flag off must hide the sidebar link')
+assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: false, base_path: '/physicsai/' }), true) === null, 'server flag off must hide the sidebar link')
+assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: true, base_path: '/physicsai/' }), true) === '/physicsai/', 'flag on must show the sidebar link at /physicsai/')
+assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: true, base_path: '/physicsai/' }), false) === null, 'signed-out sidebar must hide the link')
 
 console.log('Shared API self-test passed.')

@@ -8391,6 +8391,25 @@
         }
       }
     },
+    "/api/integrations/physicsai": {
+      "get": {
+        "summary": "Get Physicsai Link",
+        "description": "PhysicsAI \"AI 예측\" 링크 표시 상태(``SIMDASH_PHYSICSAI_ENABLED``, 기본 off).",
+        "operationId": "get_physicsai_link_api_integrations_physicsai_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicsAiLinkResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/import-schemas": {
       "get": {
         "summary": "List Import Schemas",
@@ -21672,6 +21691,25 @@
           "available"
         ],
         "title": "PendingReviewItems"
+      },
+      "PhysicsAiLinkResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "base_path": {
+            "type": "string",
+            "title": "Base Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "base_path"
+        ],
+        "title": "PhysicsAiLinkResponse",
+        "description": "PhysicsAI 연동 링크 표시 상태(사이드바 \"AI 예측\")."
       },
       "PrepareFoldersInput": {
         "properties": {
