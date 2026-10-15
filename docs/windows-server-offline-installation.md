@@ -63,6 +63,10 @@
 
 ## 빌드 담당자
 
+**GitHub에서 빌드 (2026-10-15부터 기본)**: `.github/workflows/windows-offline-bundle.yml`이 `claude/scx-drive`·`main`에 커밋이 올라갈 때마다(또는 Actions에서 수동 실행) Windows Server 2022 러너에서 아래 vendor 구성을 고정 버전으로 준비하고 `build-offline-bundle.ps1`을 실행해 ZIP·EXE·SHA-256을 Artifacts로 올린다(14일 보관). 고정 입력: 프로젝트 uv CPython(`.python-version`), `backend/requirements.lock`의 Windows wheel, EDB PostgreSQL Windows 바이너리(기본 `18.0-1`, 수동 실행 입력으로 변경), Caddy 2.8.4, WinSW v2.12.0(.NET 4.6.1 빌드), Microsoft VC++ 런타임. 소스 배포 서버를 이 방식으로 옮기는 절차는 [소스 배포 → 설치 패키지 전환](windows-source-to-offline-migration.md).
+
+아래는 빌드 PC에서 직접 만드는 방법이다.
+
 외부 Windows x64 PC에서 소스를 준비한다. `deploy.bat`로 소스 실행을 검증한 후, 또는 전용 빌드 환경에서 고정 Node/Python과 패키지 캐시를 준비한다. 운영 DB·`.env`·첨부파일을 패키지에 넣지 않는다.
 
 공식 배포처에서 확보한 런타임을 다음 구조로 준비한다. Python은 `.python-version`과 같은 전체 portable 배포판이며 `venv`와 `pip`를 포함해야 한다. Python embed ZIP만으로 대체하지 않는다.

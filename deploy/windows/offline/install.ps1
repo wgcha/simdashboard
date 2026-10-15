@@ -551,6 +551,14 @@ try {
     New-Item -ItemType Directory -Path $assets, $logs -Force | Out-Null
     Set-PrivateAcl $assets $serviceAccount -Recurse; Set-PrivateAcl $logs $serviceAccount -Recurse
     Set-EnvValue $stateEnv 'SIMDASH_ASSETS_ROOT' $assets
+    # SCX drive worker (download cache and upload staging, 2026-10-15): keep it in state so a
+    # new release never discards queued uploads.  An operator-chosen absolute path is kept.
+    if (-not (Get-EnvValue $stateEnv 'SIMDASH_SCX_WORK_DIR')) {
+        $scxWork = Join-Path $StateRoot 'scx-worker'
+        New-Item -ItemType Directory -Path $scxWork -Force | Out-Null
+        Set-PrivateAcl $scxWork $serviceAccount -Recurse
+        Set-EnvValue $stateEnv 'SIMDASH_SCX_WORK_DIR' $scxWork
+    }
     $phase = 'stop-services'
     Stop-ManagedServices
     $appStopped = $true
