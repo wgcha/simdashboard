@@ -32,6 +32,7 @@ BASE = "/api/admin/drive/auth/device"
 
 @pytest.fixture
 def device_drive(monkeypatch, scx_env):
+    monkeypatch.setenv("SIMDASH_DRIVE_DEVICE_LOGIN", "true")
     drive = MemoryDrive()
     drive.add_dir("SPDM/Projects/check")
     monkeypatch.setitem(sys.modules, "scx_drive_adapter", make_fake_adapter_module(drive))
@@ -226,7 +227,23 @@ def test_unsafe_or_missing_codes_from_the_adapter(device_drive, password_auth):
         assert bad.status_code == 502 and bad.json()["detail"]["code"] == "DRIVE_INTERNAL"
 
 
+def test_code_login_is_off_by_default(monkeypatch, scx_env, password_auth):
+    drive = MemoryDrive()
+    drive.add_dir("SPDM/Projects/check")
+    monkeypatch.setitem(sys.modules, "scx_drive_adapter", make_fake_adapter_module(drive))
+    drive_auth.reset_state()
+    with _client() as client:
+        admin = _login(client, "drive-admin")
+        status = client.get("/api/admin/drive/auth", headers=admin).json()
+        assert status["capabilities"]["device"] is True and status["device_login_allowed"] is False
+        refused = client.post(f"{BASE}/start", headers=admin)
+        assert refused.status_code == 409 and refused.json()["detail"]["code"] == "DRIVE_DEVICE_LOGIN_DISABLED"
+    assert not [call for call in drive.auth_calls if call[0].startswith("device_login")]
+    drive_auth.reset_state()
+
+
 def test_adapters_without_code_login(monkeypatch, scx_env, password_auth):
+    monkeypatch.setenv("SIMDASH_DRIVE_DEVICE_LOGIN", "true")
     drive = MemoryDrive()
     drive.add_dir("SPDM/Projects/check")
     drive.auth_caps = {"refresh": True, "password": False, "mfa": False}

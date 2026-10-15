@@ -230,11 +230,32 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
 
         <section className="drive-admin-section" aria-labelledby="drive-token-title">
           <h3 id="drive-token-title"><ShieldCheck aria-hidden="true" /> 공용 계정 토큰</h3>
-          <p className="drive-admin-note">관리자 PC에서 <code>python -m scx_drive_adapter login --server {status.server_url}</code>을 실행해 출력된 JSON 전체를 붙여 넣으세요. 토큰은 암호화해 저장하며 화면에 다시 표시하지 않습니다.</p>
+          {/* 2026-10-16: the shared account is connected with the adapter CLI (browser + activation code)
+              and the token JSON it writes; no ID/password is entered in the dashboard. */}
+          <ol className="drive-token-steps" data-testid="drive-token-steps">
+            <li>어댑터가 설치된 PC(서버 PC 등)에서 워커 런타임 Python으로 실행합니다.
+              <code>python -m scx_drive_adapter login --server {status.server_url} --out token.json</code>
+              <small>예: <code>C:\SimDashboard\scx-runtime\venv\Scripts\python.exe</code></small></li>
+            <li>열린 브라우저(또는 표시된 주소)에서 <strong>공용 계정</strong>으로 로그인하고 활성화 코드를 승인합니다. 개인 계정으로 로그인된 브라우저면 개인 계정 토큰이 만들어집니다.</li>
+            <li>만들어진 <code>token.json</code>을 아래 [파일에서 불러오기]로 고르거나 내용을 붙여 넣고 [토큰 등록]을 누릅니다.</li>
+          </ol>
+          <p className="drive-admin-note">토큰은 암호화해 저장하며 화면에 다시 표시하지 않습니다. 등록 뒤 <code>token.json</code> 파일은 지우세요.</p>
           <textarea aria-label="토큰 JSON" value={bundleText} spellCheck={false} autoComplete="off" rows={4} disabled={Boolean(busy)}
             placeholder='{"server_url": "...", "access_token": "...", "refresh_token": "...", "obtained_at": "...", "account_hint": "..."}'
             onChange={(event) => setBundleText(event.target.value)} />
           <div className="drive-admin-actions">
+            <label className="drive-token-file">
+              <input type="file" accept=".json,application/json" aria-label="token.json 파일" disabled={Boolean(busy)} data-testid="drive-token-file"
+                onChange={(event) => {
+                  const input = event.currentTarget
+                  const file = input.files?.[0]
+                  input.value = ''
+                  if (!file) return
+                  if (file.size > 64 * 1024) { setError('token.json 파일이 너무 큽니다(64 KB 이하).'); return }
+                  void file.text().then((text) => { setBundleText(text.trim()); setMessage('') })
+                }} />
+              <span className="button ghost">파일에서 불러오기</span>
+            </label>
             <Button variant="primary" disabled={Boolean(busy) || !bundleText.trim()} onClick={() => void run('토큰 등록', async () => {
               let saved
               try { saved = await driveApi.registerCredentials(bundleText) } catch (reason) {

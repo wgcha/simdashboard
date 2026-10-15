@@ -973,7 +973,8 @@ def auth_status(request: Request) -> DriveAuthStatus:
         last_error_at=memory["last_error_at"] or health.get("last_error_at"),
         password_login=settings.password_login, password_login_allowed=blocked is None and supported and caps["password"],
         password_login_blocked=blocked, attempts_left=left, max_attempts=settings.login_max_attempts,
-        locked_until=_stamp(locked_until), device_login_allowed=supported and caps.get("device", False),
+        locked_until=_stamp(locked_until),
+        device_login_allowed=settings.device_login and supported and caps.get("device", False),
         device_login=drive_device.current(),
     )
 
@@ -1191,7 +1192,9 @@ def _device_audit(request: Request, action: str, status: int, result: str, recei
 def device_login_start(request: Request) -> DriveDeviceLogin:
     """[코드로 로그인]: the adapter issues an activation code; a waiting one is reused."""
     _require_admin(request)
-    _require_scx()
+    if not _require_scx().device_login:
+        raise _fail(409, "DRIVE_DEVICE_LOGIN_DISABLED",
+                    "코드 로그인이 꺼져 있습니다(SIMDASH_DRIVE_DEVICE_LOGIN). 공용 계정 토큰 등록을 사용하세요.")
     try:
         view, created = drive_device.start(request.state.principal.user_id)
     except drive_auth.DriveAuthError as error:

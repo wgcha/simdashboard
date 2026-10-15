@@ -66,6 +66,9 @@ class DriveSettings:
     blob_max_bytes: int = 100 * 1024 ** 3
     # Issue #50 (docs/plans/scx-drive-relogin-spec.md §3.1): account login from the reconnect dialog.
     password_login: PasswordLoginMode = "https_only"
+    # Activation-code login inside the dashboard (relogin spec §7).  Off by default since 2026-10-16:
+    # the shared account is connected with the adapter CLI `login` and token registration.
+    device_login: bool = False
     login_max_attempts: int = 3
 
     @property
@@ -235,5 +238,6 @@ def drive_settings() -> DriveSettings:
         blob_dir=blob_dir,
         blob_max_bytes=int(_number("SIMDASH_DRIVE_BLOB_MAX_BYTES", 100 * 1024 ** 3, 64 * 1024 ** 2, 2 ** 50, integer=True)),
         password_login=_password_login("SIMDASH_DRIVE_PASSWORD_LOGIN"),
+        device_login=_flag("SIMDASH_DRIVE_DEVICE_LOGIN"),
         login_max_attempts=int(_number("SIMDASH_DRIVE_LOGIN_MAX_ATTEMPTS", 3, 1, 20, integer=True)),
     )

@@ -156,3 +156,34 @@ test.describe('SCX 드라이브 코드 로그인 (이슈 #52)', () => {
     await expect(panel.getByTestId('drive-device-start')).toHaveText(/코드 다시 받기/)
   })
 })
+
+// 2026-10-16: the shared account is connected with the adapter CLI `login --out token.json`; the file is
+// registered in 공용 계정 토큰 (no ID/password and no code login in the dashboard by default).
+test('CLI로 받은 token.json 파일을 불러와 공용 계정 토큰으로 등록한다', async ({ page }) => {
+  const registered: string[] = []
+  await page.route('**/api/drive/status', (route) => route.fulfill({ json: { mode: 'scx', state: 'AUTH_REQUIRED', writes_enabled: true, writes_available: true, queue_paused: true, can_reconnect: true } }))
+  await page.route('**/api/admin/drive/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path.endsWith('/status')) return route.fulfill({ json: ADMIN_STATUS })
+    if (path.endsWith('/auth')) return route.fulfill({ json: { ...AUTH, capabilities: { refresh: true, password: false, mfa: false, device: true }, password_login_allowed: false, device_login_allowed: false, device_login: null } })
+    if (path.endsWith('/queue')) return route.fulfill({ json: { counts: {}, paused: true, worker_running: true, writes_enabled: true, items: [] } })
+    if (path.endsWith('/credentials') && request.method() === 'PUT') {
+      registered.push(request.postData() ?? '')
+      return route.fulfill({ json: { account_hint: 'spdm-shared', obtained_at: '2026-10-16T00:00:00+00:00', test: { ok: true, latency_ms: 12, root_identity: 'SPDM/Projects', error: null } } })
+    }
+    return route.fulfill({ status: 404, json: { detail: 'unmocked' } })
+  })
+  const dialog = await openFromBanner(page)
+  await expect(dialog.getByTestId('drive-device-login')).toHaveCount(0)
+  await expect(dialog.getByTestId('drive-login-form')).toHaveCount(0)
+  await expect(dialog.getByTestId('drive-token-steps')).toContainText('login --server https://scx.example.test/ --out token.json')
+  const token = JSON.stringify({ server_url: 'https://scx.example.test/', access_token: 'eyJ.e2e-access', refresh_token: 'e2e-refresh', obtained_at: '2026-10-16T00:00:00+00:00', account_hint: 'spdm-shared' })
+  await dialog.getByTestId('drive-token-file').setInputFiles({ name: 'token.json', mimeType: 'application/json', buffer: Buffer.from(token) })
+  await expect(dialog.getByLabel('토큰 JSON')).toHaveValue(token)
+  await dialog.getByRole('button', { name: '토큰 등록', exact: true }).click()
+  await expect(dialog.getByText('토큰을 등록했습니다(spdm-shared).')).toBeVisible()
+  expect(registered).toHaveLength(1)
+  expect(JSON.parse(registered[0])).toMatchObject({ access_token: 'eyJ.e2e-access', account_hint: 'spdm-shared' })
+  await expect(dialog.getByLabel('토큰 JSON')).toHaveValue('')
+})

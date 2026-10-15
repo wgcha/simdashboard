@@ -82,11 +82,13 @@
 
 ## 4. 공용 계정 토큰
 
-1. 브라우저가 있는 관리자 PC에서 어댑터 CLI로 로그인한다.
+**연결·재연결의 기본 방법(사용자 결정 2026-10-16)**: 대시보드에 아이디·비밀번호나 코드를 넣지 않고, 어댑터 CLI로 받은 토큰 파일을 등록한다. HPC SSO는 drive-desktop 클라이언트의 비밀번호 로그인을 막고, CLI `login`은 SDK의 코드 승인(device grant)으로 정상 동작한다(이슈 #52).
+
+1. 어댑터가 설치된 PC(서버 PC 등)에서 CLI로 로그인한다. 브라우저가 열리면 **공용 계정**으로 SSO에 로그인하고 표시된 코드를 승인한다(브라우저에 개인 계정이 로그인돼 있으면 개인 계정 토큰이 만들어진다).
    ```powershell
-   <워커 런타임>\python.exe -m scx_drive_adapter login --server https://<호스트>/ --client-name <클라이언트 ID> [--ca-bundle <pem>]
+   <워커 런타임>\python.exe -m scx_drive_adapter login --server https://<호스트>/ --out token.json [--client-name <클라이언트 ID>] [--ca-bundle <pem>]
    ```
-2. 출력된 TokenBundle JSON 전체를 **저장소 설정 → SCX 드라이브 → 드라이브 관리 → 공용 계정 토큰**에 붙여 넣고 **토큰 등록**.
+2. **드라이브 관리 → 공용 계정 토큰**에서 **[파일에서 불러오기]**로 `token.json`을 고르거나(64 KB 이하) 출력된 JSON 전체를 붙여 넣고 **토큰 등록**. 연결 계정과 다른 계정이면 저장 전에 변경 확인을 묻는다(공용 계정이 아니면 취소). 등록 뒤 `token.json`은 지운다.
 3. 서버는 `server_url` 호스트가 `SIMDASH_SCX_SERVER_URL`과 같은지, 두 토큰이 비어 있지 않은지 확인한다(아니면 400 `DRIVE_CREDENTIALS_INVALID`). 저장 직후 `stat("")`로 연결을 시험해 결과를 보여 준다.
 
 저장 방식(integration 02 §3):
@@ -127,7 +129,9 @@
 | POST | `/api/admin/drive/login` | `{username(≤128), password(≤256), confirm_account_change?}` → 위와 같음. 오류: 401 `AUTH_INVALID_CREDENTIALS`, 409 `AUTH_ACCOUNT_LOCKED`·`AUTH_MFA_REQUIRED`·`AUTH_METHOD_UNSUPPORTED`·`DRIVE_ACCOUNT_CHANGE_CONFIRM`·`DRIVE_ADAPTER_UPDATE_REQUIRED`, 429 `RATE_LIMITED`·`DRIVE_LOGIN_LOCKED`, 403 `DRIVE_PASSWORD_LOGIN_DISABLED` |
 | PUT | `/api/admin/drive/credentials?confirm_account_change=true` | 다른 계정 토큰 붙여넣기 확인 |
 
-### 4.2 코드로 로그인 (2026-10-14, 이슈 #52)
+### 4.2 코드로 로그인 (2026-10-14, 이슈 #52) — 기본 꺼짐
+
+**2026-10-16부터 기본 꺼짐**(`SIMDASH_DRIVE_DEVICE_LOGIN=false`). 어댑터의 `device_login_*` 구현이 서버 SSO 주소를 찾지 못해 실패했고(OIDC discovery가 HTML 응답), 사용자 결정으로 §4의 CLI 토큰 등록을 기본 방법으로 쓴다. 어댑터가 사양서 §7대로 동작하게 되면 `.env`에 `SIMDASH_DRIVE_DEVICE_LOGIN=true`로 켠다(꺼져 있으면 버튼이 보이지 않고 시작 API는 409 `DRIVE_DEVICE_LOGIN_DISABLED`).
 
 HPC SSO가 drive-desktop 클라이언트의 아이디·비밀번호 로그인을 막아(`AUTH_METHOD_UNSUPPORTED`) **활성화 코드(device grant)**로 공용 계정을 연결한다. 사양·어댑터 계약: [재연결 사양 §7](../plans/scx-drive-relogin-spec.md#7-코드-로그인device-grant-추가-2026-10-14-이슈-52). 어댑터가 `auth_capabilities.device=true`와 `device_login_start/poll/cancel`을 제공해야 보인다(없으면 기존 화면 그대로).
 
