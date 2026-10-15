@@ -1,0 +1,138 @@
+name: Windows offline bundle
+
+# Builds the Windows Server 2022 x64 offline installer (ZIP + EXE) on GitHub so
+# the target server only extracts and runs install.cmd: no Git, internet, uv,
+# Node or pnpm there (docs/windows-deployment-policy.md, 2026-10-15 decision).
+# Every runtime input is pinned below and recorded in bundle-manifest.json.
+on:
+  push:
+    branches: [claude/scx-drive, main]
+  workflow_dispatch:
+    inputs:
+      postgres_version:
+        description: 'PostgreSQL Windows binaries (EDB zip version, e.g. 18.0-1)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-offline-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned runtime inputs (official sources; the build verifies each file).
+  POSTGRES_VERSION: ${{ inputs.postgres_version || '18.0-1' }}
+  CADDY_VERSION: '2.8.4'
+  WINSW_VERSION: 'v2.12.0'
+
+jobs:
+  bundle:
+    name: Build offline installer
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+
+      # The project's own pinned Node/pnpm/Python (uv-managed CPython, since
+      # python.org ships no Windows binaries for 3.12.13).
+      - name: Install project runtimes and locked dependencies
+        run: .\setup.ps1 -NetworkMode direct -SkipFrontendBuild
+
+      - name: Prepare vendor runtimes
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $vendor = Join-Path $env:RUNNER_TEMP 'vendor'
+          $downloads = Join-Path $env:RUNNER_TEMP 'downloads'
+          New-Item -ItemType Directory -Force -Path $vendor, $downloads | Out-Null
+          function Get-File([string]$Url, [string]$Path) {
+            Write-Host "Downloading $Url"
+            Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing
+          }
+
+          # Python: the exact project runtime (full tree with venv and pip).
+          $pythonVersion = (Get-Content -Raw .python-version).Trim()
+          $pythonTree = Join-Path $PWD ".tools\python\cpython-$pythonVersion-windows-x86_64-none"
+          if (-not (Test-Path (Join-Path $pythonTree 'python.exe'))) { throw "Project Python not found: $pythonTree" }
+          Copy-Item -Recurse -Force $pythonTree (Join-Path $vendor 'python-runtime')
+          $python = Join-Path $vendor 'python-runtime\python.exe'
+          & $python -m pip --version
+          if ($LASTEXITCODE -ne 0) {
+            $env:PIP_BREAK_SYSTEM_PACKAGES = '1'
+            & $python -m ensurepip --default-pip
+            if ($LASTEXITCODE -ne 0) { throw 'pip is not available in the vendor Python.' }
+          }
+          & $python -c "import venv, ensurepip; print('venv and ensurepip available')"
+          if ($LASTEXITCODE -ne 0) { throw 'The vendor Python lacks venv/ensurepip.' }
+
+          # Windows wheels for the locked backend dependencies.
+          $wheelhouse = Join-Path $vendor 'wheelhouse'
+          & $python -m pip download --disable-pip-version-check --only-binary=:all: --dest $wheelhouse -r backend\requirements.lock
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the Windows wheelhouse.' }
+
+          # PostgreSQL (EDB Windows x64 binaries zip): bin, lib, share + license.
+          $pgZip = Join-Path $downloads 'postgresql.zip'
+          Get-File "https://get.enterprisedb.com/postgresql/postgresql-$env:POSTGRES_VERSION-windows-x64-binaries.zip" $pgZip
+          $pgExtract = Join-Path $downloads 'postgresql'
+          Expand-Archive -LiteralPath $pgZip -DestinationPath $pgExtract -Force
+          $pgsql = Join-Path $pgExtract 'pgsql'
+          $pgTarget = Join-Path $vendor 'postgresql'
+          New-Item -ItemType Directory -Force -Path $pgTarget | Out-Null
+          foreach ($part in @('bin', 'lib', 'share')) { Copy-Item -Recurse -Force (Join-Path $pgsql $part) (Join-Path $pgTarget $part) }
+          $license = Get-ChildItem -LiteralPath $pgsql -Recurse -File -Include 'server_license.txt', 'COPYRIGHT' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($license) { Copy-Item -LiteralPath $license.FullName (Join-Path $pgTarget 'server_license.txt') }
+          else {
+            $major = $env:POSTGRES_VERSION.Split('.')[0]
+            Get-File "https://raw.githubusercontent.com/postgres/postgres/REL_${major}_STABLE/COPYRIGHT" (Join-Path $pgTarget 'server_license.txt')
+          }
+
+          # Caddy (official release zip contains caddy.exe and LICENSE).
+          $caddyZip = Join-Path $downloads 'caddy.zip'
+          Get-File "https://github.com/caddyserver/caddy/releases/download/v$env:CADDY_VERSION/caddy_$($env:CADDY_VERSION)_windows_amd64.zip" $caddyZip
+          Expand-Archive -LiteralPath $caddyZip -DestinationPath (Join-Path $vendor 'caddy') -Force
+
+          # WinSW .NET Framework 4.6.1 build (runs on Server 2022 without extra .NET).
+          $winsw = Join-Path $vendor 'winsw'
+          New-Item -ItemType Directory -Force -Path $winsw | Out-Null
+          Get-File "https://github.com/winsw/winsw/releases/download/$env:WINSW_VERSION/WinSW.NET461.exe" (Join-Path $winsw 'WinSW-x64.exe')
+          Get-File "https://raw.githubusercontent.com/winsw/winsw/$env:WINSW_VERSION/LICENSE.txt" (Join-Path $winsw 'LICENSE.txt')
+
+          # Microsoft VC++ runtime (the build verifies the Microsoft signature).
+          Get-File 'https://aka.ms/vs/17/release/vc_redist.x64.exe' (Join-Path $vendor 'vc_redist.x64.exe')
+
+          Get-ChildItem -LiteralPath $vendor | Format-Table Name, Length
+
+      - name: Install Inno Setup (build machine only)
+        run: choco install innosetup -y --no-progress
+
+      - name: Build the offline bundle
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git status --porcelain
+          $out = Join-Path $env:RUNNER_TEMP 'out'
+          $sha = (git rev-parse --short=12 HEAD).Trim()
+          $releaseId = (Get-Date).ToUniversalTime().ToString('yyyyMMdd.HHmm') + '-' + $sha
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          .\scripts\windows\build-offline-bundle.ps1 -VendorRoot (Join-Path $env:RUNNER_TEMP 'vendor') `
+            -ReleaseId $releaseId -Output (Join-Path $out "simworkbench-windows-offline-$releaseId.zip") `
+            -InnoSetupCompiler $iscc
+          "RELEASE_ID=$releaseId" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-ChildItem $out | Format-Table Name, Length
+
+      - name: Upload the offline installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: simworkbench-windows-offline-${{ env.RELEASE_ID }}
+          path: |
+            ${{ runner.temp }}/out/simworkbench-windows-offline-*.zip
+            ${{ runner.temp }}/out/simworkbench-windows-offline-*.zip.sha256
+            ${{ runner.temp }}/out/simworkbench-windows-offline-*.exe
+            ${{ runner.temp }}/out/simworkbench-windows-offline-*.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
