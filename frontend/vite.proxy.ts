@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import type { ProxyOptions } from 'vite'
 
 // Headers a browser must not be able to forward to the API through this proxy.  uvicorn trusts
@@ -61,4 +62,42 @@ export function devServerProxy(env: Record<string, string | undefined>): Record<
   const physicsAi = physicsAiTarget(env)
   if (physicsAi) proxy[PHYSICSAI_PROXY_PATH] = physicsAiProxy(physicsAi)
   return proxy
+}
+
+/** Value of one `KEY=value` line in dotenv text (last match wins), or undefined when absent.
+ * Minimal on purpose: `export KEY=`, single/double quotes, ` #` comments, CRLF and a BOM are
+ * handled; no variable expansion or multi-line values (VITE_PHYSICSAI_TARGET is a plain URL). */
+export function dotenvValue(text: string, key: string): string | undefined {
+  let found: string | undefined
+  for (const rawLine of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(rawLine)
+    if (!match || match[1] !== key) continue
+    let value = match[2].trim()
+    const quote = value[0]
+    if ((quote === '"' || quote === "'") && value.indexOf(quote, 1) > 0) {
+      value = value.slice(1, value.indexOf(quote, 1))
+    } else {
+      value = value.replace(/\s+#.*$/, '').trim()
+    }
+    found = value
+  }
+  return found
+}
+
+/**
+ * VITE_PHYSICSAI_TARGET for the dev-server proxy: the process environment wins, otherwise the
+ * repository-root `.env` (the file start.ps1 and the backend use) is read directly.  Only this
+ * one key is parsed out of that file; nothing is written to process.env or the client env, so
+ * NODE_ENV, BROWSER, secrets or other VITE_* keys in the root .env never reach Vite (unlike
+ * Vite's loadEnv, which copies NODE_ENV/BROWSER/BROWSER_ARGS into process.env).
+ */
+export function physicsAiTargetSetting(envFilePath: string, processEnv: Record<string, string | undefined>): string | undefined {
+  if (processEnv.VITE_PHYSICSAI_TARGET !== undefined) return processEnv.VITE_PHYSICSAI_TARGET
+  let text: string
+  try {
+    text = readFileSync(envFilePath, 'utf8')
+  } catch {
+    return undefined
+  }
+  return dotenvValue(text, 'VITE_PHYSICSAI_TARGET')
 }
