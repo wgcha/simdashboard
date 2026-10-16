@@ -84,9 +84,9 @@
 
 **연결·재연결의 기본 방법(사용자 결정 2026-10-16)**: 대시보드에 아이디·비밀번호나 코드를 넣지 않고, 어댑터 CLI로 받은 토큰 파일을 등록한다. HPC SSO는 drive-desktop 클라이언트의 비밀번호 로그인을 막고, CLI `login`은 SDK의 코드 승인(device grant)으로 정상 동작한다(이슈 #52).
 
-1. 어댑터가 설치된 PC(서버 PC 등)에서 CLI로 로그인한다. 브라우저가 열리면 **공용 계정**으로 SSO에 로그인하고 표시된 코드를 승인한다(브라우저에 개인 계정이 로그인돼 있으면 개인 계정 토큰이 만들어진다).
+1. 어댑터가 설치된 PC(서버 PC 등)에서 CLI로 로그인한다. `--device-code`는 브라우저를 열지 않고 활성화 코드와 주소만 출력한다. 그 주소를 **휴대폰 등 다른 기기**에서 열어 **공용 계정**으로 로그인하고 코드를 승인한다(개인 계정이 로그인된 브라우저에서 승인하면 개인 계정 토큰이 만들어진다). `--device-code` 없이 실행하면 그 PC의 브라우저가 열린다.
    ```powershell
-   <워커 런타임>\python.exe -m scx_drive_adapter login --server https://<호스트>/ --out token.json [--client-name <클라이언트 ID>] [--ca-bundle <pem>]
+   <워커 런타임>\python.exe -m scx_drive_adapter login --device-code --server https://<호스트>/ --out token.json [--client-name <클라이언트 ID>] [--ca-bundle <pem>]
    ```
 2. **드라이브 관리 → 공용 계정 토큰**에서 **[파일에서 불러오기]**로 `token.json`을 고르거나(64 KB 이하) 출력된 JSON 전체를 붙여 넣고 **토큰 등록**. 연결 계정과 다른 계정이면 저장 전에 변경 확인을 묻는다(공용 계정이 아니면 취소). 등록 뒤 `token.json`은 지운다.
 3. 서버는 `server_url` 호스트가 `SIMDASH_SCX_SERVER_URL`과 같은지, 두 토큰이 비어 있지 않은지 확인한다(아니면 400 `DRIVE_CREDENTIALS_INVALID`). 저장 직후 `stat("")`로 연결을 시험해 결과를 보여 준다.

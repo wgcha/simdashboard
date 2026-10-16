@@ -177,7 +177,7 @@ test('CLI로 받은 token.json 파일을 불러와 공용 계정 토큰으로 �
   const dialog = await openFromBanner(page)
   await expect(dialog.getByTestId('drive-device-login')).toHaveCount(0)
   await expect(dialog.getByTestId('drive-login-form')).toHaveCount(0)
-  await expect(dialog.getByTestId('drive-token-steps')).toContainText('login --server https://scx.example.test/ --out token.json')
+  await expect(dialog.getByTestId('drive-token-steps')).toContainText('login --device-code --server https://scx.example.test/ --out token.json')
   const token = JSON.stringify({ server_url: 'https://scx.example.test/', access_token: 'eyJ.e2e-access', refresh_token: 'e2e-refresh', obtained_at: '2026-10-16T00:00:00+00:00', account_hint: 'spdm-shared' })
   await dialog.getByTestId('drive-token-file').setInputFiles({ name: 'token.json', mimeType: 'application/json', buffer: Buffer.from(token) })
   await expect(dialog.getByLabel('토큰 JSON')).toHaveValue(token)

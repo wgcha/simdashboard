@@ -233,10 +233,10 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
           {/* 2026-10-16: the shared account is connected with the adapter CLI (browser + activation code)
               and the token JSON it writes; no ID/password is entered in the dashboard. */}
           <ol className="drive-token-steps" data-testid="drive-token-steps">
-            <li>어댑터가 설치된 PC(서버 PC 등)에서 워커 런타임 Python으로 실행합니다.
-              <code>python -m scx_drive_adapter login --server {status.server_url} --out token.json</code>
+            <li>어댑터가 설치된 PC(서버 PC 등)에서 워커 런타임 Python으로 실행합니다. 브라우저를 열지 않고 활성화 코드와 주소만 표시합니다.
+              <code>python -m scx_drive_adapter login --device-code --server {status.server_url} --out token.json</code>
               <small>예: <code>C:\SimDashboard\scx-runtime\venv\Scripts\python.exe</code></small></li>
-            <li>열린 브라우저(또는 표시된 주소)에서 <strong>공용 계정</strong>으로 로그인하고 활성화 코드를 승인합니다. 개인 계정으로 로그인된 브라우저면 개인 계정 토큰이 만들어집니다.</li>
+            <li>표시된 주소를 <strong>휴대폰 등 다른 기기</strong>에서 열고 <strong>공용 계정</strong>으로 로그인한 뒤 코드를 입력합니다. 개인 계정으로 로그인된 브라우저에서 승인하면 개인 계정 토큰이 만들어집니다.</li>
             <li>만들어진 <code>token.json</code>을 아래 [파일에서 불러오기]로 고르거나 내용을 붙여 넣고 [토큰 등록]을 누릅니다.</li>
           </ol>
           <p className="drive-admin-note">토큰은 암호화해 저장하며 화면에 다시 표시하지 않습니다. 등록 뒤 <code>token.json</code> 파일은 지우세요.</p>
