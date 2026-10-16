@@ -653,3 +653,13 @@ def test_rereview_free_space_is_rechecked_when_registering(admin_client, monkeyp
     response = client.post(REG + "/drop-uploads", json=_body(project_id, request_id, OPTION, [("6_A/a.bin", b"x" * 100)]))
     assert response.status_code == 507 and response.json()["detail"]["code"] == "RESULT_DROP_FREE_SPACE"
     assert not any((root / STAGING).glob("*/*.part"))
+
+
+def test_path_limit_is_windows_locally_and_larger_on_the_drive(monkeypatch):
+    """Issue #51 (2026-10-16): a drive folder is not a Windows path, so MAX_PATH (259) only applies locally."""
+    from app.services import result_drop_upload as drop
+
+    monkeypatch.setattr(drop, "_drive", lambda: False)
+    assert drop.max_path_chars() == 259 and "Windows" in drop.path_limit_text()
+    monkeypatch.setattr(drop, "_drive", lambda: True)
+    assert drop.max_path_chars() == drop.DRIVE_MAX_PATH_CHARS == 1024 and "드라이브" in drop.path_limit_text()
