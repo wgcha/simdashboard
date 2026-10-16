@@ -66,6 +66,19 @@ MAX_SEGMENT_CHARS = 255
 # Explorer and most Windows tools still stop at MAX_PATH; checked for the server
 # path and for the path users see (display root).
 MAX_PATH_CHARS = 259
+# SCX drive mode (2026-10-16): the SPDM tree lives on the HPC drive, not in a Windows folder, and the
+# dashboard never mirrors it under its original path (downloads use short cache names), so the Windows
+# MAX_PATH does not apply there.  A generous bound still catches runaway names.
+DRIVE_MAX_PATH_CHARS = 1024
+
+
+def max_path_chars() -> int:
+    """Path length limit for new folders and uploads: Windows MAX_PATH on a local root, larger on the drive."""
+    return DRIVE_MAX_PATH_CHARS if _drive() else MAX_PATH_CHARS
+
+
+def path_limit_text() -> str:
+    return f"드라이브 경로 길이 한도({DRIVE_MAX_PATH_CHARS}자)" if _drive() else f"Windows 경로 길이 한도({MAX_PATH_CHARS}자)"
 # Open (uploading / partially published) sessions: per user per request, and per request
 # overall, so one user's stuck sessions cannot block the request for others (review M2).
 MAX_ACTIVE_PER_USER = 2
@@ -488,10 +501,9 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
 
     def length_check(relative: str, client_path: str) -> None:
         zone_check(relative, client_path)
-        if (len(str(fs.path(relative))) > MAX_PATH_CHARS
-                or len(display_path(base, relative)) > MAX_PATH_CHARS):
-            _issue(issues, "PATH_TOO_LONG", "error",
-                   f"경로가 Windows 길이 한도({MAX_PATH_CHARS}자)를 넘습니다. 폴더 이름을 줄이세요.", client_path)
+        limit = max_path_chars()
+        if len(str(fs.path(relative))) > limit or len(display_path(base, relative)) > limit:
+            _issue(issues, "PATH_TOO_LONG", "error", f"경로가 {path_limit_text()}를 넘습니다. 폴더 이름을 줄이세요.", client_path)
 
     for key in sorted(directories, key=lambda item: (len(item), _fold(item))):
         parent = resolved[key[:-1]]
@@ -1255,8 +1267,9 @@ def create_folder(conn: ConnectionLike, project_id: str, request_id: str, enviro
     relative = f"{parent}/{name}"
     if not working_zone_allows(relative):
         raise DropUploadError("RESULT_DROP_FOLDER_LEVEL_INVALID", "이 위치에는 폴더를 만들 수 없습니다(Working 폴더 밖).", 422)
-    if len(str(fs.path(relative))) > MAX_PATH_CHARS or len(display_path(display_root(scope.root), relative)) > MAX_PATH_CHARS:
-        raise DropUploadError("RESULT_DROP_PATH_TOO_LONG", "경로가 Windows 길이 한도를 넘습니다. 이름을 줄이세요.", 422)
+    limit = max_path_chars()
+    if len(str(fs.path(relative))) > limit or len(display_path(display_root(scope.root), relative)) > limit:
+        raise DropUploadError("RESULT_DROP_PATH_TOO_LONG", f"경로가 {path_limit_text()}를 넘습니다. 이름을 줄이세요.", 422)
     existing_entry = _DirIndex(fs).lookup(parent, name)
     existing = f"{parent}/{existing_entry.name}" if existing_entry is not None else None
     if existing:

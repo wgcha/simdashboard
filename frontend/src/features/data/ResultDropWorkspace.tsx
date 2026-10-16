@@ -203,10 +203,17 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
     try {
       const created = await resultDropApi.createFolder({ project_id: projectId, request_id: requestId, environment, parent_relative_path: target, name: folderName.trim(), confirm })
       setFolderOpen(false); setFolderName(''); setFolderWarning([])
-      setNotice(created.drive && created.drive.state !== 'DONE'
-        ? `새 ${created.role_label} 폴더를 드라이브에 만드는 중입니다(업로드 대기열): ${created.display_path}`
+      const queued = Boolean(created.drive && created.drive.state !== 'DONE')
+      setNotice(queued
+        ? `새 ${created.role_label} 폴더를 드라이브에 만드는 중입니다(업로드 대기열). 만들어지면 목록에 나타납니다: ${created.display_path}`
         : `새 ${created.role_label} 폴더를 만들었습니다: ${created.display_path}`)
-      setChosen((current) => [...current, created.relative_path])
+      if (queued) {
+        // SCX drive (issue #51): the folder exists only after the queue ran mkdirs, so do not open it yet
+        // (reading a folder that is not there answered 404); reload the tree to pick it up.
+        for (const delay of [3000, 10000, 30000]) window.setTimeout(() => setTreeVersion((value) => value + 1), delay)
+      } else {
+        setChosen((current) => [...current, created.relative_path])
+      }
       setTreeVersion((value) => value + 1)
     } catch (reason) {
       const detail = detailOf(reason)

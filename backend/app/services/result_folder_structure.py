@@ -389,8 +389,9 @@ def _check_names(ctx: _Context, environment: str, request_path: str, working: st
         if not working_zone_allows(relative):
             bad("이 위치에는 폴더를 만들 수 없습니다(Working 폴더 밖).")
             continue
-        if len(str(ctx.fs.path(relative))) > drop.MAX_PATH_CHARS or len(drop.display_path(base, relative)) > drop.MAX_PATH_CHARS:
-            bad("경로가 Windows 길이 한도를 넘습니다. 이름을 줄이세요.")
+        limit = drop.max_path_chars()
+        if len(str(ctx.fs.path(relative))) > limit or len(drop.display_path(base, relative)) > limit:
+            bad(f"경로가 {drop.path_limit_text()}를 넘습니다. 이름을 줄이세요.")
             continue
         findings = drop._depth_findings(scope, known, name, working, 2)
         errors = [message for _code, severity, message in findings if severity == "error"]
@@ -540,13 +541,13 @@ def create(conn: ConnectionLike, project_id: str, request_id: str, environment: 
 
 
 def _check_lengths(ctx: _Context, request_path: str) -> None:
-    """Review L5: the request folder and its ``Working`` must fit the Windows path limit (Case names are checked per name)."""
+    """Review L5: the request folder and its ``Working`` must fit the path limit (Windows MAX_PATH locally, larger on the drive)."""
     base = drop.display_root(ctx.root)
     for relative in (request_path, f"{request_path}/Working"):
-        if (len(str(ctx.fs.path(relative))) > drop.MAX_PATH_CHARS
-                or len(drop.display_path(base, relative)) > drop.MAX_PATH_CHARS):
+        limit = drop.max_path_chars()
+        if len(str(ctx.fs.path(relative))) > limit or len(drop.display_path(base, relative)) > limit:
             raise _error("RESULT_STRUCTURE_PATH_TOO_LONG",
-                         "의뢰 폴더 경로가 Windows 길이 한도를 넘습니다. SPDM에서 짧은 이름의 폴더를 만드세요.", 422)
+                         f"의뢰 폴더 경로가 {drop.path_limit_text()}를 넘습니다. SPDM에서 짧은 이름의 폴더를 만드세요.", 422)
 
 
 def link_now(result: dict[str, Any], *, connection_factory=None) -> dict[str, Any]:
