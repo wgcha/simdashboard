@@ -399,3 +399,15 @@ def directory_settings() -> DirectorySettings:
         result_limit=result_limit,
         allow_insecure_localhost=allow_insecure_localhost,
     )
+
+
+PHYSICSAI_BASE_PATH = "/physicsai/"
+
+
+def physicsai_link_enabled() -> bool:
+    """사이드바 "AI 예측" 링크 표시 여부(``SIMDASH_PHYSICSAI_ENABLED``, 기본 off).
+
+    PhysicsAI가 같은 주소의 ``/physicsai/``로 연결된 서버(Vite 개발 프록시의
+    ``VITE_PHYSICSAI_TARGET`` 등)에서만 켠다. 꺼져 있으면 링크를 숨긴다.
+    """
+    return os.getenv("SIMDASH_PHYSICSAI_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}

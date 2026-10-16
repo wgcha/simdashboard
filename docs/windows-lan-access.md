@@ -46,6 +46,9 @@ http://localhost/home
 
 웹은 선택한 인터페이스에 열리고 `/api`·`/assets` 요청은 웹 서버를 통해 내부 API에 전달된다. 이 변경은 API의 수신 주소 `127.0.0.1`이나 PostgreSQL 수신 설정을 바꾸지 않는다. 직원 PC에 DB 계정이나 5432 포트를 공개할 필요가 없다. 설정 변경 전부터 실행 중인 프로세스는 재사용하지 않고 중지·재시작 안내를 표시한다.
 
+PhysicsAI 연결(선택, 기본 꺼짐): 서버 `.env`에 `VITE_PHYSICSAI_TARGET=http://127.0.0.1:8100`(PhysicsAI 수신 주소)과 `SIMDASH_PHYSICSAI_ENABLED=true`를 지정하고 대시보드를 중지·시작하면 `http://서버/physicsai/`로 PhysicsAI가 열리고 사이드바에 "AI 예측" 링크가 표시된다.
+`/physicsai`는 `WINDOWS_WEB_BASE_PATH`와 무관한 루트 경로이며 경로·쿠키를 그대로 PhysicsAI에 전달한다(대시보드 로그인 공유). 값을 비우면 프록시와 링크가 모두 꺼진다.
+
 ## 연결 실패 점검
 
 먼저 서버 PC에서 위 사내 IP 주소를 연다. 서버에서는 열리지만 다른 PC에서는 안 열리면 클라이언트 PowerShell에서 확인한다.
