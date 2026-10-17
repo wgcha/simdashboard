@@ -95,6 +95,10 @@ class _PostgresStartupConnection:
                 "folder_link_reservations": {"root_key", "path_key", "project_id", "request_id", "environment",
                                              "created_by", "created_at", "expires_at"},
                 "drive_connected_account": {"id", "account_hint", "updated_by", "updated_at"},
+                "scx_relay_submissions": {"request_id", "request_sha256", "client", "client_ref", "input_rel",
+                                          "job_dir_rel", "state", "job_id", "solver", "last_status", "output_path",
+                                          "output_rel", "error_code", "error_message", "created_at", "updated_at",
+                                          "resolved_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
