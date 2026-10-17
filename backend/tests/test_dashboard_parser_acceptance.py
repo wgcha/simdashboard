@@ -47,6 +47,23 @@ def test_scene_sequence_is_the_first_number_in_the_name(name, expected) -> None:
     assert parsed["order_status"] == ("UNCONFIRMED" if expected is None else "CONFIRMED")
 
 
+@pytest.mark.parametrize("name,expected", [
+    ("DAMP-3_Edge", "3"),
+    ("02_x", "2"),
+    ("Face_Top_Drop", "Face"),
+    ("Corner_Drop", "Corn"),
+    ("가나다라마바_x", "가나다라"),
+    ("Top-Face", "Top"),
+    ("Edge Drop", "Edge"),
+    ("Back.final", "Back"),
+    ("_Bottom_Drop", "Bott"),
+    ("", None),
+])
+def test_scene_sequence_label_is_the_number_or_the_first_token(name, expected) -> None:
+    """User decision 2026-10-17: a name without digits shows its first token, cut to 4 characters."""
+    assert parser.scene_sequence_label(name) == expected
+
+
 def test_scene_scenario_number_stays_separate_from_the_sequence() -> None:
     parsed = parse_scene_name("DAMP-13_Corner_Drop_2nd_Scene08_Corner346_2nd")
     assert parsed["scene_sequence_number"] == 13

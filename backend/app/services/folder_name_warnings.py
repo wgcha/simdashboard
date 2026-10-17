@@ -14,11 +14,11 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
+from ..domains.dashboard.parser import scene_sequence_number, scene_short_name
 from . import folder_schema_hierarchy
 
 _SEPARATORS = re.compile(r"[\s_\-]+")
 _TRAILING_DIGITS = re.compile(r"\d+$")
-_LEADING_NUMBER = re.compile(r"^\d+")
 MAX_WARNINGS = 50
 MAX_PATHS = 20
 MAX_GROUP = 300
@@ -195,7 +195,8 @@ def folder_name_warnings(schema: dict[str, Any], locations: Any, root_key: str,
             })
 
     # 3. Unexpected folders: snapshot deviations, unresolved nodes, and Scene-level
-    #    folders that do not follow the sibling Scene number pattern.
+    #    folders without any number next to numbered siblings (순번 = first number in
+    #    the name, user decision 2026-10-17; such a Scene is shown by its first letters).
     unexpected: list[dict[str, Any]] = []
     for node in schema.get("nodes", []):
         path = str(node.get("relative_path") or "")
@@ -213,15 +214,17 @@ def folder_name_warnings(schema: dict[str, Any], locations: Any, root_key: str,
                            "message": f"예상 밖 폴더: {text}", "paths": [path],
                            "case_id": None, "run_option_id": None})
     for siblings in by_parent.values():
-        numbered = [item for item in siblings if _LEADING_NUMBER.match(str(item.get("name") or ""))]
-        odd = [item for item in siblings if not _LEADING_NUMBER.match(str(item.get("name") or ""))]
+        numbered = [item for item in siblings if scene_sequence_number(str(item.get("name") or "")) is not None]
+        odd = [item for item in siblings if scene_sequence_number(str(item.get("name") or "")) is None]
         if not numbered or not odd:
             continue
         ids = folder_schema_hierarchy.context_ids(schema, root_key, odd[0].get("hierarchy") or {})
+        names = [str(item.get("name") or "") for item in odd]
+        short = ", ".join(f"'{scene_short_name(name) or name}'" for name in names)
         unexpected.append({
             "kind": "UNEXPECTED_FOLDER", "severity": "info",
-            "message": f"{parent_label} 아래 {_quoted(str(item.get('name') or '') for item in odd)} 폴더는 "
-                       "다른 Scene과 달리 번호로 시작하지 않습니다. Scene이 아니면 다른 곳으로 옮기세요.",
+            "message": f"{parent_label} 아래 {_quoted(names)} 폴더는 다른 Scene과 달리 순번 숫자가 없어 "
+                       f"이름 앞글자({short})로 표시합니다. Scene이 아니면 다른 곳으로 옮기세요.",
             "paths": [str(item.get("relative_path") or "") for item in odd][:MAX_PATHS],
             "case_id": ids["case_id"] or None,
             "run_option_id": (ids["run_option_id"] or None) if environment == "DISTRIBUTION" else None,

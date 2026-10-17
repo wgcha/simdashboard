@@ -2,6 +2,14 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-17 — 순번 없는 Scene은 이름 앞글자로 표시, W6 숫자 없음 기준
+
+- 사용자 결정(2026-10-17): 이름에 숫자가 없는 Scene은 `순번 미확인` 대신 이름 첫 토큰(`_`·`-`·공백·`.`로 나눔, 빈 토큰 건너뜀)을 4글자까지 자른 짧은 이름으로 표시(`Face_Top_Drop` → `Face`, `Corner_Drop` → `Corn`, `가나다라마바_x` → `가나다라`). 서버 한 곳(`parser.scene_short_name`·`scene_sequence_label`)에서 계산하고, `dashboard_queries.scene_label_text`가 조회 시 distribution scenes·series, scene detail, run videos에 `scene_sequence_label`(순번 숫자 문자열 또는 짧은 이름)을 붙인다. 정렬은 기존 `scene_sort_key`(순번 숫자순 → 순번 없는 Scene 이름순) 그대로.
+- 화면: `distributionValues.sceneSequenceText`(`label ?? number ?? '순번 미확인'`)를 Scene 설명표·컨투어 행 머리·최대응력 위치 표 머리·요약/엣지 그래프 X축(툴팁에 `짧은 이름 · 전체 이름`)·Case 비교 행 머리(툴팁 전체 이름, 정렬을 서버와 같게)·Case 보고서 순번 칸과 그래프 X축에 사용. 툴팁(title)은 Scene 설명표·Case 비교 순번에 추가했고, 위치 표·컨투어 머리는 기존 전체 이름 title을 그대로 쓴다. 보고서는 같은 행 Scene 칸에 전체 이름이 있다.
+- W6(`folder_name_warnings`): 형제 Scene에 순번이 있을 때 **이름에 숫자가 하나도 없는** 폴더만 info 경고(`DAMP-3_Edge`는 순번 3이라 경고 없음). 문구 `… 폴더는 다른 Scene과 달리 순번 숫자가 없어 이름 앞글자('back')로 표시합니다. Scene이 아니면 다른 곳으로 옮기세요.` 이전 `번호로 시작하지 않습니다` 대체.
+- 문서: `docs/dashboard/README.md`·`상세.md`·`구현.md`, `docs/features/case-compare.md`·`case-report.md`·`folder-name-warnings.md`. e2e `simulation-dashboard.spec.ts`의 순번 없는 Scene 시나리오에 짧은 이름 X축 기대값 추가(실행 안 함, 브라우저 없음).
+- 검증: pytest test_dashboard_parser_acceptance·test_dashboard_queries·test_folder_name_warnings·test_dashboard_run_videos 87 통과(신규: 짧은 이름 10건, 조회 응답·정렬·scene detail, W6 숫자 위치 무관 규칙). `tsc -b --noEmit` 통과. e2e 미실행, 독립 검수 미실행.
+
 ## 2026-10-17 — Case 결과 단위계 ton–mm–s와 Scene 순번 = 이름의 첫 숫자
 
 - 사용자 결정(2026-10-17, D09·DAMP 규칙 대체): 단위계는 ton–mm–s다. 단위계는 `backend/app/domains/dashboard/units.py` 한 곳(`UNIT_SYSTEM`, `STRESS_UNIT`=MPa, `LENGTH_UNIT`=mm, s·N·ton)에서 정한다. 유통 응력 값(`dashboard_queries.peak`, 파서 `_peak`)은 `unit: "MPa"`, `unit_status: "UNIT_SYSTEM"`이며, 원본 관측값에 단위가 하나 명시되어 있으면 그 단위(`SOURCE`)를 쓰고 서로 다르면 null(`MIXED`)이다. 수치 변환은 없다. distribution·comparison·scene-detail 응답에 `unit_system`을 추가했고, 화면 Scene 상세 축(`ref_coord (mm)`, MPa)과 보고서 Scene 상세 X축 `ref_coord (기준 좌표, mm)`가 이를 쓴다. 대시보드·Case 비교 Δ·보고서 표/그래프의 `단위 미확인`은 서버 값이 MPa가 되어 사라진다(단위 null일 때만 남음).

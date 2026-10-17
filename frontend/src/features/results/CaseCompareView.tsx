@@ -173,7 +173,7 @@ function DistributionTable({ model, finalButton }: { model: DistributionCompareM
       <caption className="case-sr-only">Scene별 Case 비교 · 선택 엣지 최대응력</caption>
       <thead><tr><th scope="col">Scene</th>{model.columns.map((column) => <ColumnHead key={column.id} column={column} finalButton={finalButton} unit={column.hasData ? compareUnitText(column.unit) : undefined} />)}</tr></thead>
       <tbody>{model.rows.map((row) => <tr key={row.key} data-scene={row.label} className={row.missingIn.length ? 'has-missing' : undefined}>
-        <th scope="row"><span className="case-compare__scene">{row.sequence != null ? <b>{row.sequence}</b> : null}<span title={row.label}>{row.label}</span><SceneNameWarningIcon label={row.label} /></span>{row.missingIn.length ? <small className="case-compare__missing-note">{row.missingIn.join(', ')}에 없음</small> : null}</th>
+        <th scope="row"><span className="case-compare__scene"><b title={row.label}>{row.sequenceLabel}</b><span title={row.label}>{row.label}</span><SceneNameWarningIcon label={row.label} /></span>{row.missingIn.length ? <small className="case-compare__missing-note">{row.missingIn.join(', ')}에 없음</small> : null}</th>
         {row.cells.map((cell, index) => <ValueCell key={model.columns[index].id} cell={cell} baseline={model.columns[index].baseline} />)}
       </tr>)}</tbody>
       <tfoot><tr data-scene="__summary__"><th scope="row">Case 최대 (Scene 전체)</th>{model.summary.map((cell, index) => <ValueCell key={model.columns[index].id} cell={{ ...cell, columnMax: false }} baseline={model.columns[index].baseline} />)}</tr></tfoot>

@@ -7,6 +7,15 @@ import type { DashboardDistribution, DashboardMember, DashboardScene } from '../
 
 export type SceneEnvelope = { scene: DashboardScene; value: number | null; unit: string | null }
 
+/**
+ * Scene 순번 as the screens show it: the server's label (the number, or the first
+ * token of a digit-free name cut to 4 characters — user decision 2026-10-17).
+ * The full Scene name belongs in a title tooltip wherever this is shown.
+ */
+export function sceneSequenceText(scene: { scene_sequence_label?: string | null; scene_sequence_number?: number | null }) {
+  return scene.scene_sequence_label ?? (scene.scene_sequence_number == null ? null : String(scene.scene_sequence_number)) ?? '순번 미확인'
+}
+
 /** The member a single-Case distribution result belongs to. */
 export function distributionMember(distribution: DashboardDistribution, caseId = distribution.context.simulation_case_id ?? ''): DashboardMember | undefined {
   return distribution.members.find((member) => member.simulation_case_id === caseId) ?? distribution.members[0]

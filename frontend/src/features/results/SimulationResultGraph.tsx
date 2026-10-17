@@ -4,8 +4,9 @@ import { Expand } from 'lucide-react'
 import type { DashboardMember } from '../../shared/api/simulationDashboard'
 
 type ChartMode = 'bar' | 'dot' | 'line'
-export type SimulationChartPoint = { scene_id: string; member_id: string; scene: string; scene_sequence_number: number | null; order_status?: string | null; member: string; color: string; value: number | null; unit: string | null }
-type ChartRow = { scene_id: string; scene: string; points: Record<string, SimulationChartPoint>; lineValues: Record<string, number | null> }
+/** `scene` is the axis label (순번 or short name); `scene_title` is the full Scene name shown in the tooltip when the label is a short name. */
+export type SimulationChartPoint = { scene_id: string; member_id: string; scene: string; scene_title?: string; scene_sequence_number: number | null; order_status?: string | null; member: string; color: string; value: number | null; unit: string | null }
+type ChartRow = { scene_id: string; scene: string; scene_title?: string; points: Record<string, SimulationChartPoint>; lineValues: Record<string, number | null> }
 type Props = { chartId: string; title: string; points: SimulationChartPoint[]; members: DashboardMember[]; onSelect: (sceneId: string, memberId: string) => void; valueName: string }
 
 export function SimulationResultGraph({ chartId, title, points, members, onSelect, valueName }: Props) {
@@ -17,7 +18,7 @@ export function SimulationResultGraph({ chartId, title, points, members, onSelec
   const chartRows = useMemo(() => {
     const rows = new Map<string, ChartRow>()
     for (const point of points) {
-      const row = rows.get(point.scene_id) ?? { scene_id: point.scene_id, scene: point.scene, points: {}, lineValues: {} }
+      const row = rows.get(point.scene_id) ?? { scene_id: point.scene_id, scene: point.scene, scene_title: point.scene_title, points: {}, lineValues: {} }
       row.points[point.member_id] = point
       row.lineValues[point.member_id] = point.scene_sequence_number == null || point.order_status !== 'CONFIRMED' ? null : point.value
       rows.set(point.scene_id, row)
@@ -25,6 +26,8 @@ export function SimulationResultGraph({ chartId, title, points, members, onSelec
     return [...rows.values()]
   }, [points])
   const labels = new Map(chartRows.map((row) => [row.scene_id, row.scene]))
+  const tooltipLabel = (label: string, title?: string) => title && title !== label ? `${label} · ${title}` : label
+  const rowTitles = new Map(chartRows.map((row) => [row.scene_id, row.scene_title]))
   const colors = new Map(points.map((point) => [point.member_id, point.color]))
   const hasUnconfirmedOrder = points.some((point) => point.scene_sequence_number == null || point.order_status !== 'CONFIRMED')
   const close = () => { dialog.current?.close(); setExpanded(false) }
@@ -34,13 +37,13 @@ export function SimulationResultGraph({ chartId, title, points, members, onSelec
     <ResponsiveContainer width="100%" height="100%">
       {mode === 'bar' ? <BarChart data={points}>
         <CartesianGrid vertical={false} strokeDasharray="3 3" /><XAxis dataKey="scene" /><YAxis />
-        <Tooltip<number, string> formatter={(value, _name, item) => [`${value} ${item?.payload?.unit ?? '단위 미확인'}`, `${item?.payload?.member ?? ''} ${valueName}`]} />
+        <Tooltip<number, string> labelFormatter={(label, payload) => tooltipLabel(String(label), (payload?.[0]?.payload as SimulationChartPoint | undefined)?.scene_title)} formatter={(value, _name, item) => [`${value} ${item?.payload?.unit ?? '단위 미확인'}`, `${item?.payload?.member ?? ''} ${valueName}`]} />
         <Bar dataKey="value" isAnimationActive={false} onClick={(_, index) => { const point = points[index]; if (point?.value != null) onSelect(point.scene_id, point.member_id) }}>
           {points.map((point) => <Cell key={`${point.scene_id}:${point.member_id}`} fill={point.color} />)}
         </Bar>
       </BarChart> : <LineChart data={chartRows}>
         <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="scene_id" tickFormatter={(id: string) => labels.get(id) ?? id} /><YAxis />
-        <Tooltip<number, string> labelFormatter={(id) => labels.get(String(id)) ?? id} formatter={(value, name, item) => {
+        <Tooltip<number, string> labelFormatter={(id) => tooltipLabel(labels.get(String(id)) ?? String(id), rowTitles.get(String(id)))} formatter={(value, name, item) => {
           const point = (item?.payload as ChartRow | undefined)?.points[String(name)]
           return [`${value} ${point?.unit ?? '단위 미확인'}`, `${point?.member ?? name} ${valueName}`]
         }} />

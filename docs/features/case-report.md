@@ -68,7 +68,7 @@ Case 결과 화면 헤더의 `보고서` 버튼으로 현재 선택한 Case 결�
 | 유통 | Scene 상세 · TOP/BOT/LH/RH (Scene마다) | XY 선 4개(2×2 한 슬라이드), 계열 L1–L4 | `/distribution/scenes/{id}?position=`(화면이 Scene을 누를 때 읽는 값, 표시 라인 범위). Scene × 위치를 동시 4개까지 읽고, 읽기 실패는 그 그래프 자리에 사유 |
 | 사용 | 평가별 값(4개씩 한 슬라이드) | 막대 | `usage.evaluations` 공통·전방·후방 × 현재 Case(·Reference) |
 
-- 모든 그래프에 제목, 축 제목(단위 포함, 없으면 `단위 미확인`), 계열 이름, 범례가 있다. 2026-10-17부터 응력 축은 MPa, Scene 상세의 X축은 `ref_coord (기준 좌표, mm)`(서버 `unit_system.length`)이다. Scene 순번은 폴더 이름의 첫 숫자(DAMP-2 → 2)다. 계열 색은 화면 차트 색(라이트 테마 값)이다.
+- 모든 그래프에 제목, 축 제목(단위 포함, 없으면 `단위 미확인`), 계열 이름, 범례가 있다. 2026-10-17부터 응력 축은 MPa, Scene 상세의 X축은 `ref_coord (기준 좌표, mm)`(서버 `unit_system.length`)이다. Scene 순번은 폴더 이름의 첫 숫자(DAMP-2 → 2)다. 숫자가 없는 Scene은 표의 순번 칸과 그래프 X축에 서버 `scene_sequence_label`(이름 첫 토큰 4글자, `Corner_Drop` → `Corn`, 2026-10-17)을 쓰고, 전체 이름은 표의 Scene 칸에 있다. 계열 색은 화면 차트 색(라이트 테마 값)이다.
 - XY 계열은 `ref_coord`로 정렬하고 값이 없는 점은 뺀다. PPTX는 계열들의 X를 하나로 합쳐 빈칸을 잇는다(`displayBlanksAs: span`).
 - 큰 계열: 계열당 2,000점을 넘으면 LTTB(Largest-Triangle-Three-Buckets, 결정적)로 2,000점으로 줄이고 그래프 아래에 `L1: 원본 N점 → 2,000점(LTTB 축약)`을 적는다.
 - 화면 선택에 따라 보이는 방식(막대/점/선 전환, Case 범례 끄기, Scene 클릭 상세)은 보고서에서 모두 펼친다: 기본 막대, 모든 Scene의 상세.

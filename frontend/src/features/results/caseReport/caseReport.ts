@@ -16,7 +16,7 @@ import type { ContentSnapshot, ReportExportOptions } from '../../../reportExport
 import type { Overview, ReportContentItem, ReportElementDefinition, ReportLayoutDefinition, ReportSlideDefinition, ReportSource } from '../../../types'
 import type { CaseCompareReport } from '../caseCompare'
 import { reportMetaRows, type CaseReportMeta } from './reportMeta'
-import { distributionMember, noEdgeSelected, sceneEnvelopes } from '../distributionValues'
+import { distributionMember, noEdgeSelected, sceneEnvelopes, sceneSequenceText } from '../distributionValues'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageCell, usageEvaluationLabel, usageEvaluationRows, usageStatusText } from '../usageEvaluations'
 
 export type CaseReportSource = Extract<ReportSource, { kind: 'case_results' }>
@@ -120,8 +120,9 @@ function valueText(value?: Pick<DashboardValue, 'value' | 'unit'> | null) {
   return value?.value == null ? '값 없음' : `${value.value}${value.unit ? ` ${value.unit}` : ' · 단위 미확인'}`
 }
 
-function sceneNumber(scene: { scene_sequence_number: number | null }) {
-  return scene.scene_sequence_number == null ? '순번 미확인' : String(scene.scene_sequence_number)
+/** 순번 column: the number, or the short name label of a digit-free Scene (the Scene column holds the full name). */
+function sceneNumber(scene: { scene_sequence_label?: string | null; scene_sequence_number: number | null }) {
+  return sceneSequenceText(scene)
 }
 
 function generatedLabelOf(date: Date) {

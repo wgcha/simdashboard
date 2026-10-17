@@ -6,7 +6,7 @@ import logging
 import math
 from typing import Any
 
-from ..domains.dashboard.parser import scene_sequence_number, scene_sort_key
+from ..domains.dashboard.parser import scene_sequence_label, scene_sequence_number, scene_sort_key
 from ..domains.dashboard.units import stress_unit, unit_system
 from .dashboard_capture import DashboardCaptureError, _decode
 
@@ -401,6 +401,15 @@ def scene_sequence(scene):
     return scene_sequence_number(name) if name else scene.get("scene_sequence_number")
 
 
+def scene_label_text(scene):
+    """순번 display text: the number, or the name's first token (<= 4 chars) when it has no digit."""
+    name = scene_name(scene)
+    if name:
+        return scene_sequence_label(name)
+    stored = scene.get("scene_sequence_number")
+    return str(stored) if stored is not None else None
+
+
 def ordered_scenes(scenes):
     return sorted(scenes, key=lambda scene: scene_sort_key(scene_name(scene)))
 
@@ -409,7 +418,8 @@ def scene_public(scene):
     sequence = scene_sequence(scene)
     return {"id": scene["id"], "label": scene["source_name"], **{k: scene.get(k) for k in (
         "scenario_number", "contact_code", "repetition")},
-        "scene_sequence_number": sequence, "order_status": "CONFIRMED" if sequence is not None else "UNCONFIRMED",
+        "scene_sequence_number": sequence, "scene_sequence_label": scene_label_text(scene),
+        "order_status": "CONFIRMED" if sequence is not None else "UNCONFIRMED",
         "description": " / ".join(str(scene.get(k) or "미확인") for k in ("contact_code", "repetition")),
         "match_key": scene.get("scene_match_key")}
 
@@ -445,7 +455,8 @@ def distribution(capture, run_id, mode, component, basis, edges, lines, run_opti
         for value in values:
             value["is_selected_maximum"] = value["edge"] in edges and value["value"] is not None and value["value"] == envelope["value"]
         result["series"].append({**envelope, "id": member_id + ":" + scene["id"], "scene_id": scene["id"],
-                                  "scene_sequence_number": scene_sequence(scene), "member_id": member_id,
+                                  "scene_sequence_number": scene_sequence(scene),
+                                  "scene_sequence_label": scene_label_text(scene), "member_id": member_id,
                                   "edge": "ENVELOPE", "selected_edge_envelope": envelope["value"]})
         media = [m for m in scene.get("media", []) if m.get("component_id") == component]
         images = [m for m in media if m.get("kind") == "IMAGE"]
@@ -556,6 +567,7 @@ def run_videos(capture, run_id, *, mode=None, run_option_id=None, page=1, page_s
             videos.append({"video_id": f"{scene['id']}:{media['asset_id']}", "asset_id": media["asset_id"],
                            "scene_id": scene["id"], "scene_label": label,
                            "scene_sequence_number": scene_sequence(scene),
+                           "scene_sequence_label": scene_label_text(scene),
                            "title": media.get("title") or name or label, "component_id": media.get("component_id"),
                            "frame_role": media.get("frame_role"), "status": media.get("status") or "READY",
                            "source_capture_id": scene.get("source_capture_id") or capture["id"]})

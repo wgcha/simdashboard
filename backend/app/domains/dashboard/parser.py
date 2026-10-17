@@ -15,6 +15,9 @@ from .units import stress_unit
 EVALUATIONS = ("Settle", "Wobble", "Horizontal_Force_Angle", "Slope_Angle", "Slope_Angle_360")
 # ASCII digits only: the first run of them in a Scene folder name is its 순번.
 _SEQUENCE_RE = re.compile(r"[0-9]+")
+# A Scene name without digits is shown by its first token (split at _ - whitespace .), cut to 4 characters.
+_LABEL_SPLIT_RE = re.compile(r"[_\-\s.]+")
+SCENE_LABEL_MAX_CHARS = 4
 _SCENARIO_RE = re.compile(r"(?:^|_)Scene(?P<number>\d+)(?:_|$)", re.IGNORECASE)
 _REPETITION_RE = re.compile(r"(?:^|_)(?P<value>\d+(?:st|nd|rd|th))(?:_|$)", re.IGNORECASE)
 _CONTACT_RE = re.compile(r"(?:^|_)(?P<value>(?:Face|Corner|Edge)[A-Za-z0-9]+)(?:_|$)", re.IGNORECASE)
@@ -145,6 +148,22 @@ def scene_sequence_number(name: str) -> int | None:
     """
     match = _SEQUENCE_RE.search(name or "")
     return int(match.group(0)) if match else None
+
+
+def scene_short_name(name: str) -> str | None:
+    """Short label from the start of a Scene name: its first token, at most 4 characters.
+
+    Tokens are split at ``_``, ``-``, whitespace and ``.`` (user decision 2026-10-17):
+    ``Face_Top_Drop`` -> ``Face``, ``Corner_Drop`` -> ``Corn``. ``None`` for an empty name.
+    """
+    token = next((part for part in _LABEL_SPLIT_RE.split(str(name or "")) if part), "")
+    return token[:SCENE_LABEL_MAX_CHARS] or None
+
+
+def scene_sequence_label(name: str) -> str | None:
+    """What the screens show as 순번: the number, or the short name when there is no digit."""
+    sequence = scene_sequence_number(name)
+    return str(sequence) if sequence is not None else scene_short_name(name)
 
 
 def scene_sort_key(name: str) -> tuple[bool, int, str]:

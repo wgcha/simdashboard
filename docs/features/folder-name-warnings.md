@@ -14,7 +14,7 @@
 | `SCENE_NAME_SPELLING` | 정규화 후 글자 하나 추가·삭제·변경 또는 인접 두 글자 바꿈(5자 이상, 숫자 차이는 제외: `1_Face`/`2_Face`는 정상) | warning |
 | `CASE_SCENE_MISMATCH` | 같은 의뢰의 여러 Case에서 같은 위치(Case 아래 하위 경로를 정규화해 비교)의 Scene 이름이 위 규칙으로 비슷하지만 Case마다 다르게 적힘 | warning |
 | `UNEXPECTED_FOLDER` | snapshot 노드의 깊이 스키마 이탈 코드([depth-schema §5](../contracts/depth-schema.md))를 한국어 문구로 표시, 상태 UNRESOLVED·CONFLICT 노드(EXCLUDED는 사용자가 뺀 것이라 제외) | warning |
-| `UNEXPECTED_FOLDER` | 같은 Run Option·Case 아래 Scene 대부분이 번호로 시작하는데 번호로 시작하지 않는 폴더(`backup` 등). 깊이 스키마에서는 그 깊이 폴더가 모두 Scene이 되므로 이름으로만 구분 | info |
+| `UNEXPECTED_FOLDER` | 같은 Run Option·Case 아래 순번 숫자가 있는 Scene 옆에 이름에 숫자가 하나도 없는 폴더(`backup`, `Corner_Drop` 등). 2026-10-17부터 순번은 이름의 첫 숫자이므로 `DAMP-3_Edge`(순번 3)처럼 숫자로 시작하지 않아도 숫자가 있으면 경고하지 않는다. 문구: `… 폴더는 다른 Scene과 달리 순번 숫자가 없어 이름 앞글자('back')로 표시합니다. Scene이 아니면 다른 곳으로 옮기세요.` 깊이 스키마에서는 그 깊이 폴더가 모두 Scene이 되므로 이름으로만 구분 | info |
 
 Final 가지는 위치 투영에서 이미 빠지므로 Final 하위 이탈(`UNEXPECTED_FINAL_CHILD` 등)은 이 목록에 나오지 않는다.
 
@@ -26,4 +26,4 @@ Final 가지는 위치 투영에서 이미 빠지므로 Final 하위 이탈(`UNE
 
 ## 검증
 
-- `backend/tests/test_folder_name_warnings.py`: 합성 트리 `4_Edge`/`4_edge2`, `2_Face`/`2_face`, Case 간 `6_Corner`/`6_corner`, Run Option 아래 `backup`, 정상 트리(경고 없음), 이탈 코드 한국어 문구, 유사도 규칙.
+- `backend/tests/test_folder_name_warnings.py`: 합성 트리 `4_Edge`/`4_edge2`, `2_Face`/`2_face`, Case 간 `6_Corner`/`6_corner`, Run Option 아래 `backup`, 숫자가 이름 중간에만 있는 `DAMP-3_Edge`는 경고 없음·숫자 없는 `Corner_Drop`은 경고(2026-10-17), 정상 트리(경고 없음), 이탈 코드 한국어 문구, 유사도 규칙.

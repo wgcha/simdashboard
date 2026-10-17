@@ -415,7 +415,8 @@ test('clearing every edge shows no selection and selecting an edge restores the 
 
 test('chart modes preserve missing and unordered scenes and expanded charts close with Escape', async ({ page }) => {
   const payload = distributionPayload() as DashboardDistribution
-  payload.scenes[18] = { ...payload.scenes[18], scene_sequence_number: null, order_status: 'UNCONFIRMED' }
+  // A Scene name without digits: the axis shows the server's short name label (2026-10-17).
+  payload.scenes[18] = { ...payload.scenes[18], label: 'Corner_Drop', scene_sequence_number: null, scene_sequence_label: 'Corn', order_status: 'UNCONFIRMED' }
   await installDashboardMocks(page, { distribution: payload })
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -429,6 +430,8 @@ test('chart modes preserve missing and unordered scenes and expanded charts clos
   await mode.selectOption('dot')
   await expect(summary.locator('.recharts-bar')).toHaveCount(0)
   await expect(summary.locator('.recharts-line-dot')).toHaveCount(19)
+  await expect(summary.locator('.recharts-xAxis')).toContainText('Corn')
+  await expect(summary.locator('.recharts-xAxis')).not.toContainText('Corner_Drop')
   await summary.locator('.recharts-line-dot').nth(8).hover()
   await expect(summary.locator('.recharts-tooltip-wrapper')).toContainText('Case A')
   await summary.locator('.recharts-line-dot').last().click()

@@ -5,7 +5,7 @@
  * 요약 tab (distribution) and the 다섯 평가 종합 table (usage).
  */
 import type { DashboardCatalog, DashboardChoice, DashboardDistribution, DashboardEnvironment, UsageDashboard } from '../../shared/api/simulationDashboard'
-import { noEdgeSelected, sceneEnvelopes } from './distributionValues'
+import { noEdgeSelected, sceneEnvelopes, sceneSequenceText } from './distributionValues'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageCell, usageEvaluationLabel, usageEvaluationRows, type UsageCellView, type UsageMetric } from './usageEvaluations'
 
 export const COMPARE_MIN_CASES = 2
@@ -72,7 +72,8 @@ export type CompareColumnInput<T> = { id: string; label: string; data: T | null;
 // ---------------------------------------------------------------- distribution
 
 export type DistributionCompareCell = { value: number | null; unit: string | null; missing: boolean; delta: number | null; percent: number | null; best: boolean; columnMax: boolean }
-export type DistributionCompareRow = { key: string; label: string; sequence: number | null; missingIn: string[]; cells: DistributionCompareCell[] }
+/** `sequenceLabel`: 순번 as shown (number, or the short name label of a digit-free Scene). */
+export type DistributionCompareRow = { key: string; label: string; sequence: number | null; sequenceLabel: string; missingIn: string[]; cells: DistributionCompareCell[] }
 export type DistributionCompareColumn = { id: string; label: string; baseline: boolean; reason: string; unit: string | null; hasData: boolean }
 export type DistributionCompareModel = { columns: DistributionCompareColumn[]; rows: DistributionCompareRow[]; summary: DistributionCompareCell[]; units: Array<string | null>; unitMismatch: boolean; noEdge: boolean }
 
@@ -96,16 +97,18 @@ function rankRow(cells: DistributionCompareCell[], baselineIndex: number, unitMi
 /** Scene rows aligned by exact Scene folder name (W6 warns about near-identical names). */
 export function buildDistributionCompare(columns: Array<CompareColumnInput<DashboardDistribution>>, baselineId: string, edgeKeys: string): DistributionCompareModel {
   const perColumn = columns.map((column) => {
-    const values = new Map<string, { label: string; sequence: number | null; value: number | null; unit: string | null }>()
+    const values = new Map<string, { label: string; sequence: number | null; sequenceLabel: string; value: number | null; unit: string | null }>()
     for (const item of column.data ? sceneEnvelopes(column.data, edgeKeys) : []) {
       const key = item.scene.label.trim()
-      if (!values.has(key)) values.set(key, { label: item.scene.label, sequence: item.scene.scene_sequence_number, value: item.value, unit: item.unit })
+      if (!values.has(key)) values.set(key, { label: item.scene.label, sequence: item.scene.scene_sequence_number, sequenceLabel: sceneSequenceText(item.scene), value: item.value, unit: item.unit })
     }
     return values
   })
-  const order: Array<{ key: string; label: string; sequence: number | null; index: number }> = []
-  perColumn.forEach((values) => values.forEach((item, key) => { if (!order.some((row) => row.key === key)) order.push({ key, label: item.label, sequence: item.sequence, index: order.length }) }))
-  order.sort((a, b) => (a.sequence ?? Number.POSITIVE_INFINITY) - (b.sequence ?? Number.POSITIVE_INFINITY) || a.index - b.index)
+  const order: Array<{ key: string; label: string; sequence: number | null; sequenceLabel: string; index: number }> = []
+  perColumn.forEach((values) => values.forEach((item, key) => { if (!order.some((row) => row.key === key)) order.push({ key, label: item.label, sequence: item.sequence, sequenceLabel: item.sequenceLabel, index: order.length }) }))
+  // Same order as the server (scene_sort_key): numbered by number, then unnumbered; ties by name.
+  const byName = (a: string, b: string) => { const x = a.toLowerCase(); const y = b.toLowerCase(); return x < y ? -1 : x > y ? 1 : 0 }
+  order.sort((a, b) => Number(a.sequence == null) - Number(b.sequence == null) || (a.sequence ?? 0) - (b.sequence ?? 0) || byName(a.label, b.label) || a.index - b.index)
   const unitsByColumn = perColumn.map((values) => Array.from(new Set(Array.from(values.values()).filter((item) => item.value != null).map((item) => item.unit ?? null))))
   const units = Array.from(new Set(unitsByColumn.flat()))
   const unitMismatch = units.length > 1
@@ -117,7 +120,7 @@ export function buildDistributionCompare(columns: Array<CompareColumnInput<Dashb
       return compareCell(item?.value ?? null, item?.unit ?? null, !item)
     })
     rankRow(cells, baselineIndex, unitMismatch)
-    return { key: row.key, label: row.label, sequence: row.sequence, missingIn: columns.filter((_, index) => cells[index].missing).map((column) => column.label), cells }
+    return { key: row.key, label: row.label, sequence: row.sequence, sequenceLabel: row.sequenceLabel, missingIn: columns.filter((_, index) => cells[index].missing).map((column) => column.label), cells }
   })
   // Case-level summary: the highest Scene value of each Case; the Scene holding it is marked per column.
   const summary = columns.map((_, index) => {

@@ -105,7 +105,31 @@ def test_unexpected_folder_under_run_option(admin_client):
     _assert_shape(warnings)
     assert [(item["kind"], item["severity"], _names(item)) for item in warnings] == [
         ("UNEXPECTED_FOLDER", "info", ["backup"])]
-    assert "번호로 시작하지 않습니다" in warnings[0]["message"]
+    assert "순번 숫자가 없어 이름 앞글자('back')로 표시합니다" in warnings[0]["message"]
+
+
+def _scene_locations(names, parent=f"{WORKING}/CaseA/Drop/run/INDIVIDUAL"):
+    class Locations:
+        locations = tuple({"role_kind": "SCENE", "name": name, "parent_path": parent,
+                           "relative_path": f"{parent}/{name}", "hierarchy": {}} for name in names)
+    return Locations()
+
+
+def test_scene_with_a_number_anywhere_in_its_name_is_not_flagged():
+    """순번 = first number in the name (2026-10-17): DAMP-3_Edge has 순번 3, so only digit-free names warn."""
+    from app.services.folder_name_warnings import folder_name_warnings
+
+    warnings = folder_name_warnings({"nodes": []}, _scene_locations(["2_Face", "DAMP-3_Edge", "Corner_Drop_Scene08"]),
+                                    "root", "DISTRIBUTION")
+    assert warnings == []
+    warnings = folder_name_warnings({"nodes": []}, _scene_locations(["2_Face", "DAMP-3_Edge", "Corner_Drop", "backup"]),
+                                    "root", "DISTRIBUTION")
+    assert [(item["kind"], item["severity"], _names(item)) for item in warnings] == [
+        ("UNEXPECTED_FOLDER", "info", ["Corner_Drop", "backup"])]
+    assert "이름 앞글자('Corn', 'back')로 표시합니다" in warnings[0]["message"]
+    # Without numbered siblings there is nothing to compare against.
+    assert folder_name_warnings({"nodes": []}, _scene_locations(["Face_Drop", "Corner_Drop"]),
+                                "root", "DISTRIBUTION") == []
 
 
 def test_unexpected_request_child_deviation_is_shown_in_korean():

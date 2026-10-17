@@ -289,3 +289,20 @@ def test_stored_scene_sequence_is_recomputed_from_the_name_and_reordered():
     assert [(s["id"], s["scene_sequence_number"], s["order_status"]) for s in result["scenes"]] == [
         ("s2", 13, "CONFIRMED"), ("s1", 20, "CONFIRMED"), ("s3", None, "UNCONFIRMED")]
     assert [s["scene_sequence_number"] for s in result["series"]] == [13, 20, None]
+    # 순번 display text: the number, or the name's first token cut to 4 characters (2026-10-17).
+    assert [s["scene_sequence_label"] for s in result["scenes"]] == ["13", "20", "Face"]
+    assert [s["scene_sequence_label"] for s in result["series"]] == ["13", "20", "Face"]
+
+
+def test_unnumbered_scenes_get_a_short_label_and_sort_by_name_after_numbered():
+    cap = capture()
+    first = cap["payload"]["runs"][0]["scenes"][0]
+    names = {"s2": "Face_Top_Drop", "s3": "Corner_Drop", "s4": "가나다라마바_x"}
+    cap["payload"]["runs"][0]["scenes"] = [first] + [
+        {**first, "id": key, "source_name": name, "label": name, "scene_sequence_number": None}
+        for key, name in names.items()]
+    result = queries.distribution(cap, "run1", "INDIVIDUAL", "C23", "DETAIL", {"TOP"}, {1, 2, 3, 4})
+    assert [(s["id"], s["scene_sequence_number"], s["scene_sequence_label"]) for s in result["scenes"]] == [
+        ("s1", 20, "20"), ("s3", None, "Corn"), ("s2", None, "Face"), ("s4", None, "가나다라")]
+    detail = queries.scene_detail(cap, "s3", "run1", "INDIVIDUAL", "C23", "DETAIL", {1, 4}, "TOP")
+    assert detail["scene"]["scene_sequence_label"] == "Corn"

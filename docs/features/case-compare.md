@@ -15,6 +15,7 @@
 
 ## 표
 - 유통: 행 = Scene 이름(모든 Case의 합집합, **정확히 같은 이름**끼리 맞춤 — 대소문자만 다른 이름은 W6 경고 대상이며 다른 행), 열 = Case. 칸 = 값·단위, 기준 대비 Δ(값과 %), 행별 최저값 `최저`(녹색), Case별 가장 높은 Scene `Case 최대`. 어떤 Case에 없는 Scene은 `없음`(주황)과 행 머리 `Case B에 없음`. W6 이름 경고가 있으면 Scene 이름 옆 아이콘. 마지막 행 `Case 최대 (Scene 전체)`에도 Δ·최저.
+- 행 머리의 순번은 서버 `scene_sequence_label`이다(2026-10-17): 순번 숫자, 숫자가 없는 이름은 첫 토큰 4글자(`Corner_Drop` → `Corn`), 툴팁에 전체 이름. 행 순서는 서버와 같이 순번 있는 Scene 숫자순 → 순번 없는 Scene 이름순.
 - 단위가 Case마다 다르면(값이 있는 Scene 기준, 단위 없음도 하나의 값) Δ를 계산하지 않고 경고를 표시. 2026-10-17부터 서버가 유통 응력 값에 ton–mm–s 단위계의 `MPa`를 붙이므로(원본 명시 단위 우선, 수치 변환 없음) 보통 모두 `MPa`로 같고 Δ도 MPa다. 이전의 `단위 미확인`(null) 기본값을 대체한다.
 - 사용: 행 = 다섯 평가(Settle, Wobble, Horizontal_Force_Angle, Slope_Angle 값, Slope_Angle 판정, Slope_Angle_360), 열 = Case, 칸 = 공통/전방/후방 값과 상태. OK 녹색, NG 빨강.
 

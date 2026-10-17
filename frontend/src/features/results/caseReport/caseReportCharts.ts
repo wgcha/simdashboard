@@ -16,7 +16,7 @@
 import type { DashboardDistribution, DashboardMember, DashboardSceneDetail, UsageDashboard } from '../../../shared/api/simulationDashboard'
 import type { ReportChartSpec } from '../../../reportExport'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageEvaluationLabel, usageMetricStatus } from '../usageEvaluations'
-import { distributionMember, noEdgeSelected } from '../distributionValues'
+import { distributionMember, noEdgeSelected, sceneSequenceText } from '../distributionValues'
 
 export type CaseReportChart = ReportChartSpec & { id: string }
 /** Charts shown together (one slide: a single chart or a 2×2 grid). */
@@ -70,8 +70,8 @@ export function lttb(points: Array<[number, number]>, threshold = CHART_MAX_POIN
 
 const unitText = (unit: string | null | undefined) => unit || '단위 미확인'
 const firstUnit = (units: Array<string | null | undefined>) => units.find((unit) => unit) ?? null
-/** Same x labels as the screen: Scene 순번, or the Scene name when the number is unknown. */
-const sceneAxisLabel = (scene: { label: string; scene_sequence_number: number | null }) => scene.scene_sequence_number == null ? scene.label : String(scene.scene_sequence_number)
+/** Same x labels as the screen: Scene 순번, or the short name label (first token, 4 characters) without a number. */
+const sceneAxisLabel = (scene: { scene_sequence_label?: string | null; scene_sequence_number: number | null }) => sceneSequenceText(scene)
 
 function memberColor(member: DashboardMember | undefined, index: number) { return member?.color || LINE_COLORS[index % LINE_COLORS.length] }
 
