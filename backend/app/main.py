@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from . import config as app_config
+from .server_clock import SERVER_OFFSET_HEADER, SERVER_TIME_HEADER, SERVER_TIMEZONE_HEADER, ServerClockMiddleware
 from .modules.access_control import (
     PROJECT_DATA_VIEW,
     REQUEST_CREATE,
@@ -133,7 +134,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[SERVER_TIME_HEADER, SERVER_OFFSET_HEADER, SERVER_TIMEZONE_HEADER],
 )
+# Outermost: every response (401/403/503 included) carries the server clock (docs/features/server-time.md).
+app.add_middleware(ServerClockMiddleware)
 app.mount("/assets", StaticFiles(directory=str(__import__("pathlib").Path(__file__).resolve().parents[1] / "public_assets")), name="assets")
 app.include_router(security_router)
 app.include_router(auth_accounts_router)

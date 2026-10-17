@@ -1,5 +1,5 @@
 import { apiErrorMessage } from '../src/shared/api/errors.ts'
-import { formatServerTime, parseServerTime } from '../src/shared/api/serverTime.ts'
+import { formatServerTime, noteServerClock, parseServerTime, relativeServerTime, resetServerClock, serverClockOffsetMs, serverNow, serverTimeZone, SERVER_CLOCK_WINDOW_MS } from '../src/shared/api/serverTime.ts'
 import { folderProgressPath, folderProgressStatusLabel, normalizeFolderProgress } from '../src/shared/api/folderProgress.ts'
 import { folderDefaultEnvironment, keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
 import { chunkRanges, depthRules, dropEntries, dropGuide, entryRelativePath, formatBytes as dropBytes, pickedFromInput, walkEntries } from '../src/shared/api/resultDropModel.ts'
@@ -71,6 +71,46 @@ assert(parseServerTime('') === null && parseServerTime('not a date') === null, '
 const kst = formatServerTime('2026-10-02T23:02:00', { hour: 'numeric', minute: '2-digit', hour12: false }, 'Asia/Seoul')
 assert(kst.includes('08:02') || kst.includes('8:02'), `UTC 23:02 must show as 08:02 KST, got ${kst}`)
 assert(formatServerTime('legacy') === 'legacy', 'unreadable timestamps are shown as given')
+
+// Server clock reference (docs/features/server-time.md): relative ages follow the server clock,
+// absolute times the server zone, whatever the PC clock or zone says.
+{
+  resetServerClock()
+  assert(serverClockOffsetMs() === 0 && serverTimeZone() === undefined, 'no response yet: client clock and browser zone')
+  const hour = 3_600_000
+  const client = Date.now()
+  const server = client - 18 * hour   // PC clock 18 h ahead of the server (the reported "18시간 전")
+  const createdAt = new Date(server - 3 * 60_000)
+  const naive = createdAt.toISOString().replace('Z', '')              // legacy naive UTC string
+  const offset = createdAt.toISOString()                              // Z
+  const kstText = new Date(createdAt.getTime() + 9 * hour).toISOString().replace('Z', '+09:00')
+  assert(relativeServerTime(offset, client) === '18시간 전', 'without the server reference the PC clock skew shows')
+  noteServerClock(new Headers({ 'X-Server-Time': new Date(server).toISOString(), 'X-Server-Timezone': 'Asia/Seoul', 'X-Server-UTC-Offset-Minutes': '540' }), client)
+  assert(Math.abs(serverClockOffsetMs() + 18 * hour) < 1000, `offset must be −18 h, got ${serverClockOffsetMs()}`)
+  assert(Math.abs(serverNow() - server) < 5_000, 'serverNow follows the server clock')
+  for (const text of [naive, offset, kstText]) {
+    assert(relativeServerTime(text) === '3분 전', `${text} must be 3분 전 on the server clock, got ${relativeServerTime(text)}`)
+  }
+  assert(relativeServerTime(new Date(server + 30_000).toISOString()) === '방금', 'a slightly future stamp is 방금')
+  assert(relativeServerTime(null) === '' && relativeServerTime('garbage') === '', 'unreadable is empty')
+  // A sample with more latency (smaller server − received) does not lower the estimate.
+  noteServerClock(new Headers({ 'X-Server-Time': new Date(server - 400).toISOString() }), client)
+  assert(Math.abs(serverClockOffsetMs() + 18 * hour) < 50, 'the largest sample in the window wins')
+  // An old window is dropped so a corrected server clock is followed.
+  noteServerClock(new Headers({ 'X-Server-Time': new Date(client + SERVER_CLOCK_WINDOW_MS + 1).toISOString() }), client + SERVER_CLOCK_WINDOW_MS + 1)
+  assert(Math.abs(serverClockOffsetMs()) < 50, 'samples older than the window are dropped')
+  // Absolute times use the server zone (run with TZ=America/Anchorage to see the browser zone is ignored).
+  const shown = formatServerTime('2026-10-02T23:02:00Z', { hour: 'numeric', minute: '2-digit', hour12: false })
+  assert(serverTimeZone() === 'Asia/Seoul' && (shown.includes('08:02') || shown.includes('8:02')), `server zone display must be 08:02 KST, got ${shown}`)
+  resetServerClock()
+  noteServerClock(new Headers({ 'X-Server-Time': new Date().toISOString(), 'X-Server-UTC-Offset-Minutes': '540' }))
+  assert(serverTimeZone() === 'Etc/GMT-9', `offset-only server zone must be Etc/GMT-9, got ${serverTimeZone()}`)
+  noteServerClock(new Headers({ 'X-Server-Timezone': 'Not/AZone' }))
+  assert(serverTimeZone() === 'Etc/GMT-9', 'an invalid zone name is ignored')
+  noteServerClock(undefined)
+  noteServerClock({})
+  resetServerClock()
+}
 
 // Request result environments (case-results-environment.md §2).
 assert(resultEnvironmentsPath('p 1', 'r/1') === '/api/projects/p%201/requests/r%2F1/result-environments', 'result-environments path must encode ids')

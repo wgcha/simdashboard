@@ -14,6 +14,7 @@
 | 대시보드 조회·비교 | [대시보드 기능 안내](dashboard/README.md) | 등록 방식 변경은 [결과 등록 계약](features/result-registration.md) |
 | Case 결과·소재물성 화면·자동 반영·보고서·Final | [Case 결과 흐름 재설계 계획](plans/case-results-workflow-redesign.md) | 위치 정본은 [공용 위치 계약](features/folder-schema-refresh.md), 보고서 형식·HTML 영상 상한은 [Case 결과 보고서](features/case-report.md), 폴더 이름 경고는 [폴더 이름 경고](features/folder-name-warnings.md), Case 여러 개 비교는 [Case 비교](features/case-compare.md), 사용환경 소재(OptiStruct)는 [사용환경 소재](features/materials-optistruct.md) |
 | 알림(상단 알림 아이콘·알림 페이지·이벤트별 수신자)·전체 글자 크기 조절 숨김 | [알림 기능 안내](features/notifications.md) | DB 변경은 [배포 정책](windows-deployment-policy.md), 드라이브 이벤트는 [SCX 드라이브 기능 안내](features/scx-drive.md) |
+| 시각 표시 기준(서버 시계·서버 시간대, UTC 저장, "n분 전") | [서버 시각·시간대 정책](features/server-time.md) | 알림 상대 시각은 [알림 기능 안내](features/notifications.md) |
 | SCX 드라이브 연동(어댑터 설치·토큰·대시보드 다시 연결·드라이브 점검·읽기·쓰기 대기열·쓰기 수용 절차) | [SCX 드라이브 기능 안내](features/scx-drive.md) | 단계·결정은 [연동 계획](plans/scx-drive-integration.md), 배포 영향은 [ADR 0006](adr/0006-scx-drive-adapter-external-wheel.md), 재연결은 [재연결 사양](plans/scx-drive-relogin-spec.md) |
 | PhysicsAI용 SCX relay(loopback 내부 API·공유 비밀·Radioss 제출 기록, 기본 꺼짐) | [SCX relay 계약 사본](features/scx-relay.md) | 설정·켜는 법은 [SCX 드라이브 기능 안내](features/scx-drive.md) §11 |
 | SPDM 폴더·기존 수집 API | [SPDM 연동 계약](spdm-storage-workflow.md) | 경로·확장자는 [저장 계약](storage-folder-and-file-contract.md) |

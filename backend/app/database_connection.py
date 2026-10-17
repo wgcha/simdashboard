@@ -147,6 +147,15 @@ class SerializedDuckDBConnection:
         return self._active().executemany(statement, parameters)
 
 
+# Stored times are UTC (docs/features/server-time.md).  The session time zone is
+# pinned to UTC so a PostgreSQL server installed with a local zone (Windows
+# installer: Asia/Seoul) neither shifts naive UTC values bound to TIMESTAMPTZ
+# columns nor writes local wall time through CURRENT_TIMESTAMP/now() defaults
+# into TIMESTAMP columns.
+POSTGRES_SESSION_OPTIONS = "-c timezone=UTC"
+POSTGRES_CONNECT_ARGS = {"options": POSTGRES_SESSION_OPTIONS}
+
+
 def _sqlalchemy_url(database_url: str) -> str:
     if database_url.startswith("postgresql+psycopg://"):
         return database_url
@@ -192,7 +201,7 @@ def connect_postgres_import_gate_session() -> Any:
     # native URL spelling.
     sqlalchemy_url = _sqlalchemy_url(settings.database_url)
     psycopg_url = "postgresql://" + sqlalchemy_url.removeprefix("postgresql+psycopg://")
-    return psycopg.connect(psycopg_url, autocommit=True)
+    return psycopg.connect(psycopg_url, autocommit=True, options=POSTGRES_SESSION_OPTIONS)
 
 
 def _postgres_engine(database_url: str, pool: PostgresPoolSettings, *, media: bool = False) -> Engine:
@@ -210,6 +219,7 @@ def _postgres_engine(database_url: str, pool: PostgresPoolSettings, *, media: bo
                     max_overflow=pool.media_max_overflow,
                     pool_timeout=pool.media_timeout_seconds,
                     pool_recycle=pool.recycle_seconds,
+                    connect_args=POSTGRES_CONNECT_ARGS,
                 )
                 _media_engine_url = normalized
                 _media_engine_pool = pool
@@ -224,6 +234,7 @@ def _postgres_engine(database_url: str, pool: PostgresPoolSettings, *, media: bo
                 max_overflow=pool.request_max_overflow,
                 pool_timeout=pool.request_timeout_seconds,
                 pool_recycle=pool.recycle_seconds,
+                connect_args=POSTGRES_CONNECT_ARGS,
             )
             _engine_url = normalized
             _engine_pool = pool

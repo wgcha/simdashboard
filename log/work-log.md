@@ -2,6 +2,14 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-17 — 알림 "18시간 전": 상대 시각을 서버 시계 기준으로, 서버 시간대 표시
+
+- 증상(실서버, Windows·KST·PG18): 방금 생긴 알림이 `18시간 전`. 등록 이력(절대 시각)은 서버 PC 시계와 같았다.
+- 원인: 알림 저장·API 경로는 맞다(naive UTC `TIMESTAMP` → `_iso`가 `Z` 부착; KST로 띄운 PostgreSQL에서 재현 시 정확). 화면 `notificationTime`(`frontend/src/shared/api/notifications.ts:30`)만 **PC 시계**(`Date.now()`)와 서버가 찍은 시각의 차이를 상대 시각으로 보였다. 서버 시각을 PC 시간대로 보이는 절대 시각(등록 이력)은 PC와 서버의 시계 차이를 드러내지 않으므로, PC 시계(또는 PC 시간대 설정)와 서버 시계가 18시간 어긋나면 알림만 틀린다. 상대 시각을 그리는 화면은 알림뿐이다(Case 결과 `최신 · n분 전`은 PC에서 잰 경과라 무관).
+- 수정: `backend/app/server_clock.py` — 모든 응답에 `X-Server-Time`(UTC)·`X-Server-UTC-Offset-Minutes`·`X-Server-Timezone`(`SIMDASH_TIMEZONE` → `TZ` → `/etc/localtime` → Windows 레지스트리). 화면 `serverTime.ts` — `apiFetch`가 헤더로 오프셋을 재고(10분 창 최대 표본) `serverNow()`·`relativeServerTime`·서버 시간대 `formatServerTime`/`formatServerDate`; 알림 상대 시각은 이를 쓴다. 방어: PostgreSQL 앱 세션을 `timezone=UTC`로 고정(서버 TimeZone이 Asia/Seoul이면 naive UTC를 `TIMESTAMPTZ`에 넣을 때 −9시간, `CURRENT_TIMESTAMP` 기본값이 `TIMESTAMP`에 KST 벽시계를 쓰던 문제; 관리형 로컬 실행 표 등).
+- 문서: [서버 시각·시간대 정책](../docs/features/server-time.md), notifications.md §4.
+- 검증: `tests/test_server_time_convention.py` 13 통과(TZ=Asia/Seoul, 서버 TimeZone=Asia/Seoul인 로컬 PostgreSQL 16 포함). `npm run test:api` 통과(TZ=America/Anchorage·Asia/Seoul; PC 시계 18시간 앞섬에서 동기화 전 `18시간 전` → 후 `3분 전`, naive/Z/+09:00 동일). `tsc -b --noEmit` 통과. e2e 미실행. migration 없음.
+
 ## 2026-10-17 — SCX 자동 탐색·전체 새로고침: 읽기 회차 소진(500·PATH_UNAVAILABLE), 공백·NFD 이름
 
 - 실서버 원인(이슈 #51 로그): 자동 탐색은 읽기 세션 하나(8회차)에서 돌며, 의뢰 조사(`save_scan(프로젝트 폴더)`)가 트리를 미스마다 4단계씩 받아 회차를 다 썼다. 마지막 회차에서 `_Lister.mtime` → `raw_entry` → `DRIVE_READ_NOT_PREPARED`가 잡히지 않아 `/discover` 500, 조사는 못 읽은 `FINAL/CAD`·`Working/...`를 `PATH_UNAVAILABLE`로 남겨 `SCAN_INCOMPLETE`. 공백 유무와 무관했다. 또 다시 실행된 회차는 앞 회차 등록을 결과에서 빠뜨리고 실행 한도·시간을 새로 셌다.

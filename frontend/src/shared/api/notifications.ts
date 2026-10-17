@@ -1,5 +1,6 @@
 // Per-user notifications API (docs/features/notifications.md).
 import { apiClient, unwrapGenerated } from './client'
+import { relativeServerTime, serverNow } from './serverTime'
 import type { components } from './generated/openapi'
 
 export type NotificationItem = components['schemas']['NotificationItem']
@@ -26,17 +27,10 @@ export function announceNotificationsChanged(): void {
   window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED_EVENT))
 }
 
-/** "3분 전" style relative time; older than a week shows the date. */
-export function notificationTime(value: string | null | undefined, now = Date.now()): string {
-  if (!value) return ''
-  const time = Date.parse(value)
-  if (Number.isNaN(time)) return ''
-  const minutes = Math.max(0, Math.round((now - time) / 60_000))
-  if (minutes < 1) return '방금'
-  if (minutes < 60) return `${minutes}분 전`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}시간 전`
-  const days = Math.round(hours / 24)
-  if (days < 7) return `${days}일 전`
-  return new Date(time).toLocaleDateString('ko-KR')
+/**
+ * "3분 전" style relative time on the SERVER clock (docs/features/server-time.md):
+ * the age does not depend on the PC clock; older than a week shows the date.
+ */
+export function notificationTime(value: string | null | undefined, now = serverNow()): string {
+  return relativeServerTime(value, now)
 }

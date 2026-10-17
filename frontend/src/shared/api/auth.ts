@@ -1,5 +1,6 @@
 import { clearSession } from '../../auth'
 import { clearMemoryQueryCache, invalidateMemoryQueryCache, resumeMemoryQueryCache } from '../cache/useMemoryQuery'
+import { noteServerClock } from './serverTime'
 import { apiUrl } from './url'
 
 const authLoginPath = apiUrl('/api/auth/login')
@@ -7,6 +8,7 @@ const authMePath = apiUrl('/api/auth/me')
 
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const response = await globalThis.fetch(input, { ...init, credentials: 'same-origin' })
+  noteServerClock(response.headers)   // server clock reference (docs/features/server-time.md)
   const pathname = new URL(response.url, window.location.origin).pathname
   if (response.status === 401 && pathname !== authLoginPath) {
     clearMemoryQueryCache({ blockRevalidation: true })

@@ -120,6 +120,7 @@ def test_postgres_engine_uses_configured_request_and_media_budgets(monkeypatch: 
             "max_overflow": 2,
             "pool_timeout": 7,
             "pool_recycle": 900,
+            "connect_args": {"options": "-c timezone=UTC"},   # stored times are UTC (docs/features/server-time.md)
         },
         {
             "url": "postgresql+psycopg://user:pass@localhost/db",
@@ -128,6 +129,7 @@ def test_postgres_engine_uses_configured_request_and_media_budgets(monkeypatch: 
             "max_overflow": 1,
             "pool_timeout": 8,
             "pool_recycle": 900,
+            "connect_args": {"options": "-c timezone=UTC"},   # stored times are UTC (docs/features/server-time.md)
         },
     ]
 
@@ -149,8 +151,8 @@ def test_import_gate_session_uses_the_existing_postgres_url_contract(
 
     class Psycopg:
         @staticmethod
-        def connect(url: str, *, autocommit: bool) -> object:
-            captured.update(url=url, autocommit=autocommit)
+        def connect(url: str, *, autocommit: bool, options: str) -> object:
+            captured.update(url=url, autocommit=autocommit, options=options)
             return object()
 
     monkeypatch.setattr(
@@ -163,7 +165,7 @@ def test_import_gate_session_uses_the_existing_postgres_url_contract(
     monkeypatch.setitem(sys.modules, "psycopg", Psycopg)
 
     assert database_connection.connect_postgres_import_gate_session() is not None
-    assert captured == {"url": expected_psycopg_url, "autocommit": True}
+    assert captured == {"url": expected_psycopg_url, "autocommit": True, "options": "-c timezone=UTC"}
 
 
 def test_import_gate_session_rejects_urls_outside_the_sqlalchemy_contract(

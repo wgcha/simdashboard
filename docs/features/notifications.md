@@ -52,6 +52,8 @@
 
 항목: `id, type, type_label, severity(INFO|SUCCESS|WARNING|ERROR), title, body, link, project_id, request_id, created_at, read_at, read`.
 
+`created_at`·`read_at`은 UTC(`Z`)다. 상대 시각은 PC 시계가 아니라 서버 시계(`X-Server-Time` 헤더로 잰 오프셋, `serverNow()`)로 계산하고 7일 이상은 서버 시간대 날짜로 보인다([서버 시각·시간대 정책](server-time.md)).
+
 ## 5. DB (migration `0040_notifications`)
 
 `notifications(id PK, user_id, type, severity CHECK, title, body, link, project_id, request_id, dedupe_key, created_at, read_at)`, 색인 `(user_id, created_at)`·`(user_id, dedupe_key)`·`(project_id, request_id)`. 추가만 하는 migration(기존 표·행 변경 없음), 앱 역할 `SELECT/INSERT/UPDATE/DELETE` 권한(0036–0039와 같은 방식), PostgreSQL 기동 시 필수 표·열 검사에 포함. DuckDB 개발 DB는 기동 때 같은 표와 같은 색인 3개를 만든다(부분 색인은 없음). Migration `0041_folder_link_reservations`는 읽지 않은 행 고유 부분 색인 `notifications_unread_dedupe (user_id, dedupe_key) WHERE read_at IS NULL AND dedupe_key IS NOT NULL`을 추가한다 — 기존 행에 읽지 않은 중복이 있으면 행을 바꾸지 않고 색인만 건너뛴다(NOTICE; 앱은 조회 기반 중복 처리로 계속 동작). `project_id`·`request_id`는 외래 키 없는 표시용 값이다.
