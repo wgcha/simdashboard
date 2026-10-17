@@ -62,6 +62,31 @@ export type FolderDiscoveryResult = {
   status?: 'CHECKED' | 'ROOT_UNSET'
 }
 
+/** One folder the discovery did not register, with the reason (global administrators only). */
+export type FolderDiscoveryReview = { relative_path: string; reason: string; code?: string; environment?: FolderEnvironment | null; deviation_code?: string; deviation_count?: number; deviation_path?: string }
+export type StorageRescanFailure = { project_id: string; project_name: string; request_id: string; request_name: string; environment: string; code: string; message: string }
+/** [저장 폴더 새로고침] full rescan (POST/GET /api/folder-discovery/environments/rescan, 2026-10-17). */
+export type StorageRescanState = {
+  status: 'IDLE' | 'RUNNING' | 'DONE' | 'FAILED'
+  started_at: string | null
+  finished_at: string | null
+  started_by: string | null
+  phase: 'DISCOVER' | 'SYNC' | null
+  progress: { done: number; total: number }
+  created_projects: Array<{ id: string; name: string }>
+  created_requests: Array<{ id: string; name: string; environment: FolderEnvironment; project_id: string }>
+  needs_review: FolderDiscoveryReview[]
+  rounds: number
+  scopes: number
+  refreshed: number
+  failed: StorageRescanFailure[]
+  /** The round limit was reached before every folder was examined. */
+  partial: boolean
+  error: string | null
+  /** POST only: false when a rescan was already running. */
+  started?: boolean
+}
+
 // ---- Depth schema (contract docs/contracts/depth-schema.md §4, §6) ----
 export type DepthUpperRole = 'CONTAINER' | 'PROJECT' | 'REQUEST'
 export type DepthLowerRole = 'WORKING' | 'SIMULATION_CASE' | 'LOAD_CASE' | 'EXECUTION_RUN' | 'RUN_OPTION' | 'SCENE' | 'CONTAINER'
@@ -133,6 +158,8 @@ export const folderEnvironmentApi = {
   discover: async (body: { force?: boolean } = {}, signal?: AbortSignal): Promise<FolderDiscoveryResult> => {
     return unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/discover', { body: { force: body.force ?? false }, signal })) as FolderDiscoveryResult
   },
+  rescanStart: async (): Promise<StorageRescanState> => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/rescan', {})) as StorageRescanState,
+  rescanStatus: async (signal?: AbortSignal): Promise<StorageRescanState> => unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments/rescan', { signal })) as StorageRescanState,
   profiles: async (signal?: AbortSignal) => (unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments', { signal })) as { items: FolderEnvironmentProfile[] }).items,
   history: async (offset = 0, signal?: AbortSignal, includeDeleted = false) => requestJson<{ items: FolderEnvironmentRegistration[]; total: number }>(apiUrl('/api/folder-discovery/environments/history', {}, { offset, limit: 50, include_deleted: includeDeleted }), { signal }),
   getDepthSchema: (signal?: AbortSignal) => requestJson<DepthSchema>(apiUrl('/api/folder-discovery/environments/depth-schema' as never), { signal }),

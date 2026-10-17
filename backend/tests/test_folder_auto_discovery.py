@@ -572,3 +572,79 @@ def test_deleted_registration_is_not_linked_and_request_is_registered_again(admi
     # The new live registration links the folder again: a third run does nothing.
     folder_auto_discovery.reset_for_tests()
     assert _discover(client)["created_requests"] == []
+
+
+# ---- [저장 폴더 새로고침] full rescan (storage_rescan, 2026-10-17) ----
+RESCAN = "/api/folder-discovery/environments/rescan"
+
+
+@pytest.fixture
+def inline_rescan(monkeypatch):
+    from app.services import storage_rescan
+    storage_rescan.reset_for_tests()
+    monkeypatch.setattr(storage_rescan, "INLINE", True)
+    yield storage_rescan
+    storage_rescan.reset_for_tests()
+
+
+def _rescan(client):
+    response = client.post(RESCAN)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["started"] is True and body["status"] == "DONE", body
+    status = client.get(RESCAN)
+    assert status.status_code == 200, status.text
+    assert status.json() == {key: value for key, value in body.items() if key != "started"}
+    return body
+
+
+def test_rescan_registers_every_new_request_beyond_one_run_limit(admin_client, inline_rescan, monkeypatch):
+    client, root = admin_client
+    _container_schema()
+    monkeypatch.setattr(folder_auto_discovery, "MAX_NEW_REQUESTS_PER_RUN", 1)
+    _distribution_request(root, WR2)
+    (root / PROJECT / "[WR-0006]_[사용_환경]" / "Working").mkdir(parents=True)
+
+    result = _rescan(client)
+    assert sorted(item["name"] for item in result["created_requests"]) == ["[WR-0002]_[유통_환경]", "[WR-0006]_[사용_환경]"]
+    assert [item["name"] for item in result["created_projects"]] == ["75R9J_PV"]
+    assert result["rounds"] >= 2 and result["partial"] is False and result["needs_review"] == []
+    assert result["phase"] == "SYNC" and result["progress"] == {"done": result["scopes"], "total": result["scopes"]}
+    assert result["scopes"] >= 2 and result["failed"] == []
+    assert result["started_by"] and result["finished_at"]
+    assert _count("SELECT count(*) FROM audit_events WHERE action='STORAGE_RESCAN_STARTED'") >= 1
+
+
+def test_rescan_reports_folders_needing_review_even_when_remembered(admin_client, inline_rescan):
+    client, root = admin_client
+    _container_schema()
+    (root / PROJECT / "[WR-0003]_[기타]" / "Working").mkdir(parents=True)
+    (root / PROJECT / "[WR-0007]_[유통_환경]" / "Final").mkdir(parents=True)  # no Working
+    first = _discover(client)
+    assert {item["code"] for item in first["needs_review"]} == {"ENV_KEYWORD_NONE", "DEPTH_DEVIATION"}
+    scans = _count("SELECT count(*) FROM folder_environment_scans")
+
+    result = _rescan(client)
+    reviews = {item["relative_path"]: item for item in result["needs_review"]}
+    assert set(reviews) == {f"{PROJECT}/[WR-0003]_[기타]", f"{PROJECT}/[WR-0007]_[유통_환경]"}
+    assert reviews[f"{PROJECT}/[WR-0003]_[기타]"]["code"] == "ENV_KEYWORD_NONE"
+    assert reviews[f"{PROJECT}/[WR-0003]_[기타]"]["reason"]
+    deviation = reviews[f"{PROJECT}/[WR-0007]_[유통_환경]"]
+    assert (deviation["code"], deviation["deviation_code"]) == ("DEPTH_DEVIATION", "WORKING_MISSING")
+    assert deviation["reason"]
+    # The review memo was cleared: the remembered folder was examined again, not just repeated.
+    assert _count("SELECT count(*) FROM folder_environment_scans") > scans
+    assert result["created_requests"] == []
+
+
+def test_rescan_requires_global_administrator(admin_client, inline_rescan, monkeypatch):
+    client, _ = admin_client
+    from app.routers import folder_discovery_environment as router
+
+    def denied(request, permission, project_id=None, **kwargs):
+        raise HTTPException(403, detail={"code": "PERMISSION_DENIED"})
+
+    monkeypatch.setattr(router, "require_permission", denied)
+    assert client.post(RESCAN).status_code == 403
+    assert client.get(RESCAN).status_code == 403
+    assert inline_rescan.state()["status"] == "IDLE"

@@ -6,7 +6,7 @@ from ..database_connection import connect
 from ..security import write_audit_event
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..services import (dashboard_capture, folder_auto_discovery, folder_auto_sync, folder_discovery as legacy,
-                        folder_discovery_environment as service, result_registration)
+                        folder_discovery_environment as service, result_registration, storage_rescan)
 from ..services.drive import gateway as drive_gateway
 from ..services.drive import reads as drive_reads
 from ..services.drive import sources as drive_sources
@@ -145,6 +145,30 @@ def discover(request: Request, payload: Discover | None = None):
                           detail=folder_auto_discovery.audit_detail(result))
     return folder_auto_discovery.visible_result(
         result, is_global_admin=bool(getattr(access.principal, "is_global_admin", False)))
+@router.post("/rescan")
+def rescan_start(request: Request):
+    """[저장 폴더 새로고침]: full rescan of the storage with the current depth schema (2026-10-17).
+
+    Global administrators only. Registers every new project/request folder, checks every
+    registered request and reports why a folder was not registered (see ``storage_rescan``).
+    Runs in the background; a call while a rescan runs returns that run. Takes no client input.
+    """
+    with connect() as conn:
+        admin(request, conn)
+    principal = request.state.principal
+    # No DB connection is held while the rescan starts (drive reads must start without one).
+    current, started = storage_rescan.start(str(principal.user_id), started_by=str(getattr(principal, "username", "") or principal.user_id))
+    if started:
+        with connect() as conn:
+            write_audit_event(request=request, principal=principal, status_code=200,
+                              action="STORAGE_RESCAN_STARTED", detail={}, connection=conn)
+    return {**current, "started": started}
+@router.get("/rescan")
+def rescan_status(request: Request):
+    """State of the current or last full rescan (global administrators only: it lists folder paths)."""
+    with connect() as conn:
+        admin(request, conn)
+    return storage_rescan.state()
 def _classify_for_refresh(session, payload: "Refresh", request: Request) -> None:
     """scx: record new/changed/missing drive files of the request before a manual refresh (05 §4).
 

@@ -6330,6 +6330,44 @@
         }
       }
     },
+    "/api/folder-discovery/environments/rescan": {
+      "get": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Rescan Status",
+        "description": "State of the current or last full rescan (global administrators only: it lists folder paths).",
+        "operationId": "rescan_status_api_folder_discovery_environments_rescan_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Rescan Start",
+        "description": "[저장 폴더 새로고침]: full rescan of the storage with the current depth schema (2026-10-17).\n\nGlobal administrators only. Registers every new project/request folder, checks every\nregistered request and reports why a folder was not registered (see ``storage_rescan``).\nRuns in the background; a call while a rescan runs returns that run. Takes no client input.",
+        "operationId": "rescan_start_api_folder_discovery_environments_rescan_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/refresh": {
       "post": {
         "tags": [
@@ -16232,6 +16270,14 @@
             "minItems": 1,
             "title": "Project Ids"
           },
+          "force_project_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Force Project Ids"
+          },
           "confirm_token": {
             "type": "string",
             "maxLength": 128,
@@ -16264,6 +16310,14 @@
             "maxItems": 200,
             "minItems": 1,
             "title": "Project Ids"
+          },
+          "force_project_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Force Project Ids"
           }
         },
         "type": "object",

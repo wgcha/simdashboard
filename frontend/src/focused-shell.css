@@ -608,6 +608,18 @@
 .app-shell .storage-global-settings input { min-width:0; min-height:40px; box-sizing:border-box; padding:0 10px; border:1px solid var(--color-border); border-radius:6px; color:var(--color-text); background:var(--color-surface-raised); font:inherit; }
 .app-shell .storage-global-settings button { min-height:40px; border:1px solid var(--color-accent); border-radius:6px; color:var(--color-text-on-accent); background:var(--color-accent); font:inherit; cursor:pointer; }
 .app-shell .storage-global-settings small { color:var(--color-text-muted); font-size:12px; }
+.app-shell .storage-global-actions { position:relative; }
+.app-shell .storage-rescan-report { position:absolute; z-index:8; right:0; top:calc(100% + 8px); width:min(620px,calc(100vw - 32px)); max-height:min(60vh,560px); overflow:auto; padding:12px 14px 14px; display:grid; gap:8px; border:1px solid var(--color-border); border-radius:9px; background:var(--color-surface-raised); box-shadow:0 14px 32px var(--color-shadow); color:var(--color-text); font-size:13px; text-align:left; }
+.app-shell .storage-rescan-report>header { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:14px; }
+.app-shell .storage-rescan-close { width:30px; height:30px; display:inline-grid; place-items:center; border:0; border-radius:6px; color:var(--color-text-muted); background:transparent; cursor:pointer; }
+.app-shell .storage-rescan-close:hover { background:var(--color-surface-1,transparent); color:var(--color-text); }
+.app-shell .storage-rescan-close svg { width:16px; height:16px; }
+.app-shell .storage-rescan-report h3 { margin:4px 0 0; font-size:13px; font-weight:700; }
+.app-shell .storage-rescan-report ul { margin:0; padding:0; list-style:none; display:grid; gap:6px; }
+.app-shell .storage-rescan-report li { padding:7px 9px; display:grid; gap:3px; border:1px solid var(--color-border); border-radius:6px; }
+.app-shell .storage-rescan-report code { font-size:12px; word-break:break-all; }
+.app-shell .storage-rescan-report small { color:var(--color-text-muted); font-size:12px; word-break:break-all; }
+.app-shell .storage-rescan-error { margin:0; color:var(--color-danger,#b42318); }
 
 /* Fixed, readable navigation: retain the 208px rail above the mobile breakpoint. */
 .app-shell .nav-primary { display:grid; gap:5px; }

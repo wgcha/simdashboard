@@ -2155,6 +2155,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/rescan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rescan Status
+         * @description State of the current or last full rescan (global administrators only: it lists folder paths).
+         */
+        get: operations["rescan_status_api_folder_discovery_environments_rescan_get"];
+        put?: never;
+        /**
+         * Rescan Start
+         * @description [저장 폴더 새로고침]: full rescan of the storage with the current depth schema (2026-10-17).
+         *
+         *     Global administrators only. Registers every new project/request folder, checks every
+         *     registered request and reports why a folder was not registered (see ``storage_rescan``).
+         *     Runs in the background; a call while a rescan runs returns that run. Takes no client input.
+         */
+        post: operations["rescan_start_api_folder_discovery_environments_rescan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/refresh": {
         parameters: {
             query?: never;
@@ -5316,6 +5344,8 @@ export interface components {
         CleanupConfirm: {
             /** Project Ids */
             project_ids: string[];
+            /** Force Project Ids */
+            force_project_ids?: string[];
             /** Confirm Token */
             confirm_token: string;
             /** Acknowledge Data Project Ids */
@@ -5325,6 +5355,8 @@ export interface components {
         CleanupTargets: {
             /** Project Ids */
             project_ids: string[];
+            /** Force Project Ids */
+            force_project_ids?: string[];
         };
         /** ComparisonInput */
         ComparisonInput: {
@@ -13353,6 +13385,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rescan_status_api_folder_discovery_environments_rescan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    rescan_start_api_folder_discovery_environments_rescan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

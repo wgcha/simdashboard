@@ -51,6 +51,8 @@ SPDM이 저장소 root에 만든 새 프로젝트·의뢰 폴더는 관리자 �
 
 끄기: `SIMDASH_AUTO_DISCOVERY=0`(또는 `false`/`off`/`no`; `folder_auto_discovery.enabled()`)이면 `discover`는 아무것도 등록하지 않는다. 격리된 e2e 실행기가 자기 fixture 폴더가 등록되지 않도록 쓰는 값이며, 배포는 기본값(켜짐)을 둔다(`.env.example` 주석 참고).
 
+**전체 다시 확인 [저장 폴더 새로고침]**(전역 관리자, 2026-10-17 사용자 결정): 상단 버튼은 구 `POST /api/storage/refresh`(고정 root 하중 경우 연결)를 더 이상 부르지 않고 `POST /api/folder-discovery/environments/rescan`(시작 또는 진행 중인 실행 반환, 감사 `STORAGE_RESCAN_STARTED`)·`GET …/rescan`(현재·마지막 상태)을 쓴다(`storage_rescan.py`, 프로세스당 한 번에 하나, 백그라운드 스레드). 순서: 확인 필요 기억·재시도 backoff 지움 → 현재 깊이 스키마로 탐색 회차(`fresh`, 실행 중인 탐색은 기다림, 회차당 300초·새 의뢰 5개)을 `partial`이 아니거나 진전이 없을 때까지(최대 20회) → 등록된 모든 의뢰 `sync_scope(force)`. 결과는 등록하지 않은 폴더마다 경로·코드·사유(회차를 합쳐 경로+코드로 중복 제거, 시간 안에 조사를 못 끝낸 폴더는 `DISCOVERY_TIME_BUDGET`)와 확인 실패·충돌 의뢰(프로젝트·의뢰 이름·메시지)를 돌려준다. 드라이브·저장소는 읽기만 하고 DB만 쓰므로 SCX 드라이브 모드에서도 켜져 있다. 화면은 2초마다 상태를 읽어 버튼에 `저장 폴더 확인 중 · 의뢰 3/12`를 표시하고, 끝나면 목록을 다시 읽고 한 줄 요약(새 프로젝트·새 의뢰·확인한 의뢰·갱신·확인 필요·실패)과 확인 필요·실패 목록 창(닫기 가능)을 보인다. 상태는 메모리에만 있어 서버를 다시 시작하면 사라진다.
+
 ## scoped Refresh와 실패
 
 `POST /api/folder-discovery/environments/refresh`는 `project_id`, `request_id`, `environment`를 받아 해당 의뢰 경계만 조사한다. 현재 storage root와 프로필 revision을 확인하고 제한된 scan, 구조·내용 fingerprint, 역할 판정을 마친 뒤 정상 snapshot을 활성화한다. 같은 fingerprint의 재시도는 기존 snapshot을 재사용한다. 내용이 바뀌어 capture가 새로 필요하면 과거 capture를 수정하지 않고 새 버전으로 보존한다. 내용 바이트 해시는 `.csv`, `.json`, `.jpg`, `.jpeg`, `.png`, `.mp4`, `.webm`, `.inc`, `.rad`에 적용한다. 그 외 확장자는 경로·크기·수정 시각으로 변화를 판정하므로 크기와 수정 시각이 모두 같게 바뀐 내용은 탐지하지 못할 수 있다.

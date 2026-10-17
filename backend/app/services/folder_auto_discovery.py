@@ -43,6 +43,11 @@ Scope and safety:
 * A folder whose registration failed in a retryable way is retried with a
   per-folder backoff (``RETRY_BACKOFF_SECONDS``); ``force`` does not bypass it.
 * Files are never moved, written or deleted. No client input reaches a path.
+* The administrator's full rescan (``storage_rescan``, [저장 폴더 새로고침]) calls
+  :func:`discover` with ``fresh`` (no memo), ``wait_seconds`` (waits for a
+  background run instead of returning ``RUNNING``) and a longer
+  ``budget_seconds``, after :func:`clear_review_memos`, so every unregistered
+  folder is examined again and reported with its reason.
 """
 from __future__ import annotations
 
@@ -183,6 +188,13 @@ def reset_for_tests() -> None:
         _review_memo.clear()
         _retry_memo.clear()
         _exclusion_cache.clear()
+
+
+def clear_review_memos() -> None:
+    """Forget remembered needs-review results and retry backoffs (manual full rescan)."""
+    with _state_lock:
+        _review_memo.clear()
+        _retry_memo.clear()
 
 
 def _now_iso() -> str:
@@ -528,7 +540,7 @@ def _project_requests(linked: dict[str, Any], project_path: str) -> set[tuple[st
     return identities
 
 
-def _discover(conn, root) -> dict[str, Any]:
+def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]:
     root_key = root_identity(root)
     lister = _Lister(root)
     created_projects: list[dict[str, str]] = []
@@ -541,12 +553,14 @@ def _discover(conn, root) -> dict[str, Any]:
         needs_review.append(_review("", str(detail.get("code") or "DEPTH_SCHEMA_MISSING"),
                                     str(detail.get("message") or "현재 깊이 스키마가 없습니다.")))
         return {"created_projects": [], "created_requests": [], "needs_review": needs_review,
-                "checked_at": _now_iso(), "coalesced": False, "partial": False}
+                "checked_at": _now_iso(), "coalesced": False, "partial": False, "attempted": 0, "deferred": []}
     schema_set_id = str(schema["schema_set_id"])
     linked = _linked_state(conn, root_key)
-    deadline = time.monotonic() + RUN_TIME_BUDGET_SECONDS
+    deadline = time.monotonic() + (RUN_TIME_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds))
     attempts = 0
     stopped = False
+    # Request folders left for a later run because the time budget ran out (reported by the rescan).
+    deferred: list[str] = []
     for project_name, project_path in _project_candidates(lister, linked, schema, needs_review):
         if stopped:
             break
@@ -598,6 +612,8 @@ def _discover(conn, root) -> dict[str, Any]:
                 needs_review.append(remembered["review"])
                 continue
             if attempts >= MAX_NEW_REQUESTS_PER_RUN or now > deadline:
+                if now > deadline:
+                    deferred.append(request_path)
                 stopped = True
                 break
             attempts += 1
@@ -609,6 +625,7 @@ def _discover(conn, root) -> dict[str, Any]:
                                         request_path, environment, project_targets, key, deadline,
                                         request_target=request_target)
             if outcome.get("deferred"):
+                deferred.append(request_path)
                 stopped = True
                 break
             if outcome.get("skipped"):
@@ -647,7 +664,7 @@ def _discover(conn, root) -> dict[str, Any]:
         needs_review.append(_review(issue["relative_path"], issue["code"], _ISSUE_REASONS.get(issue["code"], "")))
     return {"created_projects": created_projects, "created_requests": created_requests,
             "needs_review": needs_review, "checked_at": _now_iso(), "coalesced": False,
-            "partial": stopped}
+            "partial": stopped, "attempted": attempts, "deferred": deferred}
 
 
 def enabled() -> bool:
@@ -664,16 +681,23 @@ def _empty(status: str) -> dict[str, Any]:
             "checked_at": _now_iso(), "coalesced": True, "status": status}
 
 
-def discover(*, force: bool = False, connection_factory=None) -> dict[str, Any]:
+def discover(*, force: bool = False, connection_factory=None, fresh: bool = False,
+             wait_seconds: float = 0.0, budget_seconds: float | None = None) -> dict[str, Any]:
     """Register new SPDM project/request folders under the configured storage root.
 
     Never blocks on another run and opens a DB connection only for an actual run.
+    The manual rescan passes ``fresh`` (skip the memo), ``wait_seconds`` (wait up
+    to that long for a run in progress instead of returning ``RUNNING``) and
+    ``budget_seconds`` (instead of ``RUN_TIME_BUDGET_SECONDS``); the defaults keep
+    the screens' behaviour.
     """
     if not enabled():
         return _empty("DISABLED")
     interval = FORCE_MIN_INTERVAL_SECONDS if force else MIN_INTERVAL_SECONDS
 
     def remembered() -> dict[str, Any] | None:
+        if fresh:
+            return None
         with _state_lock:
             memo = dict(_memo)
         if memo and time.monotonic() - memo["at"] < interval:
@@ -683,7 +707,9 @@ def discover(*, force: bool = False, connection_factory=None) -> dict[str, Any]:
     cached = remembered()
     if cached:
         return cached
-    if not _run_lock.acquire(blocking=False):
+    acquired = (_run_lock.acquire(timeout=float(wait_seconds)) if wait_seconds and wait_seconds > 0
+                else _run_lock.acquire(blocking=False))
+    if not acquired:
         with _state_lock:
             last = _memo.get("result")
         return {**last, "coalesced": True, "status": "RUNNING"} if last else _empty("RUNNING")
@@ -701,7 +727,7 @@ def discover(*, force: bool = False, connection_factory=None) -> dict[str, Any]:
                     return {**_empty("ROOT_UNSET"), "coalesced": False,
                             "needs_review": [_review("", "SPDM_ROOT_UNSET", str(
                                 detail.get("message") or "SPDM 저장소 루트가 설정되지 않아 자동 탐색을 하지 않았습니다."))]}
-                return {**_discover(conn, root), "status": "CHECKED"}
+                return {**_discover(conn, root, budget_seconds), "status": "CHECKED"}
 
         # SCX drive (D2): listings and capture files are fetched between rounds without a DB
         # connection; a round repeats only reads and idempotent steps (local mode: one plain call).
