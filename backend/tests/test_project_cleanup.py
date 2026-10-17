@@ -423,6 +423,11 @@ _ALL_COLUMNS = sorted({
     "solver", "parser_version", "deck_json", "dependencies_json", "blob_sha256", "parse_seconds",
     # notifications (migration 0040)
     "user_id", "type", "severity", "title", "body", "link", "dedupe_key", "read_at",
+    # forced password change (migration 0043)
+    "must_change_password", "sessions_revoked_at",
+    # SCX relay submissions (migration 0044)
+    "request_sha256", "client", "client_ref", "input_rel", "job_dir_rel", "job_id", "last_status", "output_path",
+    "output_rel", "resolved_at",
 })
 
 
