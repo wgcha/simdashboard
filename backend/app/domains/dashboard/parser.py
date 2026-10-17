@@ -9,9 +9,12 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Iterable
 
+from .units import stress_unit
+
 
 EVALUATIONS = ("Settle", "Wobble", "Horizontal_Force_Angle", "Slope_Angle", "Slope_Angle_360")
-_SCENE_RE = re.compile(r"^(?:(?P<sequence>\d+)_)?(?P<body>.+)$")
+# ASCII digits only: the first run of them in a Scene folder name is its 순번.
+_SEQUENCE_RE = re.compile(r"[0-9]+")
 _SCENARIO_RE = re.compile(r"(?:^|_)Scene(?P<number>\d+)(?:_|$)", re.IGNORECASE)
 _REPETITION_RE = re.compile(r"(?:^|_)(?P<value>\d+(?:st|nd|rd|th))(?:_|$)", re.IGNORECASE)
 _CONTACT_RE = re.compile(r"(?:^|_)(?P<value>(?:Face|Corner|Edge)[A-Za-z0-9]+)(?:_|$)", re.IGNORECASE)
@@ -133,9 +136,25 @@ def _pick_usage(files: Iterable[tuple[str, bytes]]) -> dict[str, Any]:
     return {"evaluations": observations, "evaluation_names": list(EVALUATIONS)}
 
 
+def scene_sequence_number(name: str) -> int | None:
+    """Scene 순번 = the first number in the Scene folder name (user decision 2026-10-17).
+
+    ``DAMP-13_Corner_Drop_2nd_Scene08`` -> 13, ``02_Face`` -> 2. ``None`` only
+    when the name has no digit at all. Computed from the name on every read, so
+    stored captures follow the rule without a migration.
+    """
+    match = _SEQUENCE_RE.search(name or "")
+    return int(match.group(0)) if match else None
+
+
+def scene_sort_key(name: str) -> tuple[bool, int, str]:
+    """Scenes by 순번, then name; Scenes without a number come last."""
+    sequence = scene_sequence_number(name)
+    return sequence is None, sequence or 0, str(name or "").casefold()
+
+
 def parse_scene_name(name: str) -> dict[str, Any]:
-    match = _SCENE_RE.match(name)
-    sequence = int(match.group("sequence")) if match and match.group("sequence") else None
+    sequence = scene_sequence_number(name)
     scenario_match = _SCENARIO_RE.search(name)
     repetition_match = _REPETITION_RE.search(name)
     contact_match = _CONTACT_RE.search(name)
@@ -263,7 +282,8 @@ def _peak(observations: list[dict[str, Any]], basis: str | None = None) -> dict[
         {key: item.get(key) for key in ("kind", "position", "line_index", "node_id", "alignment_node_id", "coord_x", "coord_y", "coord_z", "ref_coord", "row", "column")}
         for item in numeric if float(item["value"]) == maximum
     ]
-    return {"basis": basis or "DETAIL", "scope": "EXTRACTED_SIDES_AND_CORNERS", "quantity": "Max_Stress_P1 (major)_Mid", "value": maximum, "unit": None, "unit_status": "UNCONFIRMED", "locations": locations}
+    unit, unit_status = stress_unit(numeric)
+    return {"basis": basis or "DETAIL", "scope": "EXTRACTED_SIDES_AND_CORNERS", "quantity": "Max_Stress_P1 (major)_Mid", "value": maximum, "unit": unit, "unit_status": unit_status, "locations": locations}
 
 
 def build_distribution_scene(

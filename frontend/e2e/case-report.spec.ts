@@ -85,6 +85,7 @@ function distribution(url: URL, options: Options = {}) {
       : { cell_id: `cell-${scene.id}`, scene_id: scene.id, member_id: member.id, status: index === 0 ? 'READY' : 'MISSING', reason: null, asset: index === 0 ? { asset_id: 'img-1', kind: 'IMAGE', status: 'READY', title: 'Contour_Scene01.png', frame_role: 'FINAL_FRAME' } : null }),
     behaviors: [],
     quality_issues: [],
+    unit_system: { id: 'TON_MM_S', label: 'ton-mm-s', length: 'mm', stress: 'MPa', time: 's', force: 'N', mass: 'ton' },
   }
 }
 
@@ -563,7 +564,7 @@ test('PPTX에는 화면의 그래프가 편집 가능한 차트로, 영상 포�
   expect(chartXml.filter((xml) => xml.includes('<c:scatterChart>'))).toHaveLength(12)
   expect(chartXml.some((xml) => xml.includes('Scene별 엣지 최대응력') && xml.includes('선택 엣지 최대응력 (MPa)') && xml.includes('Scene (순번)'))).toBe(true)
   expect(chartXml.some((xml) => xml.includes('TOP 엣지 수준'))).toBe(true)
-  expect(chartXml.some((xml) => xml.includes('ref_coord (기준 좌표)') && xml.includes('<c:v>L1</c:v>') && xml.includes('<c:v>L2</c:v>'))).toBe(true)
+  expect(chartXml.some((xml) => xml.includes('ref_coord (기준 좌표, mm)') && xml.includes('<c:v>L1</c:v>') && xml.includes('<c:v>L2</c:v>'))).toBe(true)
   // Each chart keeps its data in an embedded workbook (editable in PowerPoint).
   expect(names.filter((name) => /^ppt\/embeddings\/.+\.xlsx$/.test(name))).toHaveLength(17)
   const slides = names.filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).map((name) => zipEntry(zip, name) ?? '')
@@ -589,7 +590,7 @@ test('HTML 그래프는 스크립트 없는 SVG이고, 영상을 넣지 않으�
   writeFileSync(`${SHOT_DIR}/case-report-charts.html`, html)
   expect((html.match(/<svg /g) ?? []).length).toBe(17)
   expect(html).toContain('Scene별 엣지 최대응력')
-  expect(html).toContain('ref_coord (기준 좌표)')
+  expect(html).toContain('ref_coord (기준 좌표, mm)')
   expect(html).toContain('원본 2,500점 → 2,000점(LTTB 축약)')
   expect(html).not.toMatch(/<script/i)
   expect(html).not.toMatch(/https?:\/\/|url\(/)

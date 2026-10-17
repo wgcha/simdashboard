@@ -111,7 +111,7 @@ export function distributionChartGroups(input: { prefix: string; distribution: D
     groups.push({ id: `${prefix}chart:scene:${scene.id}`, title: `Scene 상세 · ${scene.label}`, charts: SCENE_DETAIL_POSITIONS.map((position): CaseReportChart => {
       const item = forScene.find((candidate) => candidate.position === position)
       const id = `${prefix}chart:scene:${scene.id}:${position}`
-      const base = { id, title: `${scene.label} · ${position}`, kind: 'scatter' as const, xTitle: 'ref_coord (기준 좌표)', yTitle: `값 (${unitText(sceneUnit)})` }
+      const base = { id, title: `${scene.label} · ${position}`, kind: 'scatter' as const, xTitle: `ref_coord (기준 좌표, ${unitText(distribution.unit_system?.length)})`, yTitle: `값 (${unitText(sceneUnit)})` }
       if (!item?.detail) return { ...base, series: [], notes: [], empty: item?.error ? `Scene 상세를 불러오지 못했습니다: ${item.error}` : 'Scene 상세 없음' }
       const notes: string[] = []
       const lines = [1, 2, 3, 4].flatMap((line) => {

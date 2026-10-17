@@ -152,7 +152,7 @@ def test_capture_keeps_unrecognized_csv_in_manifest_and_asset_store(
         assert contour_value["value"] == projected["location_peaks"][0]["value"] == 4
         assert contour_value["basis"] == "REPORTED_SUMMARY"
         assert contour_value["scope"] == "EXTRACTED_SIDES_AND_CORNERS"
-        assert contour_value["unit"] is None
+        assert contour_value["unit"] == "MPa"  # ton-mm-s unit system (2026-10-17)
         assert contour_value["source_refs"]
         subset = distribution(capture, run["id"], run["mode"], "C23", "REPORTED_SUMMARY", {"TOP"}, {1})
         assert subset["contours"][0]["value"]["value"] == 1

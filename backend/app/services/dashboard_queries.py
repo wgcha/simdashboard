@@ -6,6 +6,8 @@ import logging
 import math
 from typing import Any
 
+from ..domains.dashboard.parser import scene_sequence_number, scene_sort_key
+from ..domains.dashboard.units import stress_unit, unit_system
 from .dashboard_capture import DashboardCaptureError, _decode
 
 EDGES = {"LEFT": "LH", "RIGHT": "RH", "TOP": "TOP", "BOTTOM": "BOT"}
@@ -369,7 +371,9 @@ def peak(values, *, complete=False, basis=None, scope=None):
     numeric = [o for o in values if number(o.get("value")) is not None]
     maximum = max((number(o["value"]) for o in numeric), default=None)
     locations = [o for o in numeric if number(o["value"]) == maximum]
-    return {"value": maximum, "unit": None, "unit_status": "UNCONFIRMED", "basis": basis, "scope": scope,
+    # Stress of the ton-mm-s unit system unless the source states a unit (2026-10-17).
+    unit, unit_status = stress_unit(numeric)
+    return {"value": maximum, "unit": unit, "unit_status": unit_status, "basis": basis, "scope": scope,
             "status": "MISSING" if maximum is None else "READY" if complete else "PARTIAL",
             "completeness": "COMPLETE" if complete else "PARTIAL", "locations": locations,
             "source_refs": [o.get("source_ref", {"row": o.get("row"), "column": o.get("column")}) for o in locations]}
@@ -387,9 +391,25 @@ def scene_edges(scene, component, basis, lines, member_id):
     return result
 
 
+def scene_name(scene):
+    return str(scene.get("source_name") or scene.get("label") or "")
+
+
+def scene_sequence(scene):
+    """순번 from the Scene folder name at read time; stored captures need no migration."""
+    name = scene_name(scene)
+    return scene_sequence_number(name) if name else scene.get("scene_sequence_number")
+
+
+def ordered_scenes(scenes):
+    return sorted(scenes, key=lambda scene: scene_sort_key(scene_name(scene)))
+
+
 def scene_public(scene):
+    sequence = scene_sequence(scene)
     return {"id": scene["id"], "label": scene["source_name"], **{k: scene.get(k) for k in (
-        "scene_sequence_number", "scenario_number", "contact_code", "repetition", "order_status")},
+        "scenario_number", "contact_code", "repetition")},
+        "scene_sequence_number": sequence, "order_status": "CONFIRMED" if sequence is not None else "UNCONFIRMED",
         "description": " / ".join(str(scene.get(k) or "미확인") for k in ("contact_code", "repetition")),
         "match_key": scene.get("scene_match_key")}
 
@@ -401,9 +421,10 @@ def distribution(capture, run_id, mode, component, basis, edges, lines, run_opti
     member = {"id": member_id, "label": capture.get("source_name", capture["case_id"]),
               "color": f"var(--color-chart-series-{color_index})", **context}
     result = {"contract_version": 1, "context": context, "status": "READY", "members": [member], "scenes": [],
-              "edge_peaks": [], "series": [], "contours": [], "behaviors": [], "location_peaks": [], "quality_issues": []}
+              "edge_peaks": [], "series": [], "contours": [], "behaviors": [], "location_peaks": [], "quality_issues": [],
+              "unit_system": unit_system()}
     issues = set(capture["payload"].get("quality_issues", []))
-    for scene in run["scenes"]:
+    for scene in ordered_scenes(run["scenes"]):
         public = scene_public(scene)
         result["scenes"].append(public)
         values = scene_edges(scene, component, basis, lines, member_id)
@@ -424,7 +445,7 @@ def distribution(capture, run_id, mode, component, basis, edges, lines, run_opti
         for value in values:
             value["is_selected_maximum"] = value["edge"] in edges and value["value"] is not None and value["value"] == envelope["value"]
         result["series"].append({**envelope, "id": member_id + ":" + scene["id"], "scene_id": scene["id"],
-                                  "scene_sequence_number": scene.get("scene_sequence_number"), "member_id": member_id,
+                                  "scene_sequence_number": scene_sequence(scene), "member_id": member_id,
                                   "edge": "ENVELOPE", "selected_edge_envelope": envelope["value"]})
         media = [m for m in scene.get("media", []) if m.get("component_id") == component]
         images = [m for m in media if m.get("kind") == "IMAGE"]
@@ -453,7 +474,7 @@ def comparison(parts):
     """
     result = {"contract_version": 1, "context": parts[0]["context"], "status": "READY",
               "members": [], "scenes": [], "edge_peaks": [], "series": [], "contours": [], "behaviors": [], "location_peaks": [],
-              "quality_issues": ["CASE_SCENE_ALIGNMENT_UNCONFIRMED"]}
+              "quality_issues": ["CASE_SCENE_ALIGNMENT_UNCONFIRMED"], "unit_system": unit_system()}
     for part in parts:
         result["members"].extend(part["members"])
         for scene in part["scenes"]:
@@ -490,7 +511,8 @@ def scene_detail(capture, scene_id, run_id, mode, component, basis, lines, posit
             "line_points": [{**o, "node_id": None, "alignment_node_id": o.get("alignment_node_id", o.get("node_id"))} for o in source if o.get("kind") == "SIDE" and o.get("position") == position],
             "corner_points": [o for o in source if o.get("kind") == "CORNER"],
             "assets": [m for m in scene.get("media", []) if m.get("component_id") == component],
-            "quality_issues": sorted(set(capture["payload"].get("quality_issues", [])) | set(scene.get("quality_issues", [])))}
+            "quality_issues": sorted(set(capture["payload"].get("quality_issues", [])) | set(scene.get("quality_issues", []))),
+            "unit_system": unit_system()}
 
 
 VIDEO_PAGE_SIZE_MAX = 20
@@ -525,7 +547,7 @@ def run_videos(capture, run_id, *, mode=None, run_option_id=None, page=1, page_s
     """Every VIDEO media of every Scene of one Run option, in Scene order."""
     run, context = select_run_option(capture, run_id, mode, run_option_id)
     videos = []
-    for scene in run.get("scenes", []):
+    for scene in ordered_scenes(run.get("scenes", [])):
         label = scene.get("label") or scene.get("source_name") or scene["id"]
         for media in scene.get("media", []):
             if media.get("kind") != "VIDEO" or not media.get("asset_id"):
@@ -533,7 +555,7 @@ def run_videos(capture, run_id, *, mode=None, run_option_id=None, page=1, page_s
             name = str(media.get("relative_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
             videos.append({"video_id": f"{scene['id']}:{media['asset_id']}", "asset_id": media["asset_id"],
                            "scene_id": scene["id"], "scene_label": label,
-                           "scene_sequence_number": scene.get("scene_sequence_number"),
+                           "scene_sequence_number": scene_sequence(scene),
                            "title": media.get("title") or name or label, "component_id": media.get("component_id"),
                            "frame_role": media.get("frame_role"), "status": media.get("status") or "READY",
                            "source_capture_id": scene.get("source_capture_id") or capture["id"]})

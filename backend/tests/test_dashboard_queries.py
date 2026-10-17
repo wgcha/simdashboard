@@ -249,3 +249,43 @@ def test_usage_exact_nested_segments_and_strict_reviewed_values():
     assert queries.usage_metric(entry, "OK/NG", "READY", verdict=True)[0] == "NG"
     entry["values"]["a.b"]["angle (deg)"] = "1.18"
     assert queries.usage_metric(entry, "Slope Angle (deg)", "READY")[1] == "INVALID_TYPE"
+
+
+def test_stress_values_carry_the_ton_mm_s_unit_system():
+    """2026-10-17 (replaces D09): stress is MPa, coordinates mm; values are not converted."""
+    result = queries.distribution(capture(), "run1", "INDIVIDUAL", "C23", "DETAIL", {"TOP", "RIGHT"}, {1, 2, 3, 4})
+    for item in [*result["series"], *result["edge_peaks"], *result["location_peaks"]]:
+        assert item["unit"] == "MPa" and item["unit_status"] == "UNIT_SYSTEM"
+    assert result["series"][0]["value"] == 40
+    assert result["contours"][0]["value"]["unit"] == "MPa"
+    assert result["unit_system"]["id"] == "TON_MM_S"
+    assert result["unit_system"]["length"] == "mm" and result["unit_system"]["stress"] == "MPa"
+    detail = queries.scene_detail(capture(), "s1", "run1", "INDIVIDUAL", "C23", "DETAIL", {1, 4}, "TOP")
+    assert detail["unit_system"]["length"] == "mm"
+    assert all(peak["unit"] == "MPa" for peak in detail["edge_peaks"])
+    assert queries.comparison([result])["unit_system"]["stress"] == "MPa"
+
+
+def test_explicit_source_unit_wins_over_the_unit_system():
+    cap = capture()
+    for observation in cap["payload"]["runs"][0]["scenes"][0]["observations"]:
+        observation["unit"] = "GPa"
+    result = queries.distribution(cap, "run1", "INDIVIDUAL", "C23", "DETAIL", {"TOP"}, {1, 2, 3, 4})
+    assert result["series"][0]["unit"] == "GPa" and result["series"][0]["unit_status"] == "SOURCE"
+    assert result["edge_peaks"][0]["unit"] == "GPa"
+
+
+def test_stored_scene_sequence_is_recomputed_from_the_name_and_reordered():
+    """Captures stored with the old rule (DAMP -> None) follow the new rule at read time."""
+    cap = capture()
+    first = cap["payload"]["runs"][0]["scenes"][0]
+    damp_name = "DAMP-13_Corner_Drop_2nd_Scene08_Corner346_2nd"
+    damp = {**first, "id": "s2", "source_name": damp_name, "label": damp_name,
+            "scene_sequence_number": None, "order_status": "UNCONFIRMED"}
+    plain = {**first, "id": "s3", "source_name": "Face_Drop", "label": "Face_Drop",
+             "scene_sequence_number": None, "order_status": "UNCONFIRMED"}
+    cap["payload"]["runs"][0]["scenes"] = [plain, damp, first]
+    result = queries.distribution(cap, "run1", "INDIVIDUAL", "C23", "DETAIL", {"TOP"}, {1, 2, 3, 4})
+    assert [(s["id"], s["scene_sequence_number"], s["order_status"]) for s in result["scenes"]] == [
+        ("s2", 13, "CONFIRMED"), ("s1", 20, "CONFIRMED"), ("s3", None, "UNCONFIRMED")]
+    assert [s["scene_sequence_number"] for s in result["series"]] == [13, 20, None]

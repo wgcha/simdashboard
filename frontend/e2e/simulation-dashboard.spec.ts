@@ -16,6 +16,7 @@ const MEMBER_ID = 'member-a'
 const RUN_ID = 'run-a'
 const MODE = 'INDIVIDUAL'
 const COMPONENT_ID = 'C23'
+const UNIT_SYSTEM = { id: 'TON_MM_S', label: 'ton-mm-s', length: 'mm', stress: 'MPa', time: 's', force: 'N', mass: 'ton' }
 const SCENE20_ASSET = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%2280%22%3E%3Crect width=%22120%22 height=%2280%22 fill=%22%232e84d6%22/%3E%3Ctext x=%2260%22 y=%2244%22 fill=%22white%22 text-anchor=%22middle%22 font-size=%2218%22%3EScene20%3C/text%3E%3C/svg%3E'
 
 function usageCatalog() {
@@ -100,8 +101,8 @@ function distributionPayload() {
   const edges = ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'] as const
   const edge_peaks = scenes.flatMap((scene) => edges.map((edge, edgeIndex) => ({
     value: scene.scene_sequence_number + edgeIndex / 10,
-    unit: null,
-    unit_status: 'UNCONFIRMED',
+    unit: 'MPa',
+    unit_status: 'UNIT_SYSTEM',
     completeness: 'FULL',
     status: 'READY',
     basis: 'DETAIL',
@@ -115,8 +116,8 @@ function distributionPayload() {
   const series = scenes.filter((scene) => scene.scene_sequence_number !== 12).map((scene) => ({
     id: `series-${scene.id}`,
     value: scene.scene_sequence_number,
-    unit: null,
-    unit_status: 'UNCONFIRMED',
+    unit: 'MPa',
+    unit_status: 'UNIT_SYSTEM',
     completeness: 'FULL',
     status: 'READY',
     basis: 'DETAIL',
@@ -156,6 +157,7 @@ function distributionPayload() {
     contours,
     behaviors: [],
     quality_issues: [],
+    unit_system: UNIT_SYSTEM,
   }
 }
 
@@ -169,6 +171,7 @@ function sceneDetail(sceneId: string) {
     corner_points: [],
     assets: [],
     quality_issues: [],
+    unit_system: UNIT_SYSTEM,
   }
 }
 
@@ -465,7 +468,7 @@ test('chart modes preserve missing and unordered scenes and expanded charts clos
 
 test('contour values retain scope and unknown timing with descriptions and scale guidance after transpose', async ({ page }) => {
   const payload = distributionPayload() as DashboardDistribution
-  payload.contours[19].value = { value: 20, unit: null, scope: 'SELECTED_EDGE_LINES', basis: 'DETAIL', status: 'READY' }
+  payload.contours[19].value = { value: 20, unit: 'MPa', unit_status: 'UNIT_SYSTEM', scope: 'SELECTED_EDGE_LINES', basis: 'DETAIL', status: 'READY' }
   payload.quality_issues = ['UNPROCESSED_FILE:case/Drop/run/Scene/notes.txt:UNSUPPORTED_EXTENSION']
   await installDashboardMocks(page, { distribution: payload })
   await openResults(page)
@@ -477,7 +480,9 @@ test('contour values retain scope and unknown timing with descriptions and scale
   await expect(matrix).toContainText('미확인')
   await expect(matrix).toContainText('Face1')
   await expect(cell).toContainText('20')
-  await expect(cell).toContainText('단위 미확인')
+  // ton-mm-s unit system (user decision 2026-10-17): stress values are MPa.
+  await expect(cell).toContainText('20 MPa')
+  await expect(cell).not.toContainText('단위 미확인')
   await expect(cell).toContainText('시간')
   await expect(cell).toContainText('상세 추출')
   await expect(page.locator('.simulation-dashboard__issues')).toContainText('미지원 확장자')

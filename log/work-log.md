@@ -2,6 +2,13 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-17 — Case 결과 단위계 ton–mm–s와 Scene 순번 = 이름의 첫 숫자
+
+- 사용자 결정(2026-10-17, D09·DAMP 규칙 대체): 단위계는 ton–mm–s다. 단위계는 `backend/app/domains/dashboard/units.py` 한 곳(`UNIT_SYSTEM`, `STRESS_UNIT`=MPa, `LENGTH_UNIT`=mm, s·N·ton)에서 정한다. 유통 응력 값(`dashboard_queries.peak`, 파서 `_peak`)은 `unit: "MPa"`, `unit_status: "UNIT_SYSTEM"`이며, 원본 관측값에 단위가 하나 명시되어 있으면 그 단위(`SOURCE`)를 쓰고 서로 다르면 null(`MIXED`)이다. 수치 변환은 없다. distribution·comparison·scene-detail 응답에 `unit_system`을 추가했고, 화면 Scene 상세 축(`ref_coord (mm)`, MPa)과 보고서 Scene 상세 X축 `ref_coord (기준 좌표, mm)`가 이를 쓴다. 대시보드·Case 비교 Δ·보고서 표/그래프의 `단위 미확인`은 서버 값이 MPa가 되어 사라진다(단위 null일 때만 남음).
+- Scene 순번: `parser.scene_sequence_number` = 폴더 이름에 처음 나오는 ASCII 숫자(`DAMP-13_…_Scene08_…` → 13, `02_x` → 2, Scene NN은 scenario_number 그대로), 숫자가 없을 때만 null(`순번 미확인`). 정렬 키 `scene_sort_key`(순번, 이름; 번호 없는 Scene은 뒤)를 capture 생성·최신 결과 병합·조회가 함께 쓴다. 조회(`scene_public`, series, run videos)는 저장된 값 대신 Scene 이름에서 순번·order_status를 다시 계산하고 Scene을 다시 정렬하므로 저장된 capture는 migration·재수집 없이 다음 조회부터 새 순번을 보인다. 저장 payload는 바꾸지 않는다.
+- 문서: `docs/dashboard/상세.md`·`구현.md`(D09 대체)·`README.md`, `docs/features/case-compare.md`·`case-report.md` 갱신.
+- 검증: pytest test_dashboard_parser_acceptance·test_dashboard_queries·test_dashboard_run_videos 60개 통과(신규: 첫 숫자 규칙 8건, 순번 정렬, MPa/unit_system, 원본 단위 우선, 저장 capture 순번 재계산·재정렬), test_dashboard_unprocessed_files·contour_values·case_latest_results·capture_acceptance·api_slice 16개 통과. `tsc -b --noEmit` 통과. e2e 기대값(`simulation-dashboard.spec.ts` 컨투어 셀 `20 MPa`, `case-report.spec.ts` X축 제목)은 수정만 하고 실행하지 않았다(이 환경에 Playwright 브라우저 없음). migration·의존성·배포 변경 없음. 독립 검수·Codex Security 스캔은 수행하지 않았다(보안 경계 변경 없음).
+
 ## 2026-10-09 — PhysicsAI 플랫폼 연결 기술 계획(문서만)
 
 - `wgcha/physicsai-platform`(HEAD `dec451e`)의 README·AGENTS·계약 `platform.md`·결정·E2E 체크리스트·설정 예시·openapi·`auth.py`를 읽고 [PhysicsAI 연결 계획](../docs/plans/physicsai-integration.md)을 작성했다. PhysicsAI는 이미 같은 서버 `/physicsai/`·대시보드 쿠키 introspection(`/api/auth/me`, `/api/projects`)으로 설계되어 1차에는 대시보드 코드 변경이 필요 없다. 계획: P0 인증 계약 시험·manifest v1, P1 Final → `<ai_root>/_exchange/dashboard/<export_id>/` 데이터셋 내보내기(새 쓰기 구역 EXPORT), P2 딥링크, P3 PREDICT `dashboard_ref`와 예측 참고 표시, P4 운영 공존 ADR 0007(Caddy include·PG·포트). 공유 DB·서비스 토큰·SCX 어댑터 공유는 채택하지 않음.

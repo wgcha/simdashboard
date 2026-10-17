@@ -23,10 +23,39 @@ def test_standard_scene_sequence_and_internal_scenario_remain_distinct() -> None
     assert parsed["scenario_number"] == 12
     assert parsed["sequence_status"] == "CONFIRMED"
 
-    legacy = parse_scene_name("DAMP-2_Face_Drop_Scene02_Face2_1st")
-    assert legacy["scene_sequence_number"] is None
-    assert legacy["scenario_number"] == 2
-    assert legacy["sequence_status"] == "UNCONFIRMED"
+    # 2026-10-17: 순번 is the first number in the name, so a DAMP prefix has one.
+    damp = parse_scene_name("DAMP-2_Face_Drop_Scene02_Face2_1st")
+    assert damp["scene_sequence_number"] == 2
+    assert damp["scenario_number"] == 2
+    assert damp["sequence_status"] == "CONFIRMED"
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("DAMP-2_Corner_Drop_Scene02", 2),
+    ("2_Face_Drop", 2),
+    ("02_x", 2),
+    ("DAMP-13_Corner_Drop_2nd_Scene08_Corner346_2nd", 13),
+    ("20_Face_Drop_Scene12_Face3", 20),
+    ("Corner_Drop_Scene08", 8),
+    ("Face_Drop", None),
+    ("", None),
+])
+def test_scene_sequence_is_the_first_number_in_the_name(name, expected) -> None:
+    assert parser.scene_sequence_number(name) == expected
+    parsed = parse_scene_name(name)
+    assert parsed["scene_sequence_number"] == expected
+    assert parsed["order_status"] == ("UNCONFIRMED" if expected is None else "CONFIRMED")
+
+
+def test_scene_scenario_number_stays_separate_from_the_sequence() -> None:
+    parsed = parse_scene_name("DAMP-13_Corner_Drop_2nd_Scene08_Corner346_2nd")
+    assert parsed["scene_sequence_number"] == 13
+    assert parsed["scenario_number"] == 8
+
+
+def test_scenes_sort_by_first_number_and_unnumbered_last() -> None:
+    names = ["Face_Drop", "DAMP-13_Corner", "2_Face", "DAMP-3_Edge", "02_Back"]
+    assert sorted(names, key=parser.scene_sort_key) == ["02_Back", "2_Face", "DAMP-3_Edge", "DAMP-13_Corner", "Face_Drop"]
 
 
 def test_usage_json_wins_without_double_counting_equivalent_csv() -> None:

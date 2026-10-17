@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..database_connection import ConnectionLike, rows
-from ..domains.dashboard.parser import EVALUATIONS, _pick_usage, build_distribution_scene, fingerprint, parse_scene_name
+from ..domains.dashboard.parser import EVALUATIONS, _pick_usage, build_distribution_scene, fingerprint, scene_sort_key
 from . import spdm_storage
 from . import usage_source_review
 from .storage import get_storage_provider, provider_for_root
@@ -735,7 +735,7 @@ def _distribution_payload(
         scene_files.setdefault((run_id, option_id, scene), []).append((path, data))
     scenes = []
     runs: dict[tuple[str, str], list[dict[str, Any]]] = {key: [] for key in run_meta}
-    for (run_id, option_id, scene), grouped in sorted(scene_files.items(), key=lambda item: (parse_scene_name(item[0][2]).get("scene_sequence_number") is None, parse_scene_name(item[0][2]).get("scene_sequence_number") or 0, item[0][2].casefold())):
+    for (run_id, option_id, scene), grouped in sorted(scene_files.items(), key=lambda item: scene_sort_key(item[0][2])):
         ignored_sources: list[str] = []
         item = build_distribution_scene(scene, grouped, ignored_sources)
         quality_issues.update(
@@ -817,10 +817,7 @@ def merge_latest_payload(entries: list[tuple[str, Any]]) -> dict[str, Any]:
     merged_runs = []
     merged_scenes = []
     for key, meta in runs.items():
-        ordered = sorted(scenes.get(key, {}).values(), key=lambda item: (
-            parse_scene_name(str(item.get("label") or "")).get("scene_sequence_number") is None,
-            parse_scene_name(str(item.get("label") or "")).get("scene_sequence_number") or 0,
-            str(item.get("label") or "").casefold()))
+        ordered = sorted(scenes.get(key, {}).values(), key=lambda item: scene_sort_key(str(item.get("label") or "")))
         merged_runs.append({**meta, "scenes": ordered})
         merged_scenes.extend(ordered)
     return {**{k: v for k, v in newest.items() if k not in {"runs", "scenes", "run"}},
