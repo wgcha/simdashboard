@@ -286,7 +286,9 @@ def test_relay_base_inside_the_spdm_root_refuses_startup(start, monkeypatch, bas
 # --- paths (§4) -----------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("path", ["cushion/../x", "/cushion/x", "~/cushion/x", "cushion\\x", "cushion/\x01x", "cushion//x",
-                                  "cushion/./x", "cushion/" + "a" * 256, "cushion/" + "/".join(["d" * 200] * 6)])
+                                  "cushion/./x", "SPDM /Projects/x", "SPDM/Projects /x", "SPDM./Projects/x",
+                                  "cushion /x", " cushion/x", "cushion/x.", "cushion/\u200bx", "cushion/x\ufeff",
+                                  "cushion/" + "a" * 256, "cushion/" + "/".join(["d" * 200] * 6)])
 def test_invalid_path_forms_are_400(start, path):
     env = start()
     response = env.post("/mkdirs", json={"request_id": "m-bad", "path": path})
@@ -847,3 +849,26 @@ def test_relay_requests_are_json_with_unique_request_ids():
     assert json.loads(json.dumps(relay.RelayError(409, "X", "m").body())) == {
         "code": "X", "message": "m", "retryable": False, "retry_after": None, "adapter_code": None}
     assert uuid.UUID(upload_queue.new_batch_id())
+
+
+def test_relay_items_queued_before_the_relay_was_turned_off_are_not_written(start, monkeypatch):
+    env = start()
+    batch = env.upload(JOB_DIR, "late.rad", b"late", request_id="u-off-later").json()
+    monkeypatch.delenv("SIMDASH_SCX_RELAY_ENABLED")
+    relay.shutdown()
+    _settle()
+    with connect() as conn:
+        items = upload_queue.batch_items(conn, batch["batch_id"])
+    assert items[0].state == "FAILED" and items[0].last_error_code == "RELAY_DISABLED"
+    assert env.drive.writes() == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_secret_file_open_to_others_logs_a_warning(start, tmp_path, caplog):
+    start()
+    path = _secret_file(tmp_path)
+    path.chmod(0o644)
+    relay.shutdown()
+    with caplog.at_level(logging.WARNING):
+        relay.startup()
+    assert "SIMDASH_SCX_RELAY_SECRET_FILE is readable by group/others" in caplog.text and SECRET not in caplog.text

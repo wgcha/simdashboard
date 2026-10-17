@@ -7,6 +7,7 @@ reading that one variable.  ``scx`` requires the variables listed in
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import unicodedata
@@ -222,6 +223,11 @@ def check_relay_rel_path(value: str, *, allow_empty: bool) -> str:
         raise ValueError(f"경로가 {RELAY_PATH_MAX}자를 넘습니다.")
     if text and any(len(part) > RELAY_SEGMENT_MAX for part in text.split("/")):
         raise ValueError(f"경로 구간이 {RELAY_SEGMENT_MAX}자를 넘습니다.")
+    if any(unicodedata.category(ch) in {"Cf", "Zl", "Zp"} for ch in text):
+        raise ValueError("보이지 않는 문자(zero-width 등)를 포함할 수 없습니다.")
+    if text and any(part != part.strip() or part.endswith(".") for part in text.split("/")):
+        # "SPDM /x" or "SPDM./x" could name the SPDM root on a server that trims them (Windows rules)
+        raise ValueError("경로 구간은 공백으로 시작·끝나거나 '.'으로 끝날 수 없습니다.")
     return text
 
 
@@ -237,6 +243,13 @@ def _relay_secret(path: Path) -> bytes:
         raise DriveConfigError(RELAY_SECRET_ENV, "비밀 파일 형식이 올바르지 않습니다(한 줄 base64url 43~128자).") from exc
     if not _RELAY_SECRET.fullmatch(text):
         raise DriveConfigError(RELAY_SECRET_ENV, "비밀 파일 형식이 올바르지 않습니다(한 줄 base64url 43~128자).")
+    if os.name != "nt":
+        try:
+            if path.stat().st_mode & 0o077:
+                logging.getLogger("app.services.drive.config").warning(
+                    "%s is readable by group/others; restrict it to the service account (chmod 600)", RELAY_SECRET_ENV)
+        except OSError:
+            pass
     return text.encode("ascii")
 
 

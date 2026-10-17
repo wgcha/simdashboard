@@ -193,7 +193,7 @@ KEEP_COLUMNS = {
     ("drive_upload_queue", "request_id"): "SCX drive write log (D3); the drive files it wrote are never deleted (W4), so the record stays",
     ("scx_relay_submissions", "request_id"): "PhysicsAI relay request id (pai-…), not a dashboard request; submission record is never deleted",
     ("scx_relay_submissions", "request_sha256"): "hash of a PhysicsAI relay request body, not an entity id",
-    ("finalization_operations", "project_id"):"SCX drive Final metadata (D3); the Final on the drive is kept (W4: SPDM files unchanged)",
+    ("finalization_operations", "project_id"): "SCX drive Final metadata (D3); the Final on the drive is kept (W4: SPDM files unchanged)",
     ("finalization_operations", "request_id"): "SCX drive Final metadata (D3); the Final on the drive is kept (W4: SPDM files unchanged)",
     ("finalization_operations", "case_id"): "SCX drive Final metadata (D3); the Final on the drive is kept (W4: SPDM files unchanged)",
     ("finalization_operations", "capture_id"): "SCX drive Final metadata (D3); the Final on the drive is kept (W4: SPDM files unchanged)",

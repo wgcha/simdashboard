@@ -32,7 +32,7 @@
 | `SIMDASH_SCX_RELAY_MAX_DOWNLOAD_BYTES` | `21474836480`(20 GiB) | 파일 1개 다운로드 상한(1 MiB~2^40) |
 
 - relay의 쓰기(mkdirs·upload)는 기존 대기열을 쓰므로 **`SIMDASH_DRIVE_WRITES_ENABLED=true`이고 `SIMDASH_SCX_DRIVE_ROOT`가 설정되어 대기열 워커가 돌고 있어야 한다**(`writes.drive_writes_active()`). 아니면 409 `DRIVE_WRITE_DISABLED`. 읽기·잡 조회는 쓰기 설정과 무관.
-- 기동 검증: relay가 켜졌는데 scx 모드가 아니거나 비밀 파일이 잘못되면 `DriveConfigError`(변수 이름 표시)로 기동 거부 — 기존 scx 설정 검증과 같은 방식.
+- 기동 검증: relay가 켜졌는데 비밀 파일이 잘못되거나(형식·읽기·절대 경로 아님) relay 기준이 SPDM 루트와 같거나 그 안이면 `DriveConfigError`(변수 이름 표시)로 기동 거부 — 기존 scx 설정 검증과 같은 방식. relay가 켜졌는데 `SIMDASH_DRIVE_GATEWAY`가 scx가 아니면 기동은 하되 경고 로그를 남기고 모든 relay 요청에 503 `DRIVE_MODE_DISABLED`(§3-6, §8-1 "none 모드 503"). 비밀 파일이 그룹·다른 사용자에게 열려 있으면(POSIX 권한 `0o077`) 경고 로그. relay를 끈 뒤 대기열에 남은 relay 항목은 쓰지 않고 `FAILED`(`RELAY_DISABLED`, 다시 켠 뒤 관리자 재시도 가능).
 
 ## 3. 접근 제어
 

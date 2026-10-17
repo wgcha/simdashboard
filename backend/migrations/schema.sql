@@ -944,6 +944,8 @@ CREATE TABLE IF NOT EXISTS result_registration_location_links (
     updated_at TIMESTAMP NOT NULL,
     UNIQUE (root_key, project_id, request_id, environment, path_key)
 );
+CREATE INDEX IF NOT EXISTS ix_result_location_links_scope
+    ON result_registration_location_links(root_key, project_id, request_id, environment, relative_path);
 CREATE TABLE IF NOT EXISTS result_registration_drafts (
     id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL,
     environment VARCHAR NOT NULL CHECK(environment IN ('USAGE','DISTRIBUTION')),
@@ -967,7 +969,6 @@ CREATE TABLE IF NOT EXISTS result_registration_events (
     detail_json JSONB NOT NULL, actor VARCHAR NOT NULL, occurred_at TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_result_registration_paths_target ON result_registration_paths(root_key,project_id,request_id,environment,relative_path);
-CREATE INDEX IF NOT EXISTS ix_result_location_links_scope ON result_registration_location_links(root_key,project_id,request_id,environment,relative_path);
 CREATE INDEX IF NOT EXISTS ix_result_registration_drafts_request ON result_registration_drafts(project_id,request_id,status,created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_result_registration_files_draft ON result_registration_files(draft_id,relative_path);
 CREATE INDEX IF NOT EXISTS ix_result_registration_events_draft ON result_registration_events(draft_id,occurred_at DESC);

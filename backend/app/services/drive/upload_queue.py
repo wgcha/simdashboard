@@ -110,6 +110,7 @@ ERROR_MESSAGES = {
     "SPDM_CONFLICT": "같은 이름의 다른 파일이 이미 드라이브에 있습니다(덮어쓰지 않았습니다).",
     "DRIVE_AUTH_REQUIRED": "드라이브 인증이 필요합니다. 관리자가 토큰을 다시 등록하면 대기열이 이어서 진행됩니다.",
     "DRIVE_ROOT_CHANGED": "SPDM 루트가 바뀌어 이 항목을 쓰지 않았습니다.",
+    "RELAY_DISABLED": "SCX relay가 꺼져 있어 PhysicsAI 항목을 쓰지 않았습니다(관리자가 relay를 켠 뒤 다시 시도).",
     "DRIVE_STAGING_MISSING": "서버 임시 파일이 없어 올릴 수 없습니다. 다시 올리세요.",
     "DRIVE_UPLOAD_MISMATCH": "드라이브에 올라간 파일 크기가 다릅니다.",
     "FINALIZATION_SOURCE_STALE": "Final 계획 이후 드라이브 원본이 바뀌었습니다.",
@@ -237,6 +238,15 @@ def relay_root_key() -> str:
     from . import relay
 
     return relay.root_key()
+
+
+def _relay_enabled() -> bool:
+    from . import relay
+
+    try:
+        return relay.settings().enabled
+    except Exception:  # noqa: BLE001 - invalid relay settings: treat as off (startup reports them)
+        return False
 
 
 def item_root_key(item: "Item") -> str:
@@ -767,7 +777,11 @@ def process_next(*, now: datetime | None = None) -> bool:
             if row is None:
                 return False
             item = _item(row)
-            if item.root_key != item_root_key(item):
+            if is_relay(item) and not _relay_enabled():
+                # The relay was turned off after the item was queued: never write it (scx-relay §2).
+                _record(conn, item, "FAILED", code="RELAY_DISABLED")
+                _notify_batch_finished(conn, item.batch_id)
+            elif item.root_key != item_root_key(item):
                 _record(conn, item, "FAILED", code="DRIVE_ROOT_CHANGED")
                 _notify_batch_finished(conn, item.batch_id)
             else:
