@@ -67,7 +67,6 @@ ACTIVE_STATUSES = folder_auto_discovery.ACTIVE_STATUSES
 KEYWORDS = depth_profiles.ENVIRONMENT_KEYWORDS
 _OTHER = {"USAGE": "DISTRIBUTION", "DISTRIBUTION": "USAGE"}
 _WR_TOKEN = re.compile(r"\[?WR[-_]?[0-9A-Za-z]+\]?", re.I)
-_WR_KEY = re.compile(r"\[?WR[-_]?(\w+)", re.I)
 _NOTE_PREFIX = "폴더 의뢰번호:"
 _logger = logging.getLogger(__name__)
 
@@ -78,8 +77,7 @@ def _error(code: str, message: str, status: int = 422, **extra: Any) -> drop.Dro
 
 def _wr_key(value: str | None) -> str | None:
     """Casefolded WR key of a request folder name or title (``[WR-0001]_[유통_환경]`` → ``0001``)."""
-    match = _WR_KEY.match(str(value or "").strip())
-    return match.group(1).casefold() if match else None
+    return folder_auto_discovery.wr_number(value)
 
 
 def _identity_key(title: str | None, note: str | None) -> str | None:

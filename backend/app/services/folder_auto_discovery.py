@@ -83,8 +83,11 @@ RUN_TIME_BUDGET_SECONDS = 45.0
 RETRY_BACKOFF_SECONDS = (120.0, 300.0, 600.0)
 ACTIVE_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
 
-# WR key of a request folder name (§8); the casefolded folder name otherwise.
-_WR_KEY = re.compile(r"\[?WR[-_]?(\w+)", re.I)
+# WR number of a request folder name (§8): the ASCII letters/digits right after ``WR-``/``WR_``
+# (or ``WR`` + digit), optionally inside ``[...]``. The key stops at the first other character, so
+# ``_``, spaces, ``]`` and Korean text never join it (``WR-0000806_유통환경시뮬레이션`` -> ``0000806``).
+# Leading zeros are kept as written: the number is copied from SPDM, never retyped.
+_WR_KEY = re.compile(r"\[?WR(?:[-_]([0-9A-Za-z]+)|(\d[0-9A-Za-z]*))", re.I)
 _logger = logging.getLogger(__name__)
 
 
@@ -201,15 +204,21 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def wr_number(name: str | None) -> str | None:
+    """Casefolded WR number of a request folder name or title, or None (``[WR-0001]_[유통_환경]`` -> ``0001``)."""
+    match = _WR_KEY.match(str(name or "").strip())
+    return (match.group(1) or match.group(2)).casefold() if match else None
+
+
 def request_identity(name: str) -> tuple[str, str | None, str | None]:
     """(WR key, environment, keyword deviation code) of a request folder name.
 
-    The environment comes from the name keyword only (D4); ``code`` is
-    ``ENV_KEYWORD_BOTH`` / ``ENV_KEYWORD_NONE`` when it cannot be decided.
+    The WR key is :func:`wr_number`, or the casefolded folder name when the name
+    has no WR number. The environment comes from the name keyword only (D4);
+    ``code`` is ``ENV_KEYWORD_BOTH`` / ``ENV_KEYWORD_NONE`` when it cannot be decided.
     """
     environment, code = depth_profiles.keyword_environment(name)
-    match = _WR_KEY.match(str(name).strip())
-    key = (match.group(1) if match else str(name).strip()).casefold()
+    key = wr_number(name) or str(name).strip().casefold()
     return key, environment, code
 
 

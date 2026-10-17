@@ -155,7 +155,20 @@ def test_request_names_map_by_keyword_and_wr_key():
     assert identity("[WR-0001]_[유통_환경]") == ("0001", "DISTRIBUTION", None)
     assert identity("[WR-0001]_[사용_환경]") == ("0001", "USAGE", None)
     assert identity("[WR-0002]_[유통_환경] - 복사본")[:2] == ("0002", "DISTRIBUTION")
-    assert identity("WR_A1_사용") == ("a1_사용", "USAGE", None)
+    assert identity("WR_A1_사용") == ("a1", "USAGE", None)
+    # The key is the WR number only: "_", spaces, "]" and Korean text never join it, so a renamed
+    # folder (spaces removed) keeps its key. Leading zeros are kept as written.
+    assert identity("WR-0000806_유통환경시뮬레이션") == ("0000806", "DISTRIBUTION", None)
+    assert identity("WR-0000806_유통 환경 시뮬레이션")[:2] == ("0000806", "DISTRIBUTION")
+    assert identity("WR-00000804_유통 환경 시뮬레이션")[0] == "00000804"
+    assert identity("WR-0000806사용환경시뮬레이션")[:2] == ("0000806", "USAGE")
+    assert identity("[wr_0010] 사용 환경")[0] == "0010"
+    assert identity("WR0011_유통")[0] == "0011"
+    # No WR number: the casefolded folder name ("WRONG" is not "WR" + a number).
+    assert identity("WRONG_유통") == ("wrong_유통", "DISTRIBUTION", None)
+    assert identity("Drop_유통_Test") == ("drop_유통_test", "DISTRIBUTION", None)
+    assert folder_auto_discovery.wr_number("WR_x_SimType1") == "x"
+    assert folder_auto_discovery.wr_number("WR-_유통") is None and folder_auto_discovery.wr_number(None) is None
     assert identity("[WR-0003]_[기타]") == ("0003", None, "ENV_KEYWORD_NONE")
     assert identity("[WR-0003]_[사용_유통]") == ("0003", None, "ENV_KEYWORD_BOTH")
     assert identity("Request 유통") == ("request 유통", "DISTRIBUTION", None)

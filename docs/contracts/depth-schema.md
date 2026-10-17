@@ -203,7 +203,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 ## 8. 자동 탐색 (`folder_auto_discovery.py`)
 
 - `_project_candidates`: `MAX_CONTAINER_LEVELS`와 `_PROJECT` 정규식 대신 `upper`로 BFS한다. project_level의 비숨김 폴더는 모두 PROJECT, request_level 폴더는 의뢰 후보다.
-- `request_identity`: 키워드로 환경을 판정한다(D4). WR 키는 `\[?WR[-_]?(\w+)`로 추출하고, 실패하면 폴더명 casefold를 쓴다. `NAME_NOT_STANDARD`는 `ENV_KEYWORD_*`로 대체한다. `_SIMTYPE` 정규식은 삭제한다(D5).
+- `request_identity`: 키워드로 환경을 판정한다(D4). WR 키는 의뢰번호만이다(`wr_number`, 2026-10-17 정정): `WR-`/`WR_` 뒤(또는 `WR` 바로 뒤 숫자부터)의 ASCII 영문·숫자만 쓰고, `_`·공백·`]`·한글에서 끝난다 (`[WR-0001]_[유통_환경]` → `0001`, `WR-0000806_사용환경시뮬레이션` → `0000806`, `WR_A1_사용` → `a1`). 앞자리 0은 적힌 그대로 둔다(SPDM 번호를 복사한 값이며 `0806`과 `00806`을 합치지 않는다). WR 번호가 없으면(`WRONG_…` 포함) 폴더명 casefold를 쓴다. 이전 `\w+` 규칙은 한글·`_`까지 삼켜 공백 유무만 다른 폴더의 키가 달랐다. `NAME_NOT_STANDARD`는 `ENV_KEYWORD_*`로 대체한다. `_SIMTYPE` 정규식은 삭제한다(D5).
 - 이탈이 하나라도 있으면 `needs_review: DEPTH_DEVIATION`(첫 코드와 건수)으로 보내고 등록하지 않는다.
 - `_skip_final_archive`는 제거한다. Final은 §5 규칙으로 역할만 판정하며, 결과 등록 대상에서는 계속 제외한다(D12). 의뢰 판정은 upper의 request_level 기준이다.
 
