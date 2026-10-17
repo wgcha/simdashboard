@@ -47,6 +47,8 @@ class DeleteConfirm(DeleteTargets):
 
 class CleanupTargets(BaseModel):
     project_ids: list[str] = Field(min_length=1, max_length=cleanup.MAX_IDS)
+    # Global administrator force delete of registered projects (project_cleanup module docstring).
+    force_project_ids: list[str] = Field(default_factory=list, max_length=cleanup.MAX_IDS)
 
 
 class CleanupConfirm(CleanupTargets):
@@ -179,7 +181,7 @@ def project_cleanup_preview(payload: CleanupTargets, request: Request):
     with connect() as conn:
         admin(request, conn)
         try:
-            return cleanup.preview(conn, payload.project_ids)
+            return cleanup.preview(conn, payload.project_ids, payload.force_project_ids)
         except ValueError as exc:
             raise HTTPException(422, {"code": "PROJECT_CLEANUP_INVALID", "message": str(exc)}) from exc
 
@@ -196,7 +198,8 @@ def project_cleanup_delete(payload: CleanupConfirm, request: Request):
 
         try:
             return cleanup.delete(conn, payload.project_ids, payload.confirm_token, audit,
-                                  acknowledged_project_ids=payload.acknowledge_data_project_ids)
+                                  acknowledged_project_ids=payload.acknowledge_data_project_ids,
+                                  force_project_ids=payload.force_project_ids, actor=principal.user_id)
         except ValueError as exc:
             raise HTTPException(422, {"code": "PROJECT_CLEANUP_INVALID", "message": str(exc)}) from exc
 

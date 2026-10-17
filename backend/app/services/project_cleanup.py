@@ -8,7 +8,15 @@ Candidates
     * ``EMPTY``: no live (non-DELETED) folder-environment registration references
       the project, its requests or its Cases.
     * ``REGISTERED``: a live registration references it. Not selectable; the
-      administrator uses registration delete (§13) instead.
+      administrator uses registration delete (§13) instead -- or, when that is
+      not possible (a registration made under another storage root, e.g. local
+      mode before the drive, is not listed in the registration history), the
+      global administrator's **force delete** (user decision 2026-10-17): the
+      project's live registrations become DELETED tombstones in the same
+      transaction and the project is deleted as an ``EMPTY`` one would be.
+      ``RUNNING_EXECUTION`` (a run left "running" by a stopped PC) is overridden
+      too; ``PROJECT_TEMPLATE_IN_USE`` and a live registration of another,
+      unselected project still block. Force always needs the typed name.
 
 Scope
     Everything hanging off the selected projects is deleted child-first in
@@ -67,6 +75,8 @@ DEMO_SEED_ROW_IDS = frozenset({
 ACTIVE_STATUSES = frozenset({"QUEUED", "PENDING", "RUNNING", "IN_PROGRESS", "AWAITING_COMPLETION", "DISPATCHED",
                              "STARTING", "CANCELLING", "CAPTURING"})
 VOCABULARY_TARGETS = {"PROJECT": "project", "REQUEST": "request", "LOAD_CASE": "load_case"}
+# Blockers a force delete overrides (module docstring).
+FORCE_OVERRIDABLE = frozenset({"LIVE_REGISTRATION", "RUNNING_EXECUTION"})
 
 # (table, [(column, entity kind)]) rows matching any pair are deleted. Order is child-first for
 # every PostgreSQL foreign key; "*null:<n>" entries clear a reference instead (see _NULLS).
@@ -537,6 +547,35 @@ def _blockers(conn, schema: _Schema, project_id: str, category: str, e: dict[str
     return [unique[key] for key in sorted(unique)]
 
 
+def _forced_registrations(conn, project_id: str, e: dict[str, set[str]], selected: set[str]) -> tuple[list[dict], list[dict]]:
+    """Live registrations a force delete of ``project_id`` tombstones, and the ones it may not.
+
+    A registration referencing the project's entities (its project/request id, a registry
+    target or a capture job's Case) is forced when it belongs to a selected project (or none);
+    one owned by another, unselected project stays a ``LIVE_REGISTRATION`` blocker.
+    """
+    targets = {project_id} | e["request"] | e["case"] | e["load_case"]
+    ids = {str(r[0]) for r in _select(conn, "SELECT id FROM folder_environment_registrations WHERE status<>'DELETED' "
+                                            "AND (project_id=? OR request_id IN (SELECT id FROM analysis_requests WHERE project_id=?))",
+                                      [project_id, project_id])}
+    ids |= {str(r[0]) for r in _select_in(conn, "SELECT registration_id FROM folder_environment_registry WHERE target_id IN ({marks})", targets)}
+    if e["case"]:
+        ids |= {str(r[0]) for r in _select_in(conn, "SELECT registration_id FROM folder_environment_capture_jobs WHERE case_id IN ({marks})", e["case"])}
+    if not ids:
+        return [], []
+    rows = _select_in(conn, "SELECT r.id,r.project_id,r.environment,r.status,s.root_key,s.relative_path "
+                            "FROM folder_environment_registrations r "
+                            "LEFT JOIN folder_environment_previews p ON p.id=r.preview_id "
+                            "LEFT JOIN folder_environment_scans s ON s.id=p.scan_id "
+                            "WHERE r.status<>'DELETED' AND r.id IN ({marks})", ids)
+    forced, foreign = [], []
+    for reg_id, owner, environment, status, root_key, path in sorted(rows, key=lambda row: str(row[0])):
+        item = {"id": str(reg_id), "project_id": str(owner) if owner else None, "environment": str(environment or ""),
+                "status": str(status or ""), "root_key": str(root_key or ""), "relative_path": str(path or "")}
+        (forced if not owner or str(owner) in selected else foreign).append(item)
+    return forced, foreign
+
+
 # ---------------------------------------------------------------------------
 # Listing, planning and token
 # ---------------------------------------------------------------------------
@@ -574,7 +613,7 @@ def _null_specs(name: str) -> list[tuple]:
     return value if isinstance(value, list) else [value]
 
 
-def _plan(conn, ids: list[str], *, missing_is_stale: bool = False) -> dict:
+def _plan(conn, ids: list[str], *, missing_is_stale: bool = False, force: frozenset[str] = frozenset()) -> dict:
     schema = _Schema(conn)
     existing = {str(r[0]): r for r in _select(conn, f"SELECT id,name FROM projects WHERE id IN ({_marks(ids)})", ids)}
     missing = [value for value in ids if value not in existing]
@@ -598,12 +637,33 @@ def _plan(conn, ids: list[str], *, missing_is_stale: bool = False) -> dict:
     merged["blob"] = _entities(conn, schema, set(ids))["blob"] if len(ids) > 1 else merged.get("blob", set())
     if sum(len(values) for values in merged.values()) > MAX_PARAMS:
         raise ValueError("한 번에 정리할 데이터가 너무 많습니다. 프로젝트를 나누어 선택하세요.")
+    selected = set(ids)
+    tombstones: list[str] = []
     for item in items:
         e = item.pop("entities")
-        item["blockers"] = _blockers(conn, schema, item["project_id"], item["category"], e)
+        project_id = item["project_id"]
+        forced = project_id in force
+        # A force delete checks the other blockers as for an unregistered project.
+        blockers = _blockers(conn, schema, project_id, "EMPTY" if forced else item["category"], e)
+        item.update(_describe(conn, schema, item["category"], e))
+        item["forced"] = forced
+        item["forced_registrations"] = []
+        item["overridden"] = []
+        if forced:
+            registrations, foreign = _forced_registrations(conn, project_id, e, selected)
+            item["forced_registrations"] = registrations
+            tombstones.extend(reg["id"] for reg in registrations)
+            item["overridden"] = sorted({b["reason"] for b in blockers if b["reason"] in FORCE_OVERRIDABLE}
+                                        | ({"LIVE_REGISTRATION"} if registrations else set()))
+            blockers = [b for b in blockers if b["reason"] not in FORCE_OVERRIDABLE]
+            blockers += [{"table": "folder_environment_registrations", "id": reg["id"], "reason": "FOREIGN_REGISTRATION"}
+                         for reg in foreign]
+            # Force always asks for the typed project name.
+            item["acknowledge_reasons"] = [*item["acknowledge_reasons"], "FORCED"]
+            item["requires_acknowledgement"] = True
+        item["blockers"] = sorted(blockers, key=lambda b: (b["table"], b["id"], b["reason"]))
         item["deletable"] = not item["blockers"]
         item["counts"] = _counts(conn, schema, e)
-        item.update(_describe(conn, schema, item["category"], e))
     totals = _counts(conn, schema, merged)
     state = {
         "projects": sorted(ids),
@@ -612,10 +672,12 @@ def _plan(conn, ids: list[str], *, missing_is_stale: bool = False) -> dict:
         "counts": totals,
         "blockers": {item["project_id"]: [[b["table"], b["id"], b["reason"]] for b in item["blockers"]] for item in items},
         "acknowledge": {item["project_id"]: item["acknowledge_reasons"] for item in items},
+        "forced": sorted(force & selected),
+        "tombstones": sorted(set(tombstones)),
     }
     token = hashlib.sha256(json.dumps(state, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     return {"items": items, "totals": totals, "confirm_token": token, "entities": merged, "schema": schema,
-            "blocked": any(item["blockers"] for item in items)}
+            "blocked": any(item["blockers"] for item in items), "tombstones": sorted(set(tombstones))}
 
 
 def _counts(conn, schema: _Schema, e: dict[str, set[str]]) -> dict[str, int]:
@@ -643,9 +705,16 @@ def _public(plan: dict) -> dict:
     return {"items": plan["items"], "totals": plan["totals"], "confirm_token": plan["confirm_token"]}
 
 
-def preview(conn, project_ids) -> dict:
-    """Read-only plan: per-project counts by table, blockers and a confirm token."""
-    return _public(_plan(conn, _validated_ids(project_ids)))
+def _forced_ids(ids: list[str], force_project_ids) -> frozenset[str]:
+    return frozenset(str(value) for value in (force_project_ids or []) if isinstance(value, str)) & frozenset(ids)
+
+
+def preview(conn, project_ids, force_project_ids=None) -> dict:
+    """Read-only plan: per-project counts by table, blockers and a confirm token.
+
+    ``force_project_ids`` (global administrator force delete): see the module docstring."""
+    ids = _validated_ids(project_ids)
+    return _public(_plan(conn, ids, force=_forced_ids(ids, force_project_ids)))
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +775,7 @@ def _remember_demo_removed(conn, deleted: list[str]) -> None:
 
 
 def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], None] | None = None,
-           acknowledged_project_ids=None) -> dict:
+           acknowledged_project_ids=None, force_project_ids=None, actor: str = "admin") -> dict:
     """Delete the selected projects atomically; see module docstring.
 
     Projects whose preview has ``requires_acknowledgement`` (non-demo data that was imported or
@@ -715,6 +784,7 @@ def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], N
     ``PROJECT_CLEANUP_CONFIRM_REQUIRED``.
     """
     ids = _validated_ids(project_ids)
+    force = _forced_ids(ids, force_project_ids)
     acknowledged = {str(value) for value in (acknowledged_project_ids or []) if isinstance(value, str)}
     if not isinstance(confirm_token, str) or not confirm_token:
         raise ValueError("confirm_token이 필요합니다.")
@@ -727,7 +797,7 @@ def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], N
                 # Serialize against registration, discovery and other writers of these parents until commit.
                 conn.execute("LOCK TABLE projects, analysis_requests, load_cases, folder_environment_registrations "
                              "IN SHARE ROW EXCLUSIVE MODE")
-            current = _plan(conn, ids, missing_is_stale=True)
+            current = _plan(conn, ids, missing_is_stale=True, force=force)
             if current["confirm_token"] != confirm_token:
                 raise HTTPException(409, {"code": "DELETE_PREVIEW_STALE",
                                           "message": "미리보기 이후 데이터가 바뀌었습니다. 다시 확인하세요."})
@@ -741,6 +811,13 @@ def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], N
                                           "items": current["items"],
                                           "message": "보관 데이터가 있는 프로젝트는 이름을 입력해 한 번 더 확인해야 합니다."})
             schema, entities = current["schema"], current["entities"]
+            if current["tombstones"]:
+                # Force delete: the live registrations become tombstones first, so the stages below
+                # remove their registry rows and capture jobs and clear their project/request links.
+                for start in range(0, len(current["tombstones"]), _CHUNK):
+                    chunk = current["tombstones"][start:start + _CHUNK]
+                    conn.execute(f"UPDATE folder_environment_registrations SET status='DELETED',deleted_at=?,deleted_by=? "
+                                 f"WHERE id IN ({_marks(chunk)}) AND status<>'DELETED'", [_now(), actor, *chunk])
             for index, stage in enumerate(_STAGES):
                 _execute(conn, schema, stage, entities)
                 if not postgres and index < len(_STAGES) - 1:
@@ -752,6 +829,7 @@ def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], N
             if audit is not None:
                 audit(conn, {"project_ids": ids, "categories": {item["project_id"]: item["category"] for item in current["items"]},
                              "acknowledged": sorted(acknowledged & set(ids)),
+                             "forced": sorted(force), "tombstoned_registrations": current["tombstones"],
                              "system_pages": sorted(page["id"] for item in current["items"] for page in item["system_pages"]),
                              "counts": current["totals"]})
             conn.execute("COMMIT")

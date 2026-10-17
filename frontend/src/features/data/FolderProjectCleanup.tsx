@@ -7,7 +7,7 @@ type Props = {
   /** Called after a successful delete so the app can re-read projects and drop a deleted selection. */
   onDeleted: (deletedIds: string[]) => void | Promise<void>
 }
-type Confirm = { ids: string[]; preview: ProjectCleanupPreview | null; items: ProjectCleanupPreviewItem[]; error: string; deleting: boolean; typed: Record<string, string> }
+type Confirm = { ids: string[]; force: string[]; preview: ProjectCleanupPreview | null; items: ProjectCleanupPreviewItem[]; error: string; deleting: boolean; typed: Record<string, string> }
 
 const CATEGORY_LABELS: Record<ProjectCleanupCategory, string> = { DEMO: '데모', EMPTY: '등록 없음', REGISTERED: '등록됨' }
 const USER_DATA_LABELS: Record<string, string> = {
@@ -30,6 +30,7 @@ const BLOCKER_LABELS: Record<string, string> = {
   LIVE_REGISTRATION: '폴더 스키마 등록이 있습니다. 등록 이력에서 먼저 삭제하세요.',
   RUNNING_EXECUTION: '실행 중인 작업이 있습니다.',
   PROJECT_TEMPLATE_IN_USE: '다른 곳에서 쓰는 프로젝트 템플릿이 있습니다.',
+  FOREIGN_REGISTRATION: '선택하지 않은 다른 프로젝트의 등록이 이 프로젝트를 가리킵니다. 그 프로젝트도 함께 선택하세요.',
 }
 const RETAINED_LABELS: Record<string, string> = {
   runs: '해석 이력', results: '결과 값', cases: 'Case', captures: '캡처', legacy_links: '예전 연결', media: '미디어',
@@ -40,7 +41,9 @@ const ACK_LABELS: Record<string, string> = {
   RETAINED_DATA: '가져오거나 등록한 결과·Case·예전 연결이 함께 지워집니다.',
   USER_DATA: '사람이 직접 만든 데이터가 함께 지워집니다.',
   SYSTEM_ANALYSIS_PAGES: '모든 하중경우에서 쓰는 시스템 분석 페이지가 이 프로젝트에 묶여 있어 함께 지워지고 다시 만들어지지 않습니다.',
+  FORCED: '강제 삭제: 폴더 스키마 등록이 삭제됨으로 바뀌고, 프로젝트와 그 아래 의뢰·Case·결과가 모두 지워집니다.',
 }
+const OVERRIDDEN_LABELS: Record<string, string> = { LIVE_REGISTRATION: '폴더 스키마 등록', RUNNING_EXECUTION: '실행 중으로 남은 작업' }
 
 /** 프로젝트 정리 tab (contract depth-schema §16): demo and unregistered projects, preview → confirm → delete. */
 export function FolderProjectCleanup({ busy, onDeleted }: Props) {
@@ -52,13 +55,15 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
   const [reload, setReload] = useState(0)
   const dialog = useRef<HTMLDialogElement>(null)
   const preselected = useRef(false)
+  // Global administrator force delete (2026-10-17): registered projects become selectable.
+  const [force, setForce] = useState(false)
 
   useEffect(() => {
     const controller = new AbortController()
     service.projectCleanupCandidates(controller.signal)
       .then((value) => {
         setItems(value.items); setLoaded(true)
-        const selectable = value.items.filter((item) => item.selectable)
+        const selectable = value.items.filter((item) => item.selectable || force)
         if (!preselected.current) {
           // Default: demo projects only. Other projects are chosen explicitly (review H1).
           preselected.current = true
@@ -67,7 +72,7 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
       })
       .catch((error) => { if (!controller.signal.aborted) setNotice(error instanceof Error ? error.message : String(error)) })
     return () => controller.abort()
-  }, [reload])
+  }, [reload]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const node = dialog.current
     if (!node) return
@@ -75,14 +80,17 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
     else if (!confirm && node.open) node.close()
   }, [confirm])
 
-  const selectable = items.filter((item) => item.selectable)
+  const selectable = items.filter((item) => item.selectable || force)
+  const forcedIds = (ids: string[]) => ids.filter((id) => items.some((item) => item.project_id === id && !item.selectable))
+  const toggleForce = (on: boolean) => { setForce(on); if (!on) setSelected((current) => new Set([...current].filter((id) => items.some((item) => item.project_id === id && item.selectable)))) }
   const allSelected = selectable.length > 0 && selectable.every((item) => selected.has(item.project_id))
   const toggle = (id: string) => setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const openPreview = async () => {
     const ids = [...selected]
-    setConfirm({ ids, preview: null, items: [], error: '', deleting: false, typed: {} }); setNotice('')
+    const forceIds = force ? forcedIds(ids) : []
+    setConfirm({ ids, force: forceIds, preview: null, items: [], error: '', deleting: false, typed: {} }); setNotice('')
     try {
-      const preview = await service.projectCleanupPreview(ids)
+      const preview = await service.projectCleanupPreview(ids, forceIds)
       setConfirm((current) => current && { ...current, preview, items: preview.items })
     } catch (error) { setConfirm((current) => current && { ...current, error: error instanceof Error ? error.message : '미리보기를 만들지 못했습니다.' }) }
   }
@@ -90,7 +98,7 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
     if (!confirm?.preview) return
     setConfirm({ ...confirm, deleting: true, error: '' })
     try {
-      const result = await service.deleteProjects(confirm.ids, confirm.preview.confirm_token, needsName.map((item) => item.project_id))
+      const result = await service.deleteProjects(confirm.ids, confirm.preview.confirm_token, needsName.map((item) => item.project_id), confirm.force)
       setConfirm(null); setSelected(new Set()); setReload((value) => value + 1)
       setNotice(`프로젝트 ${result.deleted.length}개를 정리했습니다. SPDM 폴더·파일은 그대로입니다.`)
       await onDeleted(result.deleted)
@@ -120,15 +128,16 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
     {items.length > 0 && <>
       <div className="folder-environment-footer folder-history-toolbar">
         <label><input type="checkbox" checked={allSelected} disabled={busy || !selectable.length} onChange={(event) => setSelected(event.target.checked ? new Set(selectable.map((item) => item.project_id)) : new Set())} /> 전체 선택</label>
+        <label title="등록 이력에 보이지 않는 등록(예: 로컬 모드 때 등록)이 남아 지울 수 없는 프로젝트를 등록째 지웁니다."><input type="checkbox" data-testid="cleanup-force" checked={force} disabled={busy || Boolean(confirm)} onChange={(event) => toggleForce(event.target.checked)} /> 등록된 프로젝트도 강제 삭제</label>
         <span>{selected.size ? `${selected.size}개 선택` : ''}</span>
         <button type="button" className="ghost-button folder-danger-button" disabled={busy || !selected.size || Boolean(confirm)} onClick={() => void openPreview()}>미리보기</button>
       </div>
       <table className="folder-cleanup-table" aria-label="정리할 프로젝트">
         <thead><tr><th scope="col" aria-label="선택" /><th scope="col">이름</th><th scope="col">구분</th><th scope="col">의뢰</th><th scope="col">Case · 이력</th><th scope="col">보관 데이터</th><th scope="col">직접 만든 데이터</th></tr></thead>
-        <tbody>{items.map((item) => <tr key={item.project_id} className={item.selectable ? '' : 'is-disabled'}>
-          <td><input type="checkbox" aria-label={`${item.name} 선택`} checked={selected.has(item.project_id)} disabled={busy || !item.selectable} onChange={() => toggle(item.project_id)} /></td>
+        <tbody>{items.map((item) => <tr key={item.project_id} className={item.selectable || force ? '' : 'is-disabled'}>
+          <td><input type="checkbox" aria-label={`${item.name} 선택`} checked={selected.has(item.project_id)} disabled={busy || !(item.selectable || force)} onChange={() => toggle(item.project_id)} /></td>
           <td><strong>{item.name}</strong><small>{item.project_id}</small></td>
-          <td><span className={`folder-cleanup-category is-${item.category.toLowerCase()}`}>{CATEGORY_LABELS[item.category]}</span>{!item.selectable && <small>등록 이력에서 삭제</small>}</td>
+          <td><span className={`folder-cleanup-category is-${item.category.toLowerCase()}`}>{CATEGORY_LABELS[item.category]}</span>{!item.selectable && <small>{force ? '강제 삭제 가능' : '등록 이력에서 삭제'}</small>}</td>
           <td>{item.requests}</td>
           <td>{item.cases} · {item.runs}</td>
           <td>{item.retained_total > 0 ? <span className={item.category === 'DEMO' ? '' : 'folder-cleanup-warning'}>{retainedText(item.retained_data)}</span> : '—'}{item.system_pages.length > 0 && <small>시스템 분석 페이지 {item.system_pages.length}개</small>}</td>
@@ -142,6 +151,10 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
       {confirm.preview && <p className="folder-delete-totals">{SUMMARY_TABLES.map(([key, label]) => `${label} ${totals[key] ?? 0}`).join(' · ')}</p>}
       {confirm.items.length > 0 && <ul className="folder-cleanup-preview-list" aria-label="프로젝트별 삭제 건수">{confirm.items.map((item) => <li key={item.project_id}>
         <strong>{item.name}</strong> <span>{CATEGORY_LABELS[item.category]}</span> · 의뢰 {item.counts.analysis_requests ?? 0} · Case {item.counts.dashboard_cases ?? 0} · 해석 이력 {item.counts.analysis_runs ?? 0}
+        {item.forced && <div className="folder-cleanup-forced" data-testid="cleanup-forced">
+          <b>강제 삭제</b>{item.overridden?.length ? ` · 무시하는 제한: ${item.overridden.map((reason) => OVERRIDDEN_LABELS[reason] ?? reason).join(', ')}` : ''}
+          {item.forced_registrations?.length ? <ul>{item.forced_registrations.map((reg) => <li key={reg.id}><code>{reg.relative_path || '(경로 없음)'}</code> · {reg.environment === 'USAGE' ? '사용환경' : reg.environment === 'DISTRIBUTION' ? '유통환경' : reg.environment} · {reg.status}{reg.root_key ? <small title={reg.root_key}> 저장소 {reg.root_key.slice(0, 12)}</small> : null}</li>)}</ul> : null}
+        </div>}
       </li>)}</ul>}
       {detailRows.length > 0 && <details className="folder-cleanup-details"><summary>표별 삭제 건수 {detailRows.length}개</summary>
         <table aria-label="표별 삭제 건수"><tbody>{detailRows.map(([table, count]) => <tr key={table}><th scope="row">{TABLE_LABELS[table] ?? table}{TABLE_LABELS[table] ? <code>{table}</code> : null}</th><td>{count}</td></tr>)}</tbody></table>

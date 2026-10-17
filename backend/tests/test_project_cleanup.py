@@ -212,6 +212,42 @@ def test_registered_project_is_listed_but_blocked(admin_client):
         assert conn.execute("SELECT count(*) FROM dashboard_cases WHERE project_id=?", [project_id]).fetchone()[0] >= 1
 
 
+def test_force_delete_tombstones_registrations_and_removes_the_project(admin_client):
+    """User decision 2026-10-17: a registration made under another root (local mode) is not in the
+    registration history, so the global administrator force-deletes the registered project."""
+    client, root = admin_client
+    _build_distribution(root, final=False)
+    _scan, _preview_body, registered = _register(client, "DISTRIBUTION")
+    project_id = registered["project_id"]
+    with connect() as conn:
+        registration_id = str(conn.execute("SELECT id FROM folder_environment_registrations WHERE project_id=? AND status<>'DELETED'",
+                                           [project_id]).fetchone()[0])
+    response = client.post(ENV + "/project-cleanup/preview", json={"project_ids": [project_id], "force_project_ids": [project_id]})
+    assert response.status_code == 200, response.text
+    [item] = response.json()["items"]
+    assert item["forced"] is True and item["blockers"] == [] and item["deletable"] is True
+    assert "LIVE_REGISTRATION" in item["overridden"] and "FORCED" in item["acknowledge_reasons"]
+    assert [reg["id"] for reg in item["forced_registrations"]] == [registration_id]
+    token = response.json()["confirm_token"]
+    body = {"project_ids": [project_id], "confirm_token": token, "force_project_ids": [project_id]}
+    # The typed name is always required for a force delete.
+    unconfirmed = client.post(ENV + "/project-cleanup/delete", json=body)
+    assert unconfirmed.status_code == 409 and unconfirmed.json()["detail"]["code"] == "PROJECT_CLEANUP_CONFIRM_REQUIRED"
+    # The plain (non-force) token does not authorise a force delete and vice versa.
+    plain = _cleanup_preview(client, [project_id])["confirm_token"]
+    assert plain != token
+    deleted = client.post(ENV + "/project-cleanup/delete", json={**body, "acknowledge_data_project_ids": [project_id]})
+    assert deleted.status_code == 200, deleted.text
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM projects WHERE id=?", [project_id]).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM dashboard_cases WHERE project_id=?", [project_id]).fetchone()[0] == 0
+        status, linked = conn.execute("SELECT status,project_id FROM folder_environment_registrations WHERE id=?",
+                                      [registration_id]).fetchone()
+        assert (status, linked) == ("DELETED", None)
+        assert conn.execute("SELECT count(*) FROM folder_environment_registry WHERE registration_id=? AND target_id=?",
+                            [registration_id, project_id]).fetchone()[0] == 0
+
+
 def test_running_execution_blocks_whole_request(admin_client):
     client, _root = admin_client
     with connect() as conn:
