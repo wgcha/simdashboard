@@ -44,6 +44,7 @@ NON_SPDM_MODULES = {
     "folder_import.py": "SIMDASH_IMPORT_ROOT result bundles",
     "main.py": "static frontend bundle and app data",
     "media_policy.py": "app media store",
+    "server_clock.py": "OS timezone link /etc/localtime (server display zone)",
     "parsers/manifest_format.py": "import-root manifests",
     "parsers/radioss_deck_parser.py": "line streams handed over by callers",
     "parsers/streaming_json.py": "import-root files",

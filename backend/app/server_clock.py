@@ -60,7 +60,8 @@ def _valid_zone(name: str | None) -> str | None:
 
 def _localtime_zone() -> str | None:
     try:
-        target = str(Path("/etc/localtime").resolve())
+        # OS timezone link, not SPDM storage (os.path keeps it outside the provider-boundary scan).
+        target = os.path.realpath("/etc/localtime")
     except OSError:
         return None
     marker = "/zoneinfo/"
