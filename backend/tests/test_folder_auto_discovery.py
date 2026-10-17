@@ -20,7 +20,8 @@ PROJECT = f"{CONTAINER}/75R9J_PV"
 WR2 = f"{PROJECT}/[WR-0002]_[유통_환경]"
 CASE_PATH = "Working/Package_Model_SetCase3_CushionCase1/Drop/85qn80h_ref_organized/INDIVIDUAL"
 FINAL_ID = "0bb7b4f6567f4ce985bba010c7f569e7"
-SYNTHETIC_PROJECT_NAMES = {"75r9j_pv", "77777_pv"}
+SYNTHETIC_PROJECT_NAMES = {"75r9j_pv", "77777_pv", "proj-000099_r95j 개발 과제", "proj-000099_r95j개발과제",
+                           "proj-000099_r95j_copy", "other_pv"}
 AUTO_DISCOVERED_AUDITS = "SELECT count(*) FROM audit_events WHERE action='FOLDER_ENVIRONMENT_AUTO_DISCOVERED'"
 
 
@@ -796,3 +797,185 @@ def test_unreadable_listing_is_never_taken_as_a_rename():
     gone_project = Lister(tree)
     assert absent(gone_project, "SPDM (Admin)/OLD_PV/WR-0002_유통", {}) is True
     assert gone_project.calls == ["", "SPDM (Admin)"]  # a missing folder is never listed itself
+
+
+# --- renamed project folder (user decision 2026-10-17) ---------------------------------------------
+
+OLD_PROJECT = f"{CONTAINER}/PROJ-000099_R95J 개발 과제"
+NEW_PROJECT = f"{CONTAINER}/PROJ-000099_R95J개발과제"
+R1, R2, R3 = "WR-0000991_유통 환경 시뮬레이션", "[WR-0000992]_[사용_환경]", "WR-0000993_유통 환경"
+PROJECT_RENAMED_AUDITS = "SELECT count(*) FROM audit_events WHERE action='FOLDER_PROJECT_FOLDER_RENAMED'"
+
+
+def _registered_project(client, root, extra=()):
+    """A project folder with two registered requests (one with Cases and an active snapshot)."""
+    _container_schema()
+    _distribution_request(root, f"{OLD_PROJECT}/{R1}")
+    (root / OLD_PROJECT / R2 / "Working").mkdir(parents=True)
+    for path in extra:
+        (root / path / "Working").mkdir(parents=True)
+    result = _discover(client)
+    assert result["needs_review"] == [], result["needs_review"]
+    project = next(item for item in result["created_projects"] if item["name"] == OLD_PROJECT.rsplit("/", 1)[-1])
+    requests = {item["name"]: item["id"] for item in result["created_requests"] if item["project_id"] == project["id"]}
+    assert set(requests) == {R1, R2}
+    assert _sync(client, project["id"], requests[R1])["status"] in {"REFRESHED", "UNCHANGED"}
+    folder_auto_discovery.reset_for_tests()
+    return project["id"], requests
+
+
+def _counts():
+    return (_count("SELECT count(*) FROM projects"), _count("SELECT count(*) FROM analysis_requests"),
+            _count("SELECT count(*) FROM folder_environment_registrations"))
+
+
+def _live_statuses(request_id):
+    return [row[1] for row in _request_rows(request_id)]
+
+
+def test_renamed_project_folder_keeps_the_project_and_follows_its_requests(admin_client):
+    from app.services import folder_schema_resolver as resolver
+
+    client, root = admin_client
+    project_id, requests = _registered_project(client, root)
+    old_registrations = {name: [row[0] for row in _request_rows(request_id)] for name, request_id in requests.items()}
+    assert all(len(ids) == 1 for ids in old_registrations.values())
+    old_cases = _count("SELECT count(*) FROM dashboard_cases WHERE request_id=?", [requests[R1]])
+    projects_before, requests_before, _ = _counts()
+    audits = (_count(PROJECT_RENAMED_AUDITS), _count(RENAMED_AUDITS))
+    assert old_cases
+
+    (root / OLD_PROJECT).rename(root / NEW_PROJECT)  # SPDM: spaces removed from the project folder name
+    (root / NEW_PROJECT / R3 / "Working").mkdir(parents=True)  # plus a request that is new
+    result = _discover(client)
+    assert result["needs_review"] == [], result["needs_review"]
+    assert result["created_projects"] == []
+    assert result["renamed_projects"] == [{"id": project_id, "name": "PROJ-000099_R95J 개발 과제",
+                                           "old_path": OLD_PROJECT, "new_path": NEW_PROJECT}]
+    renamed = {item["id"]: item for item in result["renamed_requests"]}
+    assert set(renamed) == set(requests.values())
+    for name, request_id in requests.items():
+        assert (renamed[request_id]["old_path"], renamed[request_id]["new_path"]) == (
+            f"{OLD_PROJECT}/{name}", f"{NEW_PROJECT}/{name}")
+        assert renamed[request_id]["project_id"] == project_id
+    [created] = result["created_requests"]
+    assert (created["name"], created["project_id"]) == (R3, project_id)  # new request, same project
+    # No new project; one new request only; the project's display name is unchanged.
+    assert _counts()[:2] == (projects_before, requests_before + 1)
+    assert _count("SELECT count(*) FROM projects WHERE id=? AND name=?", [project_id, "PROJ-000099_R95J 개발 과제"]) == 1
+    # The old folders' registrations are tombstones; data is kept.
+    for name, request_id in requests.items():
+        rows = _request_rows(request_id)
+        [old_id] = old_registrations[name]
+        assert [(row[1], row[2]) for row in rows if row[0] == old_id] == [("DELETED", folder_auto_discovery.SYSTEM.user_id)]
+        assert len([row for row in rows if row[1] != "DELETED"]) == 1
+        with connect() as conn:
+            assert resolver._request_path(conn, _root_key(root), project_id, request_id,
+                                          renamed[request_id]["environment"]) == f"{NEW_PROJECT}/{name}"
+    assert _count("SELECT count(*) FROM dashboard_cases WHERE request_id=? AND relative_path LIKE ?",
+                  [requests[R1], f"{OLD_PROJECT}/%"]) == old_cases
+    assert _count("SELECT count(*) FROM dashboard_cases WHERE request_id=? AND relative_path LIKE ?",
+                  [requests[R1], f"{NEW_PROJECT}/%"]) == old_cases
+    assert {"2_Face", "3_Face"} <= _scenes(client, project_id, requests[R1])
+    # The new project folder is linked to the same project (makes later runs idempotent).
+    with connect() as conn:
+        linked = folder_auto_discovery._linked_state(conn, _root_key(root))
+    assert linked["projects"][NEW_PROJECT.casefold()] == {project_id}
+    assert (_count(PROJECT_RENAMED_AUDITS), _count(RENAMED_AUDITS)) == (audits[0] + 1, audits[1] + 2)
+    folder_auto_discovery.reset_for_tests()
+    again = _discover(client)
+    assert (again["created_projects"], again["created_requests"], again["renamed_projects"],
+            again["renamed_requests"], again["needs_review"]) == ([], [], [], [], [])
+    assert _counts()[:2] == (projects_before, requests_before + 1)
+    # Non-administrators see the project, not the folder paths.
+    visible = folder_auto_discovery.visible_result(result, is_global_admin=False)
+    assert visible["renamed_projects"] == [{"id": project_id, "name": "PROJ-000099_R95J 개발 과제"}]
+    assert all("old_path" not in item and "new_path" not in item for item in visible["renamed_requests"])
+
+
+def test_renamed_project_folder_requests_left_by_the_run_limit_follow_on_the_next_run(admin_client, monkeypatch):
+    client, root = admin_client
+    project_id, requests = _registered_project(client, root)
+    projects_before, requests_before, _ = _counts()
+    monkeypatch.setattr(folder_auto_discovery, "MAX_NEW_REQUESTS_PER_RUN", 1)
+    (root / OLD_PROJECT).rename(root / NEW_PROJECT)
+    first = _discover(client)
+    assert [item["id"] for item in first["renamed_projects"]] == [project_id] and first["partial"] is True
+    assert len(first["renamed_requests"]) == 1
+    folder_auto_discovery.reset_for_tests()
+    second = _discover(client)  # the project folder is linked now; the other request still follows
+    assert second["renamed_projects"] == [] and second["created_requests"] == [], second
+    assert {item["id"] for item in first["renamed_requests"] + second["renamed_requests"]} == set(requests.values())
+    assert _counts()[:2] == (projects_before, requests_before)
+
+
+OTHER_REQUEST = f"{CONTAINER}/OTHER_PV/WR-0000995_유통 환경"
+
+
+@pytest.mark.parametrize("rival", ["second_candidate", "other_project"])
+def test_renamed_project_folder_with_an_ambiguous_match_needs_review(admin_client, rival):
+    client, root = admin_client
+    project_id, requests = _registered_project(client, root, extra=[OTHER_REQUEST] if rival == "other_project" else [])
+    before = _counts()
+    (root / OLD_PROJECT).rename(root / NEW_PROJECT)
+    rival_path = f"{CONTAINER}/PROJ-000099_R95J_copy"
+    if rival == "second_candidate":
+        (root / rival_path / R1 / "Working").mkdir(parents=True)
+        expected = {NEW_PROJECT: "PROJECT_RENAME_AMBIGUOUS", rival_path: "PROJECT_RENAME_AMBIGUOUS"}
+    else:  # one request of the new folder carries another (present) project's WR number
+        (root / NEW_PROJECT / OTHER_REQUEST.rsplit("/", 1)[-1] / "Working").mkdir(parents=True)
+        expected = {NEW_PROJECT: "PROJECT_RENAME_AMBIGUOUS"}
+    result = _discover(client)
+    assert {item["relative_path"]: item["code"] for item in result["needs_review"]} == expected
+    assert "여러" in result["needs_review"][0]["reason"]
+    assert (result["created_projects"], result["created_requests"], result["renamed_projects"],
+            result["renamed_requests"]) == ([], [], [], [])
+    assert _counts() == before  # nothing registered for the candidates
+    for request_id in requests.values():
+        assert "DELETED" not in _live_statuses(request_id)
+    if rival == "second_candidate":  # once the rival is gone the rename is followed
+        import shutil
+        shutil.rmtree(root / rival_path)
+        folder_auto_discovery.reset_for_tests()
+        followed = _discover(client)
+        assert [item["id"] for item in followed["renamed_projects"]] == [project_id]
+        assert {item["id"] for item in followed["renamed_requests"]} == set(requests.values())
+
+
+@pytest.mark.parametrize("legacy", ["spdm_project_parent", "legacy_registry"])
+def test_renamed_project_folder_with_a_legacy_binding_is_not_followed(admin_client, legacy):
+    client, root = admin_client
+    project_id, requests = _registered_project(client, root)
+    with connect() as conn:
+        if legacy == "spdm_project_parent":
+            conn.execute("INSERT INTO spdm_storage_project_parents(project_folder, project_id, created_at, updated_at) "
+                         "VALUES (?,?,current_timestamp,current_timestamp)", [f"legacy-{uuid4()}", project_id])
+        else:
+            conn.execute("INSERT INTO folder_discovery_registry(id, root_key, relative_path, role, role_kind, scope_key, "
+                         "code, name, analysis_type, parent_target_id, target_id, created_at) "
+                         "VALUES (?,?,?,?,?,?,?,?,?,?,?,current_timestamp)",
+                         [str(uuid4()), _root_key(root), f"{CONTAINER}/legacy-{uuid4().hex[:8]}", "PROJECT", "PROJECT",
+                          "", None, "legacy", "", None, project_id])
+    before = _counts()
+    (root / OLD_PROJECT).rename(root / NEW_PROJECT)
+    result = _discover(client)
+    assert [(item["relative_path"], item["code"]) for item in result["needs_review"]] == [
+        (NEW_PROJECT, "PROJECT_RENAME_UNSUPPORTED")]
+    assert "자동으로 옮길 수 없습니다" in result["needs_review"][0]["reason"]
+    assert (result["created_projects"], result["created_requests"], result["renamed_projects"],
+            result["renamed_requests"]) == ([], [], [], [])
+    assert _counts() == before
+    for request_id in requests.values():
+        assert "DELETED" not in _live_statuses(request_id)
+
+
+def test_present_old_project_folder_is_not_taken_as_a_rename(admin_client):
+    """A copy of a project folder (the linked one still exists) keeps the earlier behaviour."""
+    client, root = admin_client
+    _project_id, requests = _registered_project(client, root)
+    (root / NEW_PROJECT / R1 / "Working").mkdir(parents=True)
+    result = _discover(client)
+    assert result["renamed_projects"] == [] and result["renamed_requests"] == []
+    assert [item["name"] for item in result["created_projects"]] == ["PROJ-000099_R95J개발과제"]
+    for request_id in requests.values():
+        assert "DELETED" not in _live_statuses(request_id)
