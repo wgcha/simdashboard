@@ -263,8 +263,14 @@ def is_project_shared_name(name: str) -> bool:
 
 
 def keyword_environment(name: str):
-    """(environment, deviation_code) from a request folder name (D4)."""
-    found = [env for env, keyword in ENVIRONMENT_KEYWORDS.items() if keyword in str(name)]
+    """(environment, deviation_code) from a request folder name (D4).
+
+    Compared in NFC: a name listed decomposed (NFD, e.g. a macOS-backed share) has the same keyword.
+    """
+    import unicodedata
+
+    text = unicodedata.normalize("NFC", str(name))
+    found = [env for env, keyword in ENVIRONMENT_KEYWORDS.items() if unicodedata.normalize("NFC", keyword) in text]
     if len(found) == 1:
         return found[0], None
     return None, "ENV_KEYWORD_BOTH" if found else "ENV_KEYWORD_NONE"

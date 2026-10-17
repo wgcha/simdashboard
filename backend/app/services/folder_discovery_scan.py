@@ -149,11 +149,13 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
         count = 0
         identity = ""
         skipped = bool(skip_descendants and skip_descendants(rel, parent))
+        operation = "stat"
         try:
             fs.assert_safe(path)
             info = fs.stat(path, follow_links=True, missing_ok=False)
             identity = info.item_id
             if not skipped:
+                operation = "list_dir"
                 for entry in fs.list(path, stat="files"):
                     if _is_upload_staging(entry):
                         continue
@@ -183,7 +185,11 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
                         if suffix:
                             extensions.add(suffix.lower())
         except (OSError, spdm_storage.SpdmStorageError) as error:
-            issues.append({"relative_path": rel, "code": "PATH_UNAVAILABLE", "message": str(error)[:200]})
+            issue = {"relative_path": rel, "code": "PATH_UNAVAILABLE", "message": str(error)[:200]}
+            if isinstance(error, spdm_storage.SpdmStorageError):
+                # Which storage call failed and its code (SCX drive: the adapter operation, e.g. list_dir).
+                issue.update(operation=operation, error_code=str(error.code))
+            issues.append(issue)
         node = {"relative_path": rel, "parent_path": parent, "name": fs.path(path).name, "depth": depth,
                 "file_count": count, "extensions": sorted(extensions), "identity": identity}
         if skipped:

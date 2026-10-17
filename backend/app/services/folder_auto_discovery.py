@@ -53,6 +53,12 @@ Scope and safety:
 * A folder whose registration failed in a retryable way is retried with a
   per-folder backoff (``RETRY_BACKOFF_SECONDS``); ``force`` does not bypass it.
 * Files are never moved, written or deleted. No client input reaches a path.
+* SCX drive (issue #51, 2026-10-17): a run is one drive read session of ``DISCOVERY_READ_ROUNDS``
+  rounds. Request folder listings are fetched in one round and a new request's tree in one round
+  before its scan (``drive_reads.require_listings`` / ``require_subtree``); a pass repeated after a
+  registration keeps that registration in the result (``carry``). A folder that cannot be read or
+  raises becomes a needs-review item (``DRIVE_READ_LIMIT``, ``DRIVE_READ_FAILED``,
+  ``DISCOVERY_FAILED``, ``FOLDER_NAME_INVALID``); the call never fails with 500.
 * The administrator's full rescan (``storage_rescan``, [저장 폴더 새로고침]) calls
   :func:`discover` with ``fresh`` (no memo), ``wait_seconds`` (waits for a
   background run instead of returning ``RUNNING``) and a longer
@@ -93,6 +99,9 @@ MAX_LISTED_ENTRIES = 20000
 MAX_NEW_REQUESTS_PER_RUN = 5
 RUN_TIME_BUDGET_SECONDS = 45.0
 RETRY_BACKOFF_SECONDS = (120.0, 300.0, 600.0)
+# SCX drive read rounds of one run (issue #51): upper levels + per new request one round for its folder
+# tree (``drive_reads.require_subtree``) and one for its capture files (``require_content``), with slack.
+DISCOVERY_READ_ROUNDS = drive_reads.MAX_ROUNDS + 3 * MAX_NEW_REQUESTS_PER_RUN
 ACTIVE_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
 
 # WR number of a request folder name (§8): the ASCII letters/digits right after ``WR-``/``WR_``
@@ -142,6 +151,11 @@ def _utc_now() -> datetime:
 
 def _path_key(request_path: str) -> str:
     return "/".join(part.casefold() for part in str(request_path).split("/") if part)
+
+
+def _node_key(relative_path: str) -> str:
+    """Comparison key of a scanned folder path: NFC + casefold per segment (one form for every source)."""
+    return "/".join(unicodedata.normalize("NFC", part).casefold() for part in str(relative_path).split("/") if part)
 
 
 def _reservation(conn, root_key: str, path_key: str) -> dict[str, Any] | None:
@@ -292,16 +306,38 @@ class _Lister:
                     self.issues.append({"relative_path": child, "code": "PATH_UNAVAILABLE"})
                     continue
                 found.append((entry.name, child))
-        except (OSError, ValueError, spdm_storage.SpdmStorageError):
-            self.issues.append({"relative_path": relative, "code": "PATH_UNAVAILABLE"})
+        except (OSError, ValueError, spdm_storage.SpdmStorageError) as error:
+            # A drive read miss (DriveReadMiss, a BaseException) passes through: the read session
+            # lists the folder without a DB connection and runs the discovery again.
+            self.issues.append(_listing_issue(relative, error))
         return sorted(found, key=lambda item: item[1].casefold())
 
     def mtime(self, relative: str) -> int | None:
+        """Modification time for the needs-review memo stamp; None when it cannot be read.
+
+        Never raises a storage error (issue #51: a drive read after the session's last round raised
+        ``DRIVE_READ_NOT_PREPARED`` here and the screens' discovery call answered 500).
+        """
         try:
             info = self.fs.stat("/".join(relative.split("/")), follow_links=True, missing_ok=False)
-        except OSError:
+        except (OSError, ValueError, spdm_storage.SpdmStorageError):
             return None
-        return info.modified_ns
+        return info.modified_ns if info is not None else None
+
+
+def _error_code(error: BaseException) -> str:
+    return str(getattr(error, "code", None) or type(error).__name__)
+
+
+def _listing_issue(relative: str, error: BaseException) -> dict[str, str]:
+    """Lister issue of a folder that could not be listed: the drive's code and operation when known."""
+    code = _error_code(error)
+    if code == drive_reads.NOT_PREPARED:
+        return {"relative_path": relative, "code": "DRIVE_READ_LIMIT"}
+    issue = {"relative_path": relative, "code": "PATH_UNAVAILABLE"}
+    if drive_reads.active() and isinstance(error, spdm_storage.SpdmStorageError):
+        issue.update(code="DRIVE_LIST_FAILED", error_code=code, message=str(error)[:160])
+    return issue
 
 
 def _linked_state(conn, root_key: str) -> dict[str, Any]:
@@ -485,21 +521,35 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
     request_name = request_path.rsplit("/", 1)[-1]
     if time.monotonic() > deadline:
         return {"deferred": True}
+    # SCX drive (issue #51): list the scanned tree (project folder without the sibling request folders)
+    # in one read round before the scan; level-by-level misses used up the session's rounds on deep
+    # trees and every unread folder became PATH_UNAVAILABLE. In the last round the folder waits.
+    if not drive_reads.require_subtree(project_path, siblings):
+        return {"deferred": True, "code": "DRIVE_READ_LIMIT"}
     try:
         scanned = environment_service.save_scan(
             conn, root, project_path, environment, None, None, None, SYSTEM.user_id, skip_paths=siblings,
         )
     except (ValueError, spdm_storage.SpdmStorageError) as exc:
+        if _error_code(exc) == drive_reads.NOT_PREPARED:
+            return {"deferred": True, "code": "DRIVE_READ_LIMIT"}
         return {"review": _review(request_path, "SCAN_FAILED", f"폴더를 조사할 수 없습니다: {str(exc)[:120]}", environment)}
     if scanned["status"] != "COMPLETE":
-        return {"review": _review(request_path, "SCAN_INCOMPLETE", "조사 한도 초과 또는 접근할 수 없는 폴더가 있습니다.", environment)}
+        if drive_reads.final_round() and any(item.get("error_code") == drive_reads.NOT_PREPARED
+                                             for item in scanned["issues"]):
+            return {"deferred": True, "code": "DRIVE_READ_LIMIT"}
+        return {"review": _scan_issue_review(request_path, scanned["issues"], environment)}
     if time.monotonic() > deadline:
         return {"deferred": True}
-    by_path = {node["relative_path"].casefold(): node for node in scanned["nodes"]}
-    project_node = by_path.get(project_path.casefold())
-    request_node = by_path.get(request_path.casefold())
+    by_path = {_node_key(node["relative_path"]): node for node in scanned["nodes"]}
+    project_node = by_path.get(_node_key(project_path))
+    request_node = by_path.get(_node_key(request_path))
     if not project_node or not request_node:
-        return {"review": _review(request_path, "SCAN_FAILED", "프로젝트 또는 의뢰 폴더를 찾을 수 없습니다.", environment)}
+        missing = "프로젝트" if not project_node else "의뢰"
+        return {"review": _review(request_path, "SCAN_FAILED",
+                                  f"조사 결과에 {missing} 폴더가 없습니다(폴더 {len(scanned['nodes'])}개 조사). "
+                                  "폴더 이름이 조사 중에 바뀌었거나 드라이브가 다른 이름으로 돌려준 경우입니다.",
+                                  environment)}
     if project_node.get("role_kind") != "PROJECT" or request_node.get("role_kind") != "REQUEST":
         return {"review": _review(request_path, "ROLES_UNRESOLVED",
                                   "깊이 스키마로 프로젝트·의뢰 역할을 정할 수 없습니다. 깊이 스키마의 상위 구조를 확인하세요.",
@@ -571,7 +621,33 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
 _ISSUE_REASONS = {
     "LIST_LIMIT": "폴더 항목 수가 많아 일부 폴더를 확인하지 못했습니다.",
     "PATH_UNAVAILABLE": "폴더에 접근할 수 없습니다.",
+    "DRIVE_READ_LIMIT": "드라이브 조회 횟수 한도로 이번 확인에서 이 폴더를 읽지 못했습니다. 다음 확인에서 다시 읽습니다.",
 }
+
+
+def _issue_reason(issue: dict[str, str]) -> str:
+    if issue.get("code") == "DRIVE_LIST_FAILED":
+        return (f"드라이브 어댑터가 이 폴더의 목록 조회(list_dir)에 실패했습니다({issue.get('error_code')}): "
+                f"{issue.get('message') or ''} 대시보드에서는 고칠 수 없는 드라이브·어댑터 오류일 수 있습니다.")
+    return _ISSUE_REASONS.get(issue["code"], "")
+
+
+def _scan_issue_review(request_path: str, issues: list[dict[str, Any]], environment: str) -> dict[str, Any]:
+    """Needs-review item of an INCOMPLETE scan: the first issue's folder, code and drive operation."""
+    first = next((item for item in issues if item.get("code") == "PATH_UNAVAILABLE"), issues[0] if issues else {})
+    where = str(first.get("relative_path") or request_path)
+    operation = first.get("operation")
+    if operation and drive_reads.active():
+        error_code = str(first.get("error_code") or "-")
+        reason = (f"드라이브 어댑터가 '{where}' 의 {operation} 호출에 실패했습니다({error_code}): "
+                  f"{str(first.get('message') or '')[:120]} 대시보드에서는 고칠 수 없는 드라이브·어댑터 오류일 수 있습니다.")
+        return {**_review(request_path, "DRIVE_READ_FAILED", reason, environment),
+                "drive_operation": operation, "drive_error_code": error_code, "issue_path": where,
+                "issue_count": len(issues)}
+    reason = (f"조사 한도 초과 또는 접근할 수 없는 폴더가 있습니다({len(issues)}개, 첫 항목 "
+              f"{first.get('code') or '-'}: {where}).")
+    return {**_review(request_path, "SCAN_INCOMPLETE", reason, environment), "issue_path": where,
+            "issue_count": len(issues)}
 
 
 def _under(path: str, project_paths: list[str]) -> bool:
@@ -846,13 +922,17 @@ def _project_name(conn, project_id: str) -> str:
     return str(row[0]) if row and row[0] is not None else ""
 
 
-def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]:
+def _discover(conn, root, budget_seconds: float | None = None, carry: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One discovery pass. ``carry`` (one per :func:`discover` run) keeps what earlier read rounds of the
+    same run already registered (SCX drive: a read miss repeats this pass after a registration committed,
+    issue #51) and the run's deadline, so the per-run limits hold; reviews are found again by each pass."""
+    carry = {} if carry is None else carry
     root_key = root_identity(root)
     lister = _Lister(root)
-    created_projects: list[dict[str, str]] = []
-    created_requests: list[dict[str, str]] = []
-    renamed_requests: list[dict[str, Any]] = []
-    renamed_projects: list[dict[str, Any]] = []
+    created_projects: list[dict[str, str]] = carry.setdefault("created_projects", [])
+    created_requests: list[dict[str, str]] = carry.setdefault("created_requests", [])
+    renamed_requests: list[dict[str, Any]] = carry.setdefault("renamed_requests", [])
+    renamed_projects: list[dict[str, Any]] = carry.setdefault("renamed_projects", [])
     needs_review: list[dict[str, Any]] = []
     try:
         schema = depth_profiles.get_depth_schema(conn)
@@ -865,165 +945,208 @@ def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]
                 "attempted": 0, "deferred": []}
     schema_set_id = str(schema["schema_set_id"])
     linked = _linked_state(conn, root_key)
-    deadline = time.monotonic() + (RUN_TIME_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds))
-    attempts = 0
-    stopped = False
+    deadline = carry.setdefault("deadline", time.monotonic() + (
+        RUN_TIME_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)))
     # Request folders left for a later run because the time budget ran out (reported by the rescan).
     deferred: list[str] = []
-    live_folders: dict[str, dict[str, Any]] | None = None  # read once, only when a rename is possible
     listings: dict[str, set[str] | None] = {}
     projects = _project_candidates(lister, linked, schema, needs_review, listings)
     paths_of = _project_paths_by_id(linked)
     request_lists: dict[str, list[tuple[str, str]]] = {}
     project_renames = _project_renames(conn, lister, root_key, linked, schema, projects, paths_of, listings,
                                        request_lists, needs_review)
+    # SCX drive (issue #51): list every unlinked request folder of every project in ONE read round (the
+    # needs-review stamp reads ``<request>/Working``); one stat miss per folder used up the rounds.
+    for _name, project_path in projects:
+        if project_path.casefold() not in request_lists:
+            request_lists[project_path.casefold()] = _request_candidates(lister, schema, project_path)
+    drive_reads.require_listings([path for items in request_lists.values() for _name, path in items
+                                  if path.casefold() not in linked["requests"]])
+    # Registrations of earlier rounds of this run count against MAX_NEW_REQUESTS_PER_RUN.
+    state = {"attempts": len(created_requests) + len(renamed_requests), "stopped": False}
     for project_name, project_path in projects:
-        if stopped:
+        if state["stopped"]:
             break
-        project_rename = project_renames.get(project_path.casefold())
-        if project_rename and project_rename.get("skip"):
-            continue
-        project_targets = set(linked["projects"].get(project_path.casefold(), set()))
-        if project_rename:
-            project_targets = {project_rename["project_id"]}  # keep the project; link the new folder to it
-        if len(project_targets) > 1:
-            needs_review.append(_review(project_path, "PROJECT_AMBIGUOUS", "프로젝트 폴더가 여러 프로젝트에 연결되어 있습니다."))
-            continue
-        candidates = request_lists.get(project_path.casefold())
-        if candidates is None:
-            candidates = _request_candidates(lister, schema, project_path)
-        unlinked = [(name, path) for name, path in candidates if path.casefold() not in linked["requests"]]
-        if not unlinked:
-            continue
-        pending = {path.casefold(): link for _, path in unlinked if (link := pending_link(conn, root_key, path))}
-        if not project_targets and pending:
-            project_targets = {next(iter(pending.values()))["project_id"]}
-        if not project_targets and project_name.strip().casefold() in linked["unlinked_project_names"]:
-            needs_review.append(_review(project_path, "PROJECT_NAME_EXISTS",
-                                        "같은 이름의 프로젝트가 이미 있습니다. 폴더 조사에서 기존 프로젝트에 연결하세요."))
-            continue
-        # Request folders of a renamed project folder were linked below its (absent) old folder.
-        project_paths = [project_path, *_old_project_paths(lister, paths_of, project_path, project_targets, listings)]
-        known = _project_requests(linked, project_paths)
-        all_paths = [path for _, path in candidates]
-        # Unlinked folders per (WR number, environment): a rename is followed only when exactly one exists.
-        same_identity: dict[tuple[str, str | None], list[str]] = {}
-        for other_name, other_path in unlinked:
-            other_key, other_environment, other_code = request_identity(other_name)
-            if (not other_code and wr_number(other_name) and not _is_excluded(other_path, linked["excluded"])
-                    and _live_key(root_key, other_path, schema_set_id, linked["deleted_keys"]) not in linked["keys"]):
-                same_identity.setdefault((other_key, other_environment), []).append(other_path)
-        for name, request_path in unlinked:
-            folded = request_path.casefold()
-            if _is_excluded(request_path, linked["excluded"]):
-                needs_review.append(_review(request_path, "ADMIN_EXCLUDED",
-                                            "관리자가 제외한 폴더입니다. 필요하면 폴더 조사에서 다시 연결하세요."))
-                continue
-            wr_key, environment, keyword_code = request_identity(name)
-            if keyword_code:
-                needs_review.append(_review(request_path, keyword_code, depth_profiles.DEVIATION_MESSAGES[keyword_code]))
-                continue
-            key = _live_key(root_key, request_path, schema_set_id, linked["deleted_keys"])
-            if key in linked["keys"]:
-                continue
-            identity = (wr_key, environment)
-            rename: dict[str, Any] | None = None
-            if identity in known:
-                if wr_number(name) and folded not in pending:
-                    if live_folders is None:
-                        live_folders = _live_request_folders(conn, root_key)
-                    rename = _rename_source(conn, lister, root_key, linked, live_folders, listings, project_paths,
-                                            project_targets, identity, request_path, same_identity.get(identity, []))
-                if rename is None or "review" in rename:
-                    needs_review.append(rename["review"] if rename else _review(
-                        request_path, "WR_ALREADY_LINKED", "같은 의뢰번호·환경의 다른 폴더가 이미 연결되어 있습니다.",
-                        environment))
-                    continue
-            memo_key = (root_key, folded, environment)
-            now = time.monotonic()
-            with _state_lock:
-                waiting = _retry_memo.get(memo_key)
-                remembered = _review_memo.get(memo_key)
-            if waiting and now < waiting["until"]:
-                needs_review.append(waiting["review"])
-                continue
-            stamp = (schema_set_id, lister.mtime(request_path), lister.mtime(request_path + "/Working"))
-            if remembered and remembered["stamp"] == stamp and now - remembered["at"] < NEEDS_REVIEW_RETRY_SECONDS:
-                needs_review.append(remembered["review"])
-                continue
-            if attempts >= MAX_NEW_REQUESTS_PER_RUN or now > deadline:
-                if now > deadline:
-                    deferred.append(request_path)
-                stopped = True
-                break
-            attempts += 1
-            siblings = [path for path in all_paths if path.casefold() != folded]
-            link = pending.get(folded)
-            request_target = (link["request_id"] if link and link["environment"] == environment
-                              and link["project_id"] in project_targets else None)
-            if rename:
-                request_target = rename["request_id"]
-            outcome = _register_request(conn, root, root_key, project_name, project_path, siblings,
-                                        request_path, environment, project_targets, key, deadline,
-                                        request_target=request_target,
-                                        supersedes=rename["registration_ids"] if rename else ())
-            if outcome.get("deferred"):
-                deferred.append(request_path)
-                stopped = True
-                break
-            if outcome.get("skipped"):
-                linked["requests"].add(folded)
-                known.add(identity)
-                continue
-            if "review" in outcome:
-                needs_review.append(outcome["review"])
-                with _state_lock:
-                    if outcome.get("retry"):
-                        failures = int((waiting or {}).get("failures", 0))
-                        delay = RETRY_BACKOFF_SECONDS[min(failures, len(RETRY_BACKOFF_SECONDS) - 1)]
-                        _retry_memo[memo_key] = {"until": time.monotonic() + delay, "failures": failures + 1,
-                                                 "review": outcome["review"]}
-                    else:
-                        _review_memo[memo_key] = {"stamp": stamp, "at": time.monotonic(), "review": outcome["review"]}
-                continue
-            with _state_lock:
-                _review_memo.pop(memo_key, None)
-                _retry_memo.pop(memo_key, None)
-            registered = outcome["registration"]
-            project_id, request_id = str(registered["project_id"]), str(registered["request_id"])
-            if link and request_target:
-                drop_link(conn, root_key, request_path)
-            if outcome["project_created"]:
-                created_projects.append({"id": project_id, "name": project_name})
-            if project_rename and not project_rename.get("reported"):
-                # The first registration linked the new project folder (its PROJECT registry row makes
-                # later runs see it as linked). The project's display name is left unchanged.
-                project_rename["reported"] = True
-                moved = {"id": project_id, "name": _project_name(conn, project_id),
-                         "old_path": project_rename["old_paths"][0], "new_path": project_path}
-                renamed_projects.append(moved)
-                _audit_rename(conn, {**moved, "old_paths": project_rename["old_paths"]}, None,
-                              action="FOLDER_PROJECT_FOLDER_RENAMED")
-            project_targets = {project_id}
-            linked["projects"][project_path.casefold()] = {project_id}
-            linked["requests"].add(folded)
-            linked["keys"].add(key)
-            known.add(identity)
-            if rename:
-                item = {"id": request_id, "name": outcome["request_name"], "environment": environment,
-                        "project_id": project_id, "old_path": rename["old_path"], "new_path": request_path}
-                renamed_requests.append(item)
-                _audit_rename(conn, item, rename["registration_ids"])
-                continue
-            created_requests.append({"id": request_id, "name": outcome["request_name"],
-                                     "environment": environment, "project_id": project_id,
-                                     "linked": bool(request_target)})
+        try:
+            _discover_project(conn, root, root_key, lister, linked, schema_set_id, schema, project_name, project_path,
+                              project_renames, request_lists, paths_of, listings, deadline, state, deferred,
+                              created_projects, created_requests, renamed_requests, renamed_projects, needs_review)
+        except Exception as exc:  # noqa: BLE001 - one bad folder must never fail the whole run (no 500)
+            _logger.warning("Automatic discovery of one project folder failed path_hash=%s error=%s",
+                            hashlib.sha256(project_path.encode("utf-8")).hexdigest()[:12], _error_code(exc),
+                            exc_info=True)
+            needs_review.append({**_review(project_path, "DISCOVERY_FAILED",
+                                           f"이 프로젝트 폴더를 확인하지 못했습니다({_error_code(exc)}): {str(exc)[:120]} "
+                                           "다음 확인에서 다시 시도합니다."), "error_code": _error_code(exc)})
+    attempts, stopped = state["attempts"], state["stopped"]
     for issue in lister.issues:
-        needs_review.append(_review(issue["relative_path"], issue["code"], _ISSUE_REASONS.get(issue["code"], "")))
-    return {"created_projects": created_projects, "created_requests": created_requests,
-            "renamed_requests": renamed_requests, "renamed_projects": renamed_projects,
+        item = _review(issue["relative_path"], issue["code"], _issue_reason(issue))
+        if issue.get("error_code"):
+            item.update(drive_operation="list_dir", drive_error_code=issue["error_code"])
+        needs_review.append(item)
+    return {"created_projects": list(created_projects), "created_requests": list(created_requests),
+            "renamed_requests": list(renamed_requests), "renamed_projects": list(renamed_projects),
             "needs_review": needs_review, "checked_at": _now_iso(), "coalesced": False,
             "partial": stopped, "attempted": attempts, "deferred": deferred}
+
+
+_NAME_INVALID = ("폴더 이름이 Windows 파일 규칙에 맞지 않아(끝의 공백·마침표, 금지 문자 <>:\"\\|?* 또는 예약 이름) "
+                 "등록할 수 없습니다. 드라이브에서 폴더 이름을 고치면 다음 확인에서 등록됩니다.")
+
+
+def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[str, Any], schema_set_id: str,
+                      schema: dict[str, Any], project_name: str, project_path: str,
+                      project_renames: dict[str, dict[str, Any]], request_lists: dict[str, list[tuple[str, str]]],
+                      paths_of: dict[str, list[str]], listings: dict[str, set[str] | None], deadline: float,
+                      state: dict[str, Any], deferred: list[str], created_projects: list[dict[str, str]],
+                      created_requests: list[dict[str, str]], renamed_requests: list[dict[str, Any]],
+                      renamed_projects: list[dict[str, Any]], needs_review: list[dict[str, Any]]) -> None:
+    """One project folder of :func:`_discover` (its unlinked request folders, in name order)."""
+    live_folders: dict[str, dict[str, Any]] | None = None  # read once, only when a rename is possible
+    if not spdm_storage._valid_windows_name(project_name):
+        needs_review.append(_review(project_path, "FOLDER_NAME_INVALID", _NAME_INVALID))
+        return
+    project_rename = project_renames.get(project_path.casefold())
+    if project_rename and project_rename.get("skip"):
+        return
+    project_targets = set(linked["projects"].get(project_path.casefold(), set()))
+    if project_rename:
+        project_targets = {project_rename["project_id"]}  # keep the project; link the new folder to it
+    if len(project_targets) > 1:
+        needs_review.append(_review(project_path, "PROJECT_AMBIGUOUS", "프로젝트 폴더가 여러 프로젝트에 연결되어 있습니다."))
+        return
+    candidates = request_lists.get(project_path.casefold())
+    if candidates is None:
+        candidates = _request_candidates(lister, schema, project_path)
+    unlinked = [(name, path) for name, path in candidates if path.casefold() not in linked["requests"]]
+    if not unlinked:
+        return
+    pending = {path.casefold(): link for _, path in unlinked if (link := pending_link(conn, root_key, path))}
+    if not project_targets and pending:
+        project_targets = {next(iter(pending.values()))["project_id"]}
+    if not project_targets and project_name.strip().casefold() in linked["unlinked_project_names"]:
+        needs_review.append(_review(project_path, "PROJECT_NAME_EXISTS",
+                                    "같은 이름의 프로젝트가 이미 있습니다. 폴더 조사에서 기존 프로젝트에 연결하세요."))
+        return
+    # Request folders of a renamed project folder were linked below its (absent) old folder.
+    project_paths = [project_path, *_old_project_paths(lister, paths_of, project_path, project_targets, listings)]
+    known = _project_requests(linked, project_paths)
+    all_paths = [path for _, path in candidates]
+    # Unlinked folders per (WR number, environment): a rename is followed only when exactly one exists.
+    same_identity: dict[tuple[str, str | None], list[str]] = {}
+    for other_name, other_path in unlinked:
+        other_key, other_environment, other_code = request_identity(other_name)
+        if (not other_code and wr_number(other_name) and not _is_excluded(other_path, linked["excluded"])
+                and _live_key(root_key, other_path, schema_set_id, linked["deleted_keys"]) not in linked["keys"]):
+            same_identity.setdefault((other_key, other_environment), []).append(other_path)
+    for name, request_path in unlinked:
+        folded = request_path.casefold()
+        if _is_excluded(request_path, linked["excluded"]):
+            needs_review.append(_review(request_path, "ADMIN_EXCLUDED",
+                                        "관리자가 제외한 폴더입니다. 필요하면 폴더 조사에서 다시 연결하세요."))
+            continue
+        if not spdm_storage._valid_windows_name(name):
+            needs_review.append(_review(request_path, "FOLDER_NAME_INVALID", _NAME_INVALID))
+            continue
+        wr_key, environment, keyword_code = request_identity(name)
+        if keyword_code:
+            needs_review.append(_review(request_path, keyword_code, depth_profiles.DEVIATION_MESSAGES[keyword_code]))
+            continue
+        key = _live_key(root_key, request_path, schema_set_id, linked["deleted_keys"])
+        if key in linked["keys"]:
+            continue
+        identity = (wr_key, environment)
+        rename: dict[str, Any] | None = None
+        if identity in known:
+            if wr_number(name) and folded not in pending:
+                if live_folders is None:
+                    live_folders = _live_request_folders(conn, root_key)
+                rename = _rename_source(conn, lister, root_key, linked, live_folders, listings, project_paths,
+                                        project_targets, identity, request_path, same_identity.get(identity, []))
+            if rename is None or "review" in rename:
+                needs_review.append(rename["review"] if rename else _review(
+                    request_path, "WR_ALREADY_LINKED", "같은 의뢰번호·환경의 다른 폴더가 이미 연결되어 있습니다.",
+                    environment))
+                continue
+        memo_key = (root_key, folded, environment)
+        now = time.monotonic()
+        with _state_lock:
+            waiting = _retry_memo.get(memo_key)
+            remembered = _review_memo.get(memo_key)
+        if waiting and now < waiting["until"]:
+            needs_review.append(waiting["review"])
+            continue
+        stamp = (schema_set_id, lister.mtime(request_path), lister.mtime(request_path + "/Working"))
+        if remembered and remembered["stamp"] == stamp and now - remembered["at"] < NEEDS_REVIEW_RETRY_SECONDS:
+            needs_review.append(remembered["review"])
+            continue
+        if state["attempts"] >= MAX_NEW_REQUESTS_PER_RUN or now > deadline:
+            if now > deadline:
+                deferred.append(request_path)
+            state["stopped"] = True
+            break
+        state["attempts"] += 1
+        siblings = [path for path in all_paths if path.casefold() != folded]
+        link = pending.get(folded)
+        request_target = (link["request_id"] if link and link["environment"] == environment
+                          and link["project_id"] in project_targets else None)
+        if rename:
+            request_target = rename["request_id"]
+        outcome = _register_request(conn, root, root_key, project_name, project_path, siblings,
+                                    request_path, environment, project_targets, key, deadline,
+                                    request_target=request_target,
+                                    supersedes=rename["registration_ids"] if rename else ())
+        if outcome.get("deferred"):
+            deferred.append(request_path)
+            state["stopped"] = True
+            break
+        if outcome.get("skipped"):
+            linked["requests"].add(folded)
+            known.add(identity)
+            continue
+        if "review" in outcome:
+            needs_review.append(outcome["review"])
+            with _state_lock:
+                if outcome.get("retry"):
+                    failures = int((waiting or {}).get("failures", 0))
+                    delay = RETRY_BACKOFF_SECONDS[min(failures, len(RETRY_BACKOFF_SECONDS) - 1)]
+                    _retry_memo[memo_key] = {"until": time.monotonic() + delay, "failures": failures + 1,
+                                             "review": outcome["review"]}
+                else:
+                    _review_memo[memo_key] = {"stamp": stamp, "at": time.monotonic(), "review": outcome["review"]}
+            continue
+        with _state_lock:
+            _review_memo.pop(memo_key, None)
+            _retry_memo.pop(memo_key, None)
+        registered = outcome["registration"]
+        project_id, request_id = str(registered["project_id"]), str(registered["request_id"])
+        if link and request_target:
+            drop_link(conn, root_key, request_path)
+        if outcome["project_created"]:
+            created_projects.append({"id": project_id, "name": project_name})
+        if project_rename and not project_rename.get("reported"):
+            # The first registration linked the new project folder (its PROJECT registry row makes
+            # later runs see it as linked). The project's display name is left unchanged.
+            project_rename["reported"] = True
+            moved = {"id": project_id, "name": _project_name(conn, project_id),
+                     "old_path": project_rename["old_paths"][0], "new_path": project_path}
+            renamed_projects.append(moved)
+            _audit_rename(conn, {**moved, "old_paths": project_rename["old_paths"]}, None,
+                          action="FOLDER_PROJECT_FOLDER_RENAMED")
+        project_targets = {project_id}
+        linked["projects"][project_path.casefold()] = {project_id}
+        linked["requests"].add(folded)
+        linked["keys"].add(key)
+        known.add(identity)
+        if rename:
+            item = {"id": request_id, "name": outcome["request_name"], "environment": environment,
+                    "project_id": project_id, "old_path": rename["old_path"], "new_path": request_path}
+            renamed_requests.append(item)
+            _audit_rename(conn, item, rename["registration_ids"])
+            continue
+        created_requests.append({"id": request_id, "name": outcome["request_name"],
+                                 "environment": environment, "project_id": project_id,
+                                 "linked": bool(request_target)})
 
 
 def enabled() -> bool:
@@ -1076,6 +1199,8 @@ def discover(*, force: bool = False, connection_factory=None, fresh: bool = Fals
         cached = remembered()
         if cached:
             return cached
+        carry: dict[str, Any] = {}
+
         def run_once() -> dict[str, Any]:
             with (connection_factory or connect)() as conn:
                 try:
@@ -1086,11 +1211,21 @@ def discover(*, force: bool = False, connection_factory=None, fresh: bool = Fals
                     return {**_empty("ROOT_UNSET"), "coalesced": False,
                             "needs_review": [_review("", "SPDM_ROOT_UNSET", str(
                                 detail.get("message") or "SPDM 저장소 루트가 설정되지 않아 자동 탐색을 하지 않았습니다."))]}
-                return {**_discover(conn, root, budget_seconds), "status": "CHECKED"}
+                try:
+                    return {**_discover(conn, root, budget_seconds, carry), "status": "CHECKED"}
+                except Exception as exc:  # noqa: BLE001 - never a 500 for the screens (DriveReadMiss passes)
+                    _logger.warning("Automatic discovery failed error=%s", _error_code(exc), exc_info=True)
+                    return {**_empty("FAILED"), "coalesced": False,
+                            "needs_review": [{**_review("", "DISCOVERY_FAILED",
+                                                        f"폴더 자동 확인 중 오류가 났습니다({_error_code(exc)}). "
+                                                        "다음 확인에서 다시 시도합니다."),
+                                              "error_code": _error_code(exc)}]}
 
         # SCX drive (D2): listings and capture files are fetched between rounds without a DB
         # connection; a round repeats only reads and idempotent steps (local mode: one plain call).
-        result = drive_reads.run(run_once, priority="BACKGROUND")
+        # Issue #51: a run needs about one round per new request for its tree and one for its capture
+        # files, plus a few for the upper levels (DISCOVERY_READ_ROUNDS).
+        result = drive_reads.run(run_once, priority="BACKGROUND", rounds=DISCOVERY_READ_ROUNDS)
         if result.get("status") != "CHECKED":
             return result
         with _state_lock:

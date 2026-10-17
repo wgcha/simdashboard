@@ -2,6 +2,13 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-17 — SCX 자동 탐색·전체 새로고침: 읽기 회차 소진(500·PATH_UNAVAILABLE), 공백·NFD 이름
+
+- 실서버 원인(이슈 #51 로그): 자동 탐색은 읽기 세션 하나(8회차)에서 돌며, 의뢰 조사(`save_scan(프로젝트 폴더)`)가 트리를 미스마다 4단계씩 받아 회차를 다 썼다. 마지막 회차에서 `_Lister.mtime` → `raw_entry` → `DRIVE_READ_NOT_PREPARED`가 잡히지 않아 `/discover` 500, 조사는 못 읽은 `FINAL/CAD`·`Working/...`를 `PATH_UNAVAILABLE`로 남겨 `SCAN_INCOMPLETE`. 공백 유무와 무관했다. 또 다시 실행된 회차는 앞 회차 등록을 결과에서 빠뜨리고 실행 한도·시간을 새로 셌다.
+- 수정: `drive/reads.require_subtree`(프로젝트 트리, 형제 의뢰 제외, 한 회차·드라이브 조사 한도)·`require_listings`(모든 미연결 의뢰 폴더 목록 한 회차), 탐색 회차 `DISCOVERY_READ_ROUNDS`=23, 실행 단위 `carry`(등록 결과·마감·한도). `mtime`·목록 오류는 needs_review로, 프로젝트 하나·실행 전체 예외는 `DISCOVERY_FAILED`(500 없음). 마지막 회차 부족분은 `deferred`/`DRIVE_READ_LIMIT`. 조사 문제는 `issue_path`·`DRIVE_READ_FAILED`(호출 이름·코드, 어댑터 문제 안내)로 보고(`folder_discovery_scan.scan` 문제에 `operation`·`error_code` 추가).
+- 이름: 드라이브 목록 이름을 NFC로 바꾸고 드라이브 철자를 기억해 드라이브 호출에 쓴다. 환경 키워드 비교 NFC(NFD 이름이 `ENV_KEYWORD_NONE`이던 문제). 끝 공백 등 Windows 규칙 위반 이름은 `FOLDER_NAME_INVALID`.
+- 검증: 신규 `tests/test_drive_discovery_tree.py` 7건(가짜 드라이브 깊은 트리·공백/이중 공백/괄호 이름 3의뢰, 회차 1로 500 없음, 한도 넘는 백로그 전체 새로고침+동기화, 어댑터 list_dir 실패, 끝 공백, NFD 등록·재탐색·sync, 로컬 루트 rescan+sync) 통과, 기존 test_folder_auto_discovery·test_drive_reads 71건 통과. 실서버·실제 어댑터 미검증.
+
 ## 2026-10-17 — 순번 없는 Scene은 이름 앞글자로 표시, W6 숫자 없음 기준
 
 - 사용자 결정(2026-10-17): 이름에 숫자가 없는 Scene은 `순번 미확인` 대신 이름 첫 토큰(`_`·`-`·공백·`.`로 나눔, 빈 토큰 건너뜀)을 4글자까지 자른 짧은 이름으로 표시(`Face_Top_Drop` → `Face`, `Corner_Drop` → `Corn`, `가나다라마바_x` → `가나다라`). 서버 한 곳(`parser.scene_short_name`·`scene_sequence_label`)에서 계산하고, `dashboard_queries.scene_label_text`가 조회 시 distribution scenes·series, scene detail, run videos에 `scene_sequence_label`(순번 숫자 문자열 또는 짧은 이름)을 붙인다. 정렬은 기존 `scene_sort_key`(순번 숫자순 → 순번 없는 Scene 이름순) 그대로.

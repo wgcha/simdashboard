@@ -128,7 +128,7 @@ def _discover_all() -> None:
             for path in result.get("deferred") or []:
                 reviews[(str(path).casefold(), "DISCOVERY_TIME_BUDGET")] = {
                     "relative_path": path, "code": "DISCOVERY_TIME_BUDGET", "environment": None,
-                    "reason": f"폴더 조사가 한 번의 확인 시간({int(ROUND_BUDGET_SECONDS)}초) 안에 끝나지 않았습니다. "
+                    "reason": f"폴더 조사가 한 번의 확인(시간 {int(ROUND_BUDGET_SECONDS)}초·드라이브 조회 횟수) 안에 끝나지 않았습니다. "
                               "폴더 조사 화면에서 직접 등록하세요."}
         _update(rounds=round_number, created_projects=list(created_projects),
                 created_requests=list(created_requests), needs_review=list(reviews.values()), partial=partial)

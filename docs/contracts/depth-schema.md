@@ -215,6 +215,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
   - (1)은 맞지만 (2)·(3)을 못 채우면 C(경쟁하는 후보 모두)를 `PROJECT_RENAME_AMBIGUOUS`로 보내고 그 폴더에는 아무것도 등록하지 않는다. X 또는 그 의뢰가 `spdm_storage_project_parents`·`spdm_storage_request_parents`·구 `folder_discovery_registry`로 연결되어 있으면 따라가지 않고 `PROJECT_RENAME_UNSUPPORTED`(아무것도 등록하지 않음)로 보낸다. X의 옛 폴더가 남아 있으면(복사본) 기존대로 새 프로젝트다.
   - 동작: C의 의뢰 등록에 X를 `LINK` 프로젝트로 넘긴다(프로젝트 id 유지, 새 프로젝트 없음). 맞는 의뢰 폴더는 위 이름 바뀐 의뢰 규칙(옛 폴더 탐색 범위에 X의 없어진 옛 프로젝트 폴더 포함)으로 기존 의뢰에 LINK + 옛 등록 `DELETED` 묘비(같은 트랜잭션, 데이터 행 삭제 없음, 옛 경로 Case는 기록으로 남음 — 사용자 결정). 맞는 것이 없는 의뢰 폴더는 같은 X 아래 새 의뢰로 등록한다. 첫 등록이 새 경로의 PROJECT registry 행을 만들므로 다음 실행부터 C는 연결된 폴더다(멱등). 한 실행 한도로 남은 의뢰는 다음 실행에서 같은 규칙으로 따라간다(연결된 프로젝트의 다른 연결 폴더가 확실히 없으면 그 아래 옛 의뢰도 찾는다 — 관리자가 새 폴더를 기존 프로젝트에 직접 연결한 경우도 같다).
   - 결과: `renamed_projects: [{id, name, old_path, new_path}]`(경로는 전역 관리자에게만), 감사 `FOLDER_PROJECT_FOLDER_RENAMED`(탐색이 직접 기록). 프로젝트 **표시 이름은 바꾸지 않는다**(옛 폴더 이름 그대로, 필요하면 관리자가 수정).
+- 폴더 이름(2026-10-17): 공백·이중 공백·괄호·한글(NFC/NFD 무관, 환경 키워드도 NFC로 비교)이 든 프로젝트·의뢰 폴더도 같은 규칙으로 등록한다. 끝 공백·마침표·Windows 금지 문자·예약 이름은 `FOLDER_NAME_INVALID`(등록 안 함). 한 폴더의 예외는 `DISCOVERY_FAILED` 항목이 되고 탐색 응답은 500이 되지 않는다. 조사 미완료는 첫 문제 폴더(`issue_path`)를, 드라이브 호출 실패는 `DRIVE_READ_FAILED`(호출 이름·코드)를 알린다(SCX 드라이브 회차·이름 처리는 [SCX 드라이브 §8.2](../features/scx-drive.md)).
 - `_skip_final_archive`는 제거한다. Final은 §5 규칙으로 역할만 판정하며, 결과 등록 대상에서는 계속 제외한다(D12). 의뢰 판정은 upper의 request_level 기준이다.
 
 ## 9. 결과 판독과의 관계 (변경 없음)

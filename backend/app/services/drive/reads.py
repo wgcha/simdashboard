@@ -50,6 +50,7 @@ import errno
 import functools
 import hashlib
 import inspect
+import json
 import logging
 import os
 import re
@@ -57,6 +58,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -210,6 +212,8 @@ def reset_for_tests() -> None:
         _observed.update(sha1=0, size_mtime=0, last_kind=None, last_at=None)
     with _call_log_lock:
         _call_logged.clear()
+    with _spelling_lock:
+        _spellings.clear()
 
 
 # --- session ------------------------------------------------------------------------------------
@@ -259,6 +263,7 @@ class DriveReadSession:
     overlay: dict[str, Accepted] = field(default_factory=dict)
     downloads: list[DownloadRecord] = field(default_factory=list)
     prepared_scopes: set[str] = field(default_factory=set)
+    prepared_subtrees: set[str] = field(default_factory=set)
     registered: dict[str, Accepted] = field(default_factory=dict)       # current rows of checked files (M2)
     registered_checked: set[str] = field(default_factory=set)
     staged_bytes: int = 0
@@ -530,16 +535,90 @@ def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
         raise mapped from None
 
 
+# --- names: NFC inside the dashboard, the drive's own spelling for drive calls (2026-10-17) -------
+#
+# Every dashboard path is NFC (``validate_drive_rel_path``), but a drive backed by macOS storage may
+# list Korean names decomposed (NFD).  Listing names are normalised to NFC here, at the listing
+# boundary, so session caches, registries and comparisons all see one form; the spelling the drive
+# listed is remembered per path and used for the drive calls (list_dir/stat/download_to) of that path.
+
+_SPELLINGS_MAX = 100_000
+_spellings: dict[tuple[str, str], str] = {}
+_spelling_lock = threading.Lock()
+
+
+def nfc(name: str) -> str:
+    return unicodedata.normalize("NFC", str(name))
+
+
+class _NfcEntry:
+    """A drive entry whose ``name`` is given in NFC (every other attribute is the adapter's)."""
+
+    __slots__ = ("_entry", "name")
+
+    def __init__(self, entry: Any, name: str) -> None:
+        self._entry = entry
+        self.name = name
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self._entry, attr)
+
+
+def _canonical_entry(entry: Any) -> Any:
+    name = getattr(entry, "name", None)
+    if name is None:
+        return entry
+    normal = nfc(name)
+    return entry if normal == name else _NfcEntry(entry, normal)
+
+
+def _drive_rel(spdm_root: str, rel: str) -> str:
+    """The drive's spelling of the NFC path ``rel`` (as listed), or ``rel`` itself."""
+    if not rel:
+        return rel
+    parts = rel.split("/")
+    with _spelling_lock:
+        if not _spellings:
+            return rel
+        for index in range(len(parts), 0, -1):
+            found = _spellings.get((spdm_root, "/".join(parts[:index])))
+            if found is not None:
+                return "/".join([found, *parts[index:]])
+    return rel
+
+
+def _remember_spellings(spdm_root: str, rel: str, entries: list[Any]) -> None:
+    parent = _drive_rel(spdm_root, rel)
+    learned = {}
+    for entry in entries:
+        raw = str(getattr(entry, "name", "") or "")
+        if not raw:
+            continue
+        canonical = f"{rel}/{nfc(raw)}" if rel else nfc(raw)
+        spelled = f"{parent}/{raw}" if parent else raw
+        if canonical != spelled:
+            learned[(spdm_root, canonical)] = spelled
+    if learned:
+        with _spelling_lock:
+            if len(_spellings) + len(learned) > _SPELLINGS_MAX:
+                _spellings.clear()
+            _spellings.update(learned)
+
+
 def _live_list(session: DriveReadSession | None, spdm_root: str, rel: str) -> list[Any]:
-    entries = _call(lambda gateway: gateway.list_dir(drive_path(spdm_root, rel), priority=_priority(session)),
+    entries = _call(lambda gateway: gateway.list_dir(drive_path(spdm_root, _drive_rel(spdm_root, rel)),
+                                                     priority=_priority(session)),
                     "list_dir", rel)
     entries = list(entries)
     _observe(entries)
-    return entries
+    _remember_spellings(spdm_root, rel, entries)
+    return [_canonical_entry(entry) for entry in entries]
 
 
 def _live_stat(session: DriveReadSession | None, spdm_root: str, rel: str) -> Any | None:
-    return _call(lambda gateway: gateway.stat(drive_path(spdm_root, rel), priority=_priority(session)), "stat", rel)
+    entry = _call(lambda gateway: gateway.stat(drive_path(spdm_root, _drive_rel(spdm_root, rel)),
+                                               priority=_priority(session)), "stat", rel)
+    return None if entry is None else _canonical_entry(entry)
 
 
 # --- raw (live drive) view, session cached ---------------------------------------------------
@@ -810,7 +889,7 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
             return reused
     _reserve_staging(session, int(version.size or 0))
     target = session.next_dir()
-    result = _call(lambda gateway: gateway.download_to(drive_path(spdm_root, rel), target,
+    result = _call(lambda gateway: gateway.download_to(drive_path(spdm_root, _drive_rel(spdm_root, rel)), target,
                                                        max_bytes=max_bytes, priority=_priority(session)),
                    "download_to", rel)
     local = Path(result.local_path)
@@ -916,6 +995,16 @@ def _fulfil(session: DriveReadSession, miss: DriveReadMiss) -> None:
         for scope in miss.rel.split("\n"):
             prefetch_content(session, scope)
             session.prepared_scopes.add(scope)
+    elif miss.kind == "subtree":
+        _prefetch_subtree_miss(session, miss.rel, miss.token)
+    elif miss.kind == "listings":
+        for folder in miss.rel.split("\n"):
+            if folder in session.listings or ("list", folder) in session.errors:
+                continue
+            try:
+                session.listings[folder] = _live_list(session, session.spdm_root, folder)
+            except SpdmStorageError as error:
+                session.errors[("list", folder)] = error
     else:  # pragma: no cover - programming error
         raise RuntimeError(f"unknown drive read miss {miss.kind}")
 
@@ -953,7 +1042,8 @@ def _prefetch_tree(session: DriveReadSession, rel: str) -> None:
                     queue.append((child, depth + 1))
 
 
-def prefetch_subtree(session: DriveReadSession, rel: str, *, max_listings: int, max_seconds: float) -> dict[str, Any]:
+def prefetch_subtree(session: DriveReadSession, rel: str, *, max_listings: int, max_seconds: float,
+                     skip: Any = ()) -> dict[str, Any]:
     """List every folder below ``rel`` into the session up front (no DB connection held).
 
     Issue #51: a folder scan inside a read session otherwise fetches its tree miss by miss
@@ -961,8 +1051,11 @@ def prefetch_subtree(session: DriveReadSession, rel: str, *, max_listings: int, 
     folder ran out of rounds, which the scan recorded as an unavailable folder (INCOMPLETE).
     Bounded by the drive scan limits; a folder left unlisted is still fetched by a later miss.
     A listing error is kept in the session so the scan reports it exactly as a live read would.
+    ``skip``: folders whose contents are not listed (e.g. sibling request folders of a discovery scan).
     """
     from ..storage.provider import UPLOAD_STAGING_DIR
+
+    skipped = {str(path).strip("/").casefold() for path in skip or () if str(path).strip("/")}
 
     if connection_held():
         raise RuntimeError("drive prefetch must run without an open database connection")
@@ -982,6 +1075,8 @@ def prefetch_subtree(session: DriveReadSession, rel: str, *, max_listings: int, 
             complete = False
             break
         current = stack.pop()
+        if current.casefold() in skipped:
+            continue
         if current in session.listings:
             entries = session.listings[current]
         elif ("list", current) in session.errors:
@@ -1197,6 +1292,71 @@ def require_content(scopes: Any) -> None:
     raise DriveReadMiss("scopes", "\n".join(wanted))
 
 
+def final_round() -> bool:
+    """True in the last read round of the current session (a read the session lacks now fails)."""
+    session = current_session()
+    return bool(session is not None and not session.ephemeral and session.final_round)
+
+
+def _subtree_key(rel: str, skip: Any) -> str:
+    return "\n".join([rel, *sorted({str(path).casefold() for path in skip or ()})])
+
+
+def _prefetch_subtree_miss(session: DriveReadSession, rel: str, token: str | None) -> None:
+    from ..folder_discovery_scan import drive_limits
+
+    skip = json.loads(token) if token else []
+    limits = drive_limits()
+    prefetch_subtree(session, rel, max_listings=limits.max_folders, max_seconds=limits.max_seconds, skip=skip)
+    session.prepared_subtrees.add(_subtree_key(rel, skip))
+
+
+def require_subtree(rel: str, skip: Any = ()) -> bool:
+    """List the whole folder tree below ``rel`` (except below ``skip``) into the session in one round.
+
+    For a body that scans a folder while it holds a DB connection (automatic discovery, issue #51):
+    a scan otherwise reveals the tree a few levels per read round, and a deep request folder
+    (``FINAL/CAE/<Case>/<id>/Drop/...``) used up the session's rounds.  Raises
+    :class:`DriveReadMiss` (one round, bounded by the drive scan limits) when the tree is not
+    listed yet.  Returns False only in the session's last round when the tree is not listed (the
+    caller defers the folder); True when it is listed or outside a drive read session.
+    """
+    session = current_session()
+    if session is None or session.ephemeral:
+        return True
+    skip = sorted({str(path) for path in skip or ()})
+    if _subtree_key(rel, skip) in session.prepared_subtrees:
+        return True
+    token = json.dumps(skip, ensure_ascii=False)
+    if not connection_held():
+        _prefetch_subtree_miss(session, rel, token)
+        return True
+    if session.committed:
+        return True   # the reads themselves report what is missing
+    if session.final_round:
+        return False
+    raise DriveReadMiss("subtree", rel, token)
+
+
+def require_listings(folders: Any) -> bool:
+    """List several folders (one level each) into the session in one round (see :func:`require_subtree`)."""
+    session = current_session()
+    if session is None or session.ephemeral:
+        return True
+    wanted = sorted({str(folder) for folder in folders
+                     if str(folder) not in session.listings and ("list", str(folder)) not in session.errors})
+    if not wanted:
+        return True
+    if not connection_held():
+        _fulfil(session, DriveReadMiss("listings", "\n".join(wanted)))
+        return True
+    if session.committed:
+        return True
+    if session.final_round:
+        return False
+    raise DriveReadMiss("listings", "\n".join(wanted))
+
+
 def _record_downloads(session: DriveReadSession) -> None:
     if not session.downloads:
         return
@@ -1232,6 +1392,7 @@ __all__ = [
     "SOURCE_CHANGED", "Version", "accepted", "active", "blob_store", "check_rel", "content", "current_session",
     "drive_path", "effective_version", "epoch_us", "listing", "load_overlay", "local_copy_sha256", "make_token",
     "open_stream", "overlay_below", "prefetch_content", "prefetch_values", "raw_entry", "read_bytes", "read_session", "require_content",
+    "final_round", "nfc", "require_listings", "require_subtree",
     "run",
     "token_observation",
     "version_of",
