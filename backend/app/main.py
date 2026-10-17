@@ -55,6 +55,7 @@ from .routers.managed_local_execution import router as managed_local_execution_r
 from .routers.voc import router as voc_router
 from .routers.notifications import router as notifications_router
 from .routers.drive import admin_router as drive_admin_router, status_router as drive_status_router
+from .routers.scx_relay import router as scx_relay_router
 from .routers.semantic_mapping import router as semantic_mapping_router
 from .routers.semantic_activation import router as semantic_activation_router
 from .routers.semantic_review import router as semantic_review_router
@@ -99,6 +100,10 @@ async def lifespan(_: FastAPI):
     # D0: scx drive mode refuses startup on bad settings, a missing adapter or a second process.
     from .services.drive import gateway as drive_gateway
     drive_gateway.startup()
+    # SCX relay for PhysicsAI (docs/features/scx-relay.md, default off): validates its settings and
+    # turns submissions left SUBMITTING by a stopped process into UNKNOWN.
+    from .services.drive import relay as scx_relay
+    scx_relay.startup()
     # W2: resume Final copy jobs interrupted by a restart (daemon thread, non-blocking).
     # scx mode keeps Final state in the DB and resumes through the drive upload queue instead.
     from .services.drive import reads as drive_reads
@@ -116,6 +121,7 @@ async def lifespan(_: FastAPI):
     finally:
         result_auto_sync.stop()
         drive_upload_queue.stop()
+        scx_relay.shutdown()
         drive_gateway.shutdown()
 
 
@@ -150,6 +156,7 @@ app.include_router(folder_environment_requests_router)
 app.include_router(semantic_vocabulary_router)
 app.include_router(drive_admin_router)
 app.include_router(drive_status_router)
+app.include_router(scx_relay_router)
 app.include_router(notifications_router)
 
 

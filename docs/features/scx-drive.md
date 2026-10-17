@@ -67,6 +67,13 @@
 | `SIMDASH_DRIVE_SCAN_MAX_SECONDS` | — | `180` | 드라이브 폴더 조사 시간 상한(15–3600초). 의뢰 폴더 미리 목록 읽기·조사·내용 지문에 적용. local 모드는 15초 그대로. 범위 밖·숫자 아님은 경고 로그 후 기본값 |
 | `SIMDASH_DRIVE_SCAN_MAX_ENTRIES` | — | `200000` | 드라이브 폴더 조사 전체 항목 수 상한(1000–2000000). local 50000 |
 | `SIMDASH_DRIVE_SCAN_MAX_FOLDERS` | — | `20000` | 드라이브 폴더 조사 폴더 수·미리 목록 읽기 수 상한(100–200000). local 5000 |
+| `SIMDASH_SCX_RELAY_ENABLED` | — | `false` | PhysicsAI용 SCX relay 켜기(§11, [relay 계약](scx-relay.md)). 꺼져 있으면 relay 경로는 모두 404 |
+| `SIMDASH_SCX_RELAY_SECRET_FILE` | relay | — | 공유 비밀 파일 절대 경로(한 줄 base64url 43~128자). 형식·읽기 오류면 기동 거부(값은 메시지에 없음) |
+| `SIMDASH_SCX_RELAY_DRIVE_BASE` | — | `""`(홈) | relay가 쓰고 읽는 기준 폴더(공용 계정 홈 기준 상대). SPDM 루트와 같거나 그 안이면 기동 거부 |
+| `SIMDASH_SCX_RELAY_JOB_PATH_FORM` | — | `rel` | `submit_radioss` 경로 표기 `rel`·`tilde`·`absolute`(서버 확인 E4-11-3) |
+| `SIMDASH_SCX_RELAY_HOME_ABS` | — | `/Users/vd.dashboard` | 공용 계정 홈 절대 표기(`absolute` 표기·`output_path` 변환에만) |
+| `SIMDASH_SCX_RELAY_MAX_UPLOAD_BYTES` | — | `4294967296` | relay 파일 1개 업로드 상한(1 MiB~2^40) |
+| `SIMDASH_SCX_RELAY_MAX_DOWNLOAD_BYTES` | — | `21474836480` | relay 파일 1개 다운로드 상한(1 MiB~2^40) |
 
 어댑터 `AdapterConfig.drive_root`는 항상 `~`로 넘긴다. SPDM 루트는 대시보드가 그 아래 상대 경로로 관리한다(integration 03 §5).
 
@@ -441,3 +448,13 @@ HPC SSO가 drive-desktop 클라이언트의 아이디·비밀번호 로그인을
 - 순번 파일 방식은 SPDM 협의 전 임시안(결정 D2 ①).
 - **사용자 결정 대기(D3 검수 #11):** 프로젝트 삭제(정리)는 대기열 행·Final 메타를 남기며(`project_cleanup.KEEP_COLUMNS`), **열린 대기열 항목(`PENDING`·`BLOCKED`)을 멈추지 않는다** — 삭제 뒤에도 작업자가 그 프로젝트의 남은 파일·Final을 드라이브에 올리고, Final 마무리 훅은 지워진 의뢰 기준으로 실행된다. 삭제 전에 남은 항목을 취소할지, 삭제가 항목을 `CANCELLED`로 표시할지, 그대로 둘지는 결정 후 반영한다(현재 동작 유지, 관리자는 업로드 대기열에서 해당 항목을 직접 취소할 수 있다).
 - 결과 등록 완료(`complete`)는 라우터 커밋 뒤에 세션을 등록 목록에서 뺀다. 커밋하지 못했으면(묶음 행 없음) 같은 세션으로 다시 완료할 수 있다.
+
+## 11. SCX relay (PhysicsAI, 기본 꺼짐)
+
+PhysicsAI가 대시보드의 SCX 연결(공용 계정 토큰·단일 워커)을 같이 쓰도록 대시보드가 여는 loopback 전용 내부 API다. 계약 전문(정본: `physicsai-platform/docs/contracts/scx_relay.md`)의 사본은 [scx-relay.md](scx-relay.md).
+
+- 경로 `/internal/scx-relay/v1/*`(`/api` 밖, OpenAPI에 없음, Vite·Caddy·nginx 프록시 표에 없음). 검사 순서: 꺼짐 404 `RELAY_DISABLED` → loopback(`127.0.0.1`·`::1`) 아님·프록시 헤더 있음 403 `RELAY_FORBIDDEN` → `X-SCX-Relay-Key` ≠ 비밀 파일(`hmac.compare_digest`) 401 `RELAY_UNAUTHORIZED` → scx 모드 아님 503 `DRIVE_MODE_DISABLED`.
+- 코드: `backend/app/services/drive/relay.py`(접근 제어·경로 범위·제출 기록·오류 매핑), `backend/app/routers/scx_relay.py`. 쓰기는 업로드 대기열의 새 root 종류(출처 `physicsai_relay`, `root_key = sha256("relay:<서버 호스트>:/<RELAY_DRIVE_BASE>")`, `dst_rel_dir`는 relay 기준 상대)로만 하고, 대기열이 relay 항목마다 SPDM 루트를 다시 거부한다. relay 모듈은 쓰기·삭제·이동 메서드를 부르지 않는다(정적 시험).
+- DB: migration `0044_scx_relay_submissions`(추가 전용, DuckDB는 `database.py` 같은 DDL). 제출은 `SUBMITTING` 기록 → 어댑터 1회 → 결과 기록. 같은 `request_id`는 어댑터를 다시 부르지 않고 기록을 돌려준다. 기동 때 남은 `SUBMITTING`은 `UNKNOWN`.
+- 켜는 법(관리자): ① 같은 비밀 값을 대시보드와 PhysicsAI가 읽을 파일 하나로 만든다 — 예 PowerShell `$b = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b).TrimEnd('=').Replace('+','-').Replace('/','_') | Set-Content -NoNewline -Encoding ascii <설치 루트>\state\secrets\scx_relay.key`, ACL은 대시보드·PhysicsAI 서비스 계정과 SYSTEM만. 실제 값은 어떤 문서·저장소·채팅에도 두지 않는다. ② `.env`에 `SIMDASH_SCX_RELAY_ENABLED=true`, `SIMDASH_SCX_RELAY_SECRET_FILE=<그 파일 절대 경로>`(필요하면 `SIMDASH_SCX_RELAY_DRIVE_BASE` 등). relay 업로드에는 `SIMDASH_DRIVE_WRITES_ENABLED=true`와 `SIMDASH_SCX_DRIVE_ROOT`도 필요(없으면 409 `DRIVE_WRITE_DISABLED`, 읽기·잡 조회는 동작). ③ 대시보드 재시작(비밀 교체도 두 앱 재시작).
+- 구현 메모(계약과 다르거나 구체화한 곳): (a) none 모드에서 relay를 켜면 기동은 거부하지 않고 경고 로그만 남기며 relay 응답은 모두 503 `DRIVE_MODE_DISABLED`(계약 사본 §2에 반영; 비밀 파일·기준 폴더 오류는 기동 거부). relay를 끈 뒤 남은 relay 대기열 항목은 `FAILED`(`RELAY_DISABLED`). 경로 구간 앞뒤 공백·끝 `.`·보이지 않는 문자(zero-width 등)는 400 `INVALID_PATH`. (b) 잡 API 확인은 어댑터 모듈의 `RadiossJobRequest`·`JobResources`와 게이트웨이의 `submit_radioss`·`get_job`·`terminate_job` 존재로 판단. (c) 어댑터 `NOT_FOUND`는 `get_job`·`terminate_job`·resolve attach에서 404 `SCX_JOB_NOT_FOUND`, 그 밖 경로 작업에서 404 `NOT_FOUND`. (d) `/files` 업로드의 `X-Request-Id`·`X-Content-SHA256` 형식 오류와 본문 JSON 오류는 422 `INVALID_REQUEST`. (e) 관리 › 업로드 대기열의 출처 표시 이름("PhysicsAI")은 화면 작업(후속 프런트)에 남김 — 지금은 `physicsai_relay`로 보인다.

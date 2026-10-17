@@ -110,6 +110,7 @@ ERROR_MESSAGES = {
     "SPDM_CONFLICT": "같은 이름의 다른 파일이 이미 드라이브에 있습니다(덮어쓰지 않았습니다).",
     "DRIVE_AUTH_REQUIRED": "드라이브 인증이 필요합니다. 관리자가 토큰을 다시 등록하면 대기열이 이어서 진행됩니다.",
     "DRIVE_ROOT_CHANGED": "SPDM 루트가 바뀌어 이 항목을 쓰지 않았습니다.",
+    "RELAY_DISABLED": "SCX relay가 꺼져 있어 PhysicsAI 항목을 쓰지 않았습니다(관리자가 relay를 켠 뒤 다시 시도).",
     "DRIVE_STAGING_MISSING": "서버 임시 파일이 없어 올릴 수 없습니다. 다시 올리세요.",
     "DRIVE_UPLOAD_MISMATCH": "드라이브에 올라간 파일 크기가 다릅니다.",
     "FINALIZATION_SOURCE_STALE": "Final 계획 이후 드라이브 원본이 바뀌었습니다.",
@@ -224,16 +225,46 @@ def current_root_key() -> str:
     return drive_root_from_settings(drive_gateway.current_settings()).root_key()
 
 
+# SCX relay for PhysicsAI (docs/features/scx-relay.md §6): a second root kind.  Its items are relative to
+# SIMDASH_SCX_RELAY_DRIVE_BASE (shared account home relative), never to the SPDM root.
+RELAY_ORIGIN = "physicsai_relay"
+
+
+def is_relay(item: "Item") -> bool:
+    return item.origin == RELAY_ORIGIN
+
+
+def relay_root_key() -> str:
+    from . import relay
+
+    return relay.root_key()
+
+
+def _relay_enabled() -> bool:
+    from . import relay
+
+    try:
+        return relay.settings().enabled
+    except Exception:  # noqa: BLE001 - invalid relay settings: treat as off (startup reports them)
+        return False
+
+
+def item_root_key(item: "Item") -> str:
+    """The current key of the item's root kind (SPDM root or relay base)."""
+    return relay_root_key() if is_relay(item) else current_root_key()
+
+
 def enqueue(conn: Any, *, origin: str, requested_by: str, items: Iterable[dict[str, Any]], batch_id: str | None = None,
             origin_ref: str | None = None, project_id: str | None = None, request_id: str | None = None,
-            environment: str | None = None) -> str:
+            environment: str | None = None, root_key: str | None = None) -> str:
     """Insert one batch (in the caller's transaction); the worker is woken after the caller commits.
 
     ``items`` keys: ``kind``, ``dst_rel_dir`` (SPDM-root relative folder), optional ``dst_name``,
     ``staging_path``, ``src_rel``, ``src_version_token``, ``size_bytes``, ``sha256``, ``halt_on_error``.
+    ``root_key`` defaults to the SPDM root; the relay passes :func:`relay_root_key` (folders relative to its base).
     """
     batch = batch_id or new_batch_id()
-    root_key = current_root_key()
+    root_key = root_key or current_root_key()
     now = _now()
     seq = 0
     for item in items:
@@ -746,7 +777,11 @@ def process_next(*, now: datetime | None = None) -> bool:
             if row is None:
                 return False
             item = _item(row)
-            if item.root_key != current_root_key():
+            if is_relay(item) and not _relay_enabled():
+                # The relay was turned off after the item was queued: never write it (scx-relay §2).
+                _record(conn, item, "FAILED", code="RELAY_DISABLED")
+                _notify_batch_finished(conn, item.batch_id)
+            elif item.root_key != item_root_key(item):
                 _record(conn, item, "FAILED", code="DRIVE_ROOT_CHANGED")
                 _notify_batch_finished(conn, item.batch_id)
             else:
@@ -910,14 +945,19 @@ def _finish_if_done(batch_id: str) -> None:
 
 # --- drive steps (no DB connection) -------------------------------------------------------------
 
-def _drive_path(rel: str) -> str:
+def _drive_path(rel: str, item: Item | None = None) -> str:
     """Drive path of an SPDM-root relative path: the same composition and checks as the read path.
 
     ``reads.drive_path(spdm_root, reads.check_rel(rel))`` (NFC, contract §1 rules), so a folder the
-    queue creates is exactly the folder the next sync lists (issue #51).
+    queue creates is exactly the folder the next sync lists (issue #51).  A relay item's path is
+    relative to the relay base instead (:func:`relay.queue_drive_path` refuses the SPDM root).
     """
     from . import reads
 
+    if item is not None and is_relay(item):
+        from . import relay
+
+        return relay.queue_drive_path(reads.check_rel(rel))
     return reads.drive_path(str(drive_gateway.current_settings().spdm_root or ""), reads.check_rel(rel))
 
 
@@ -959,14 +999,14 @@ def _staging_has_room(size: int) -> bool:
     return free is None or free - int(size) >= reads.STAGING_MIN_FREE_BYTES
 
 
-def _download_sha256(gateway: Any, rel: str, size: int) -> tuple[str, str] | "_Outcome":
+def _download_sha256(gateway: Any, rel: str, size: int, item: Item | None = None) -> tuple[str, str] | "_Outcome":
     """Download ``rel`` (at most ``size`` bytes) into a fresh ``xfer-`` folder: (sha256, sha1); folder removed."""
     if not _staging_has_room(size):
         return _Outcome("RETRY", "DRIVE_STAGING_FULL", ERROR_MESSAGES["DRIVE_STAGING_FULL"])
     work = _new_xfer_dir()
     try:
         try:
-            result = gateway.download_to(_drive_path(rel), work, max_bytes=int(size))
+            result = gateway.download_to(_drive_path(rel, item), work, max_bytes=int(size))
         except Exception as error:  # noqa: BLE001
             if _code(error) == "LIMIT":           # larger than expected: not the same content
                 return "", ""
@@ -1011,7 +1051,7 @@ def _existing_outcome(gateway: Any, item: Item, existing: Any, *, size: int | No
         return expected
     if not expected:
         return conflict("SPDM_CONFLICT_UNVERIFIED")
-    downloaded = _download_sha256(gateway, item.target, int(expected_size))
+    downloaded = _download_sha256(gateway, item.target, int(expected_size), item)
     if isinstance(downloaded, _Outcome):
         downloaded.method, downloaded.staging = method, staging
         return downloaded
@@ -1044,8 +1084,10 @@ def _execute(item: Item) -> _Outcome:
 def _execute_on(gateway: Any, item: Item) -> _Outcome:
     try:
         if item.kind == "MKDIR":
-            return _Outcome("DONE", entry=gateway.mkdirs(_drive_path(item.target)))
+            return _Outcome("DONE", entry=gateway.mkdirs(_drive_path(item.target, item)))
         if item.kind == "COPY":
+            if is_relay(item):      # the relay queues MKDIR and FILE only
+                return _Outcome("FAILED", "DRIVE_INTERNAL", "relay 항목은 복사를 쓰지 않습니다.")
             return _copy(gateway, item)
         return _upload(gateway, item)
     except Exception as error:  # noqa: BLE001 - adapter DriveError carries the code
@@ -1078,14 +1120,14 @@ def _upload(gateway: Any, item: Item) -> _Outcome:
         return staged
     path, size, digest, sha1 = staged
     staging_note = (str(path), size, digest) if not item.staging_path else None
-    target = _drive_path(item.target)
+    target = _drive_path(item.target, item)
     if item.attempts > 1:
         existing = gateway.stat(target)
         if existing is not None:
             return _existing_outcome(gateway, item, existing, size=None if _after_mismatch(item) else size, sha1=sha1,
                                      sha256=digest, staging=staging_note)
     try:
-        entry = gateway.upload_new(path, _drive_path(item.dst_rel_dir), name=item.dst_name)
+        entry = gateway.upload_new(path, _drive_path(item.dst_rel_dir, item), name=item.dst_name)
     except Exception as error:  # noqa: BLE001
         if _code(error) != "CONFLICT":
             outcome = _failure(error, item)
@@ -1364,7 +1406,7 @@ def _cleanup_orphans() -> int:
     return removed
 
 
-__all__ = ["AUTOSTART", "Item", "admin_list", "wait_batch", "wake", "batch_items", "batch_summary", "cancel_item", "enqueue", "get_item",
+__all__ = ["AUTOSTART", "Item", "RELAY_ORIGIN", "item_root_key", "relay_root_key", "admin_list", "wait_batch", "wake", "batch_items", "batch_summary", "cancel_item", "enqueue", "get_item",
            "new_batch_id", "process_next", "queue_paused", "recover_interrupted", "requeue_batch", "resume_blocked",
            "request_finish", "retry_item", "run_until_idle", "staging_dir_for", "start", "stop", "summarize", "sweep",
            "worker_running"]

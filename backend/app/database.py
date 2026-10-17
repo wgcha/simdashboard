@@ -86,6 +86,7 @@ def initialize_database() -> None:
                 "notifications",
                 "folder_link_reservations",
                 "drive_connected_account",
+                "scx_relay_submissions",
             )
             missing = [
                 table_name
@@ -144,6 +145,10 @@ def initialize_database() -> None:
                 "folder_link_reservations": {"root_key", "path_key", "project_id", "request_id", "environment",
                                              "created_by", "created_at", "expires_at"},
                 "drive_connected_account": {"id", "account_hint", "updated_by", "updated_at"},
+                "scx_relay_submissions": {"request_id", "request_sha256", "client", "client_ref", "input_rel",
+                                          "job_dir_rel", "state", "job_id", "solver", "last_status", "output_path",
+                                          "output_rel", "error_code", "error_message", "created_at", "updated_at",
+                                          "resolved_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }
             incompatible = []
@@ -1279,6 +1284,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_notifications_schema(conn)
         ensure_folder_link_reservations_schema(conn)
         ensure_drive_connected_account_schema(conn)
+        ensure_scx_relay_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1636,6 +1642,18 @@ def ensure_drive_connected_account_schema(conn: duckdb.DuckDBPyConnection) -> No
     conn.execute("""CREATE TABLE IF NOT EXISTS drive_connected_account (
         id VARCHAR PRIMARY KEY CHECK (id = 'scx'), account_hint VARCHAR NOT NULL, updated_by VARCHAR NOT NULL,
         updated_at TIMESTAMP NOT NULL
+    )""")
+
+
+def ensure_scx_relay_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0044 (SCX relay submissions for PhysicsAI)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS scx_relay_submissions (
+        request_id VARCHAR PRIMARY KEY, request_sha256 VARCHAR NOT NULL, client VARCHAR NOT NULL, client_ref VARCHAR,
+        input_rel VARCHAR NOT NULL, job_dir_rel VARCHAR NOT NULL,
+        state VARCHAR NOT NULL CHECK (state IN ('SUBMITTING', 'SUBMITTED', 'UNKNOWN', 'FAILED', 'ATTACHED', 'ABANDONED')),
+        job_id VARCHAR UNIQUE, solver VARCHAR, last_status VARCHAR, output_path VARCHAR, output_rel VARCHAR,
+        error_code VARCHAR, error_message VARCHAR, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
+        resolved_at TIMESTAMP
     )""")
 
 

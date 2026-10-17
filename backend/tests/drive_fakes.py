@@ -36,6 +36,15 @@ op result (``account_hint``/``obtained_at``/``expires_at``) so the dashboard mus
 the tokens from the ``tokens`` notification (``TokenStore.save``); ``unknown_op``
 answers like an older worker that does not know the op.  Every call is logged in
 ``auth_calls`` with the user name only (never the password).
+
+SCX relay additions (adapter v0.3.0 JobGateway, docs/features/scx-relay.md §8):
+``make_fake_adapter_module(drive, jobs=True)`` adds ``JobResources``/``RadiossJobRequest``/
+``JobInfo`` and ``submit_radioss``/``get_job``/``terminate_job`` (the default module has no job
+API, like an adapter before v0.3.0).  ``job_status_sequence`` is what ``get_job`` reports call by
+call, ``job_output_path`` (``{dir}`` = folder of the submitted input path as sent) the output
+location, ``job_fail_next`` injects an adapter code (``ErrorCode``/``JobErrorCode``) or a code-less
+exception for one call, ``job_lost_creates`` makes a lost submit reply still create the job, and
+``job_calls`` records every job call.
 """
 from __future__ import annotations
 
@@ -82,6 +91,13 @@ class ErrorCode(str, Enum):
 RETRYABLE = {ErrorCode.LOCKED, ErrorCode.BUSY, ErrorCode.OVERLOADED, ErrorCode.TIMEOUT, ErrorCode.UNAVAILABLE}
 
 
+class JobErrorCode(str, Enum):
+    """Adapter v0.3.0 job codes (the real value of SUBMISSION_UNKNOWN is server check E4-11-9)."""
+
+    SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN"
+    JOB_REJECTED = "JOB_REJECTED"          # a job code without its own relay mapping (→ 502 SCX_JOB_ERROR)
+
+
 class DriveError(Exception):
     def __init__(self, code: ErrorCode, message: str, rel_path: str | None = None) -> None:
         super().__init__(message)
@@ -122,6 +138,35 @@ class HealthStatus:
     token_refreshed_at: datetime | None
     queue_depth: int
     in_flight: int
+
+
+@dataclass(frozen=True)
+class JobResources:
+    appliance: str
+    ncpu: int = 1
+    memory_gb: int | None = None
+    queue_type: str = "implicit"
+
+
+@dataclass(frozen=True)
+class RadiossJobRequest:
+    input_path: str
+    version: str
+    resources: JobResources
+    engine_paths: tuple[str, ...] = ()
+    additional_paths: tuple[str, ...] = ()
+    run_type: str = "both - use starter and engine files"
+    mpi: str = "SMP (default)"
+    single_precision: bool = False
+
+
+@dataclass(frozen=True)
+class JobInfo:
+    job_id: str
+    solver: str
+    status: str
+    output_path: str | None
+    error_message: str | None
 
 
 @dataclass(frozen=True)
@@ -207,6 +252,13 @@ class MemoryDrive:
     device_start_result: dict[str, Any] | None = None
     device_rotate_while_pending: bool = False   # the current session's token rotates during a PENDING poll
     device_logins: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # SCX relay job API (adapter v0.3.0)
+    jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    job_status_sequence: list[str] = field(default_factory=lambda: ["Queued", "Running", "Completed"])
+    job_output_path: str | None = None
+    job_fail_next: dict[str, Any] = field(default_factory=dict)
+    job_lost_creates: bool = True
+    job_calls: list[tuple[str, Any]] = field(default_factory=list)
     _ids: Any = field(default_factory=lambda: itertools.count(1))
     _clock: Any = field(default_factory=lambda: itertools.count(1))
 
@@ -592,15 +644,86 @@ class FakeDeviceLoginOps:
         return {}
 
 
-def make_fake_adapter_module(drive: MemoryDrive, *, relogin: bool = True) -> types.ModuleType:
+class FakeJobOps:
+    """Adapter v0.3.0 ``JobGateway`` on top of :class:`FakeWorkerDriveGateway` (submit is never retried)."""
+
+    drive: MemoryDrive
+
+    def _job_op(self, op: str, ref: Any) -> Any:
+        if self.closed:
+            raise DriveError(ErrorCode.UNAVAILABLE, "gateway closed")
+        self.drive.job_calls.append((op, ref))
+        if self.drive.on_call is not None:
+            self.drive.on_call(op, str(getattr(ref, "input_path", ref)))
+        return self.drive.job_fail_next.pop(op, None)
+
+    @staticmethod
+    def _raise(injected: Any) -> None:
+        if isinstance(injected, BaseException):
+            raise injected
+        raise DriveError(injected, f"injected {injected.value}")
+
+    def _info(self, job_id: str) -> JobInfo:
+        job = self.drive.jobs[job_id]
+        return JobInfo(job_id=job_id, solver="radioss", status=job["status"], output_path=job["output_path"],
+                       error_message="solver stopped" if job["status"] == "Failed" else None)
+
+    def _create(self, job_id: str, request: RadiossJobRequest) -> None:
+        folder = request.input_path.rsplit("/", 1)[0]
+        output = self.drive.job_output_path.format(dir=folder) if self.drive.job_output_path else None
+        self.drive.jobs[job_id] = {"request": request, "status": self.drive.job_status_sequence[0], "polls": 0,
+                                   "output_path": output}
+
+    def submit_radioss(self, request: RadiossJobRequest) -> JobInfo:
+        assert isinstance(request, RadiossJobRequest) and isinstance(request.resources, JobResources)
+        injected = self._job_op("submit_radioss", request)
+        job_id = f"job-{next(self.drive._ids)}"
+        if injected is not None:
+            lost = injected is JobErrorCode.SUBMISSION_UNKNOWN or isinstance(injected, BaseException)
+            if lost and self.drive.job_lost_creates:
+                self._create(job_id, request)            # the server accepted it; only the reply was lost
+            self._raise(injected)
+        self._create(job_id, request)
+        return self._info(job_id)
+
+    def get_job(self, job_id: str) -> JobInfo:
+        injected = self._job_op("get_job", job_id)
+        if injected is not None:
+            self._raise(injected)
+        job = self.drive.jobs.get(job_id)
+        if job is None:
+            raise DriveError(ErrorCode.NOT_FOUND, "unknown job")
+        if job["status"] != "Aborted":
+            job["polls"] += 1
+            sequence = self.drive.job_status_sequence
+            job["status"] = sequence[min(job["polls"], len(sequence) - 1)]
+        return self._info(job_id)
+
+    def terminate_job(self, job_id: str) -> None:
+        injected = self._job_op("terminate_job", job_id)
+        if injected is not None:
+            self._raise(injected)
+        job = self.drive.jobs.get(job_id)
+        if job is None:
+            raise DriveError(ErrorCode.NOT_FOUND, "unknown job")
+        job["status"] = "Aborted"
+
+
+def make_fake_adapter_module(drive: MemoryDrive, *, relogin: bool = True, jobs: bool = False) -> types.ModuleType:
     module = types.ModuleType("scx_drive_adapter")
     bases = (FakeDeviceLoginOps, FakeReloginOps, FakeWorkerDriveGateway) if relogin else (FakeWorkerDriveGateway,)
+    if jobs:
+        bases = (FakeJobOps, *bases)
     gateway_cls = type("WorkerDriveGateway", bases, {"drive": drive, "instances": []})
     for name, value in {
         "Priority": Priority, "ErrorCode": ErrorCode, "DriveError": DriveError, "DriveEntry": DriveEntry,
         "DownloadResult": DownloadResult, "HealthStatus": HealthStatus, "TokenBundle": TokenBundle,
         "AdapterConfig": AdapterConfig, "WorkerConfig": WorkerConfig, "WorkerDriveGateway": gateway_cls,
-        "__version__": "0.2.0-fake",
+        "__version__": "0.3.0-fake" if jobs else "0.2.0-fake",
     }.items():
         setattr(module, name, value)
+    if jobs:
+        for name, value in {"JobResources": JobResources, "RadiossJobRequest": RadiossJobRequest, "JobInfo": JobInfo,
+                            "JobErrorCode": JobErrorCode}.items():
+            setattr(module, name, value)
     return module

@@ -7,7 +7,9 @@ reading that one variable.  ``scx`` requires the variables listed in
 """
 from __future__ import annotations
 
+import logging
 import os
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -181,6 +183,119 @@ def _fernet_key(name: str) -> str:
     if value == (os.getenv("AUTH_SECRET_KEY") or "").strip():
         raise DriveConfigError(name, "AUTH_SECRET_KEY와 다른 값이어야 합니다.")
     return value
+
+
+# --- SCX relay for PhysicsAI (docs/features/scx-relay.md §2, default off) ---------------------
+
+RELAY_ENABLED_ENV = "SIMDASH_SCX_RELAY_ENABLED"
+RELAY_SECRET_ENV = "SIMDASH_SCX_RELAY_SECRET_FILE"
+RELAY_HOME_DEFAULT = "/Users/vd.dashboard"
+RELAY_MAX_UPLOAD_DEFAULT = 4 * 1024 ** 3
+RELAY_MAX_DOWNLOAD_DEFAULT = 20 * 1024 ** 3
+RELAY_PATH_MAX = 1024
+RELAY_SEGMENT_MAX = 255
+_RELAY_SECRET = re.compile(r"[A-Za-z0-9_\-]{43,128}")
+JobPathForm = Literal["rel", "tilde", "absolute"]
+
+
+@dataclass(frozen=True)
+class RelaySettings:
+    """``SIMDASH_SCX_RELAY_*``; the secret bytes never appear in ``repr`` or comparisons."""
+
+    enabled: bool = False
+    secret: bytes = field(default=b"", repr=False, compare=False)
+    secret_file: Path | None = None
+    drive_base: str = ""
+    job_path_form: JobPathForm = "rel"
+    home_abs: str = RELAY_HOME_DEFAULT
+    max_upload_bytes: int = RELAY_MAX_UPLOAD_DEFAULT
+    max_download_bytes: int = RELAY_MAX_DOWNLOAD_DEFAULT
+
+
+def relay_enabled() -> bool:
+    return _flag(RELAY_ENABLED_ENV)
+
+
+def check_relay_rel_path(value: str, *, allow_empty: bool) -> str:
+    """Relay path form (contract §4): ``validate_drive_rel_path`` + 1–255 per segment, ≤ 1024 in total."""
+    text = validate_drive_rel_path(value, allow_empty=allow_empty)
+    if len(text) > RELAY_PATH_MAX:
+        raise ValueError(f"경로가 {RELAY_PATH_MAX}자를 넘습니다.")
+    if text and any(len(part) > RELAY_SEGMENT_MAX for part in text.split("/")):
+        raise ValueError(f"경로 구간이 {RELAY_SEGMENT_MAX}자를 넘습니다.")
+    if any(unicodedata.category(ch) in {"Cf", "Zl", "Zp"} for ch in text):
+        raise ValueError("보이지 않는 문자(zero-width 등)를 포함할 수 없습니다.")
+    if text and any(part != part.strip() or part.endswith(".") for part in text.split("/")):
+        # "SPDM /x" or "SPDM./x" could name the SPDM root on a server that trims them (Windows rules)
+        raise ValueError("경로 구간은 공백으로 시작·끝나거나 '.'으로 끝날 수 없습니다.")
+    return text
+
+
+def _relay_secret(path: Path) -> bytes:
+    """One line of base64url (43–128 chars); BOM and surrounding whitespace ignored.  Never echoed."""
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise DriveConfigError(RELAY_SECRET_ENV, f"비밀 파일을 읽을 수 없습니다: {path}") from exc
+    try:
+        text = raw.decode("utf-8-sig").strip()
+    except UnicodeDecodeError as exc:
+        raise DriveConfigError(RELAY_SECRET_ENV, "비밀 파일 형식이 올바르지 않습니다(한 줄 base64url 43~128자).") from exc
+    if not _RELAY_SECRET.fullmatch(text):
+        raise DriveConfigError(RELAY_SECRET_ENV, "비밀 파일 형식이 올바르지 않습니다(한 줄 base64url 43~128자).")
+    if os.name != "nt":
+        try:
+            if path.stat().st_mode & 0o077:
+                logging.getLogger("app.services.drive.config").warning(
+                    "%s is readable by group/others; restrict it to the service account (chmod 600)", RELAY_SECRET_ENV)
+        except OSError:
+            pass
+    return text.encode("ascii")
+
+
+def _relay_home(name: str) -> str:
+    raw = _text(name)
+    if raw is None:
+        return RELAY_HOME_DEFAULT
+    text = unicodedata.normalize("NFC", raw).rstrip("/")
+    parts = text.split("/")
+    if (not text.startswith("/") or "\\" in text or any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+            or any(part in {"", ".", ".."} for part in parts[1:])):
+        raise DriveConfigError(name, "'/'로 시작하는 절대 표기여야 합니다(예: /Users/<계정>).")
+    return text
+
+
+def relay_settings() -> RelaySettings:
+    """Read the relay settings; when enabled every value is validated (startup refuses otherwise)."""
+    if not relay_enabled():
+        return RelaySettings(enabled=False)
+    secret_raw = _text(RELAY_SECRET_ENV)
+    if secret_raw is None:
+        raise DriveConfigError(RELAY_SECRET_ENV, "relay를 켜면 필수입니다. 값이 없습니다.")
+    secret_file = _absolute_path(RELAY_SECRET_ENV, secret_raw)
+    secret = _relay_secret(secret_file)
+    base_raw = os.getenv("SIMDASH_SCX_RELAY_DRIVE_BASE", "").strip()
+    try:
+        drive_base = check_relay_rel_path(base_raw, allow_empty=True)
+    except ValueError as exc:
+        raise DriveConfigError("SIMDASH_SCX_RELAY_DRIVE_BASE", f"공용 계정 홈 기준 상대 경로여야 합니다. {exc}") from exc
+    if drive_base.startswith("."):
+        raise DriveConfigError("SIMDASH_SCX_RELAY_DRIVE_BASE", "'.'으로 시작하는 폴더는 쓸 수 없습니다.")
+    form = (_text("SIMDASH_SCX_RELAY_JOB_PATH_FORM") or "rel").casefold()
+    if form not in {"rel", "tilde", "absolute"}:
+        raise DriveConfigError("SIMDASH_SCX_RELAY_JOB_PATH_FORM", "rel, tilde, absolute 중 하나여야 합니다.")
+    return RelaySettings(
+        enabled=True,
+        secret=secret,
+        secret_file=secret_file,
+        drive_base=drive_base,
+        job_path_form=form,  # type: ignore[arg-type]
+        home_abs=_relay_home("SIMDASH_SCX_RELAY_HOME_ABS"),
+        max_upload_bytes=int(_number("SIMDASH_SCX_RELAY_MAX_UPLOAD_BYTES", RELAY_MAX_UPLOAD_DEFAULT,
+                                     1024 ** 2, 2 ** 40, integer=True)),
+        max_download_bytes=int(_number("SIMDASH_SCX_RELAY_MAX_DOWNLOAD_BYTES", RELAY_MAX_DOWNLOAD_DEFAULT,
+                                       1024 ** 2, 2 ** 40, integer=True)),
+    )
 
 
 def drive_settings() -> DriveSettings:

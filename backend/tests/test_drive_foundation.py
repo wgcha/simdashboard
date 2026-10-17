@@ -457,7 +457,10 @@ FORBIDDEN_CALLS = {"rm", "mv", "mv_to_trash", "move", "rename", "replace", "remo
 
 
 def test_drive_code_never_calls_delete_move_or_overwrite_operations():
-    sources = sorted((BACKEND / "app" / "services" / "drive").glob("*.py")) + [BACKEND / "app" / "routers" / "drive.py"]
+    # services/drive/*.py includes the SCX relay service (relay.py); its router is checked as well.
+    sources = sorted((BACKEND / "app" / "services" / "drive").glob("*.py")) + [
+        BACKEND / "app" / "routers" / "drive.py", BACKEND / "app" / "routers" / "scx_relay.py"]
+    assert BACKEND / "app" / "services" / "drive" / "relay.py" in sources
     violations = []
     for source in sources:
         tree = ast.parse(source.read_text(encoding="utf-8"))
