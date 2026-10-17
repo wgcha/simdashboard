@@ -661,3 +661,138 @@ def test_rescan_requires_global_administrator(admin_client, inline_rescan, monke
     assert client.post(RESCAN).status_code == 403
     assert client.get(RESCAN).status_code == 403
     assert inline_rescan.state()["status"] == "IDLE"
+
+
+# --- renamed request folder (user decision 2026-10-17) ---------------------------------------------
+
+SPACED = f"{PROJECT}/WR-0000806_유통 환경 시뮬레이션"
+JOINED = f"{PROJECT}/WR-0000806_유통환경시뮬레이션"
+RENAMED_AUDITS = "SELECT count(*) FROM audit_events WHERE action='FOLDER_REQUEST_FOLDER_RENAMED'"
+
+
+def _sync(client, project_id, request_id, environment="DISTRIBUTION"):
+    response = client.post("/api/folder-discovery/environments/sync",
+                           json={"project_id": project_id, "request_id": request_id, "environment": environment})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _registered_request(client, root, path=SPACED):
+    _container_schema()
+    _distribution_request(root, path)
+    [created] = _discover(client)["created_requests"]
+    project_id, request_id = created["project_id"], created["id"]
+    assert _sync(client, project_id, request_id)["status"] in {"REFRESHED", "UNCHANGED"}  # an active snapshot
+    folder_auto_discovery.reset_for_tests()
+    return project_id, request_id
+
+
+def _request_rows(request_id):
+    with connect() as conn:
+        return conn.execute("SELECT id,status,deleted_by FROM folder_environment_registrations WHERE request_id=? "
+                            "ORDER BY created_at,id", [request_id]).fetchall()
+
+
+def test_renamed_request_folder_is_relinked_to_the_same_request(admin_client):
+    from app.services import folder_schema_resolver as resolver
+
+    client, root = admin_client
+    project_id, request_id = _registered_request(client, root)
+    requests_before = _count("SELECT count(*) FROM analysis_requests")
+    old_cases = _count("SELECT count(*) FROM dashboard_cases WHERE request_id=?", [request_id])
+    old_captures = _count("SELECT count(*) FROM dashboard_captures c JOIN dashboard_cases dc ON dc.id=c.case_id "
+                          "WHERE dc.request_id=?", [request_id])
+    [old_registration] = [row[0] for row in _request_rows(request_id)]
+    audits_before = _count(RENAMED_AUDITS)
+    assert old_cases and old_captures
+
+    (root / SPACED).rename(root / JOINED)  # SPDM: spaces removed from the request folder name
+    result = _discover(client)
+    assert result["created_requests"] == [] and result["created_projects"] == [], result
+    assert result["needs_review"] == [], result["needs_review"]
+    [renamed] = result["renamed_requests"]
+    assert (renamed["id"], renamed["project_id"], renamed["environment"]) == (request_id, project_id, "DISTRIBUTION")
+    assert (renamed["old_path"], renamed["new_path"]) == (SPACED, JOINED)
+    assert _count("SELECT count(*) FROM analysis_requests") == requests_before  # no duplicate request
+    # The old folder's registration is a tombstone; one live registration (the LINK) remains.
+    rows = _request_rows(request_id)
+    assert [(row[0], row[1], row[2]) for row in rows if row[0] == old_registration] == [
+        (old_registration, "DELETED", folder_auto_discovery.SYSTEM.user_id)]
+    assert len([row for row in rows if row[1] != "DELETED"]) == 1
+    # Nothing of the request was deleted: the old Cases and captures stay (history).
+    assert _count("SELECT count(*) FROM dashboard_cases WHERE request_id=? AND relative_path LIKE ?",
+                  [request_id, f"{SPACED}/%"]) == old_cases
+    assert _count("SELECT count(*) FROM dashboard_captures c JOIN dashboard_cases dc ON dc.id=c.case_id "
+                  "WHERE dc.request_id=?", [request_id]) >= old_captures
+    with connect() as conn:
+        assert resolver._request_path(conn, _root_key(root), project_id, request_id, "DISTRIBUTION") == JOINED
+    # Results are read from the new folder (registration capture, then the next sync).
+    assert _count("SELECT count(*) FROM dashboard_cases WHERE request_id=? AND relative_path LIKE ?",
+                  [request_id, f"{JOINED}/%"]) == old_cases
+    assert {"2_Face", "3_Face"} <= _scenes(client, project_id, request_id)
+    assert _sync(client, project_id, request_id)["status"] in {"REFRESHED", "UNCHANGED"}
+    catalog = client.get("/api/dashboard/catalog", params={"project_id": project_id, "request_id": request_id,
+                                                           "environment": "DISTRIBUTION"}).json()
+    assert catalog["folder_schema"]["status"] == "AVAILABLE", catalog["folder_schema"]
+    assert {"2_Face", "3_Face"} <= _scenes(client, project_id, request_id)
+    assert _count(RENAMED_AUDITS) == audits_before + 1
+    # Idempotent: the next run finds the new folder linked.
+    folder_auto_discovery.reset_for_tests()
+    again = _discover(client)
+    assert again["created_requests"] == [] and again["renamed_requests"] == [] and again["needs_review"] == []
+    # Non-administrators see the request, not the folder paths.
+    visible = folder_auto_discovery.visible_result(result, is_global_admin=False)["renamed_requests"]
+    assert visible == [{"id": request_id, "name": JOINED.rsplit("/", 1)[-1], "environment": "DISTRIBUTION",
+                        "project_id": project_id}]
+
+
+def test_renamed_request_folder_with_two_candidates_needs_review(admin_client):
+    client, root = admin_client
+    project_id, request_id = _registered_request(client, root)
+    requests_before = _count("SELECT count(*) FROM analysis_requests")
+    (root / SPACED).rename(root / JOINED)
+    (root / f"{JOINED}_v2" / "Working").mkdir(parents=True)
+    result = _discover(client)
+    assert result["created_requests"] == [] and result["renamed_requests"] == []
+    codes = {item["relative_path"]: item["code"] for item in result["needs_review"]}
+    assert codes == {JOINED: "RENAME_AMBIGUOUS", f"{JOINED}_v2": "RENAME_AMBIGUOUS"}
+    assert "여러 개" in result["needs_review"][0]["reason"]
+    assert _count("SELECT count(*) FROM analysis_requests") == requests_before
+    assert [row[1] for row in _request_rows(request_id)] != ["DELETED"]  # still linked to the old folder
+    # Once one candidate is gone the rename is followed.
+    (root / f"{JOINED}_v2" / "Working").rmdir()
+    (root / f"{JOINED}_v2").rmdir()
+    folder_auto_discovery.reset_for_tests()
+    assert [item["id"] for item in _discover(client)["renamed_requests"]] == [request_id]
+
+
+def test_copy_of_an_existing_request_folder_is_still_not_registered(admin_client):
+    client, root = admin_client
+    _project_id, request_id = _registered_request(client, root)
+    (root / JOINED / "Working").mkdir(parents=True)  # a copy: the registered folder still exists
+    result = _discover(client)
+    assert result["created_requests"] == [] and result["renamed_requests"] == []
+    assert [(item["relative_path"], item["code"]) for item in result["needs_review"]] == [(JOINED, "WR_ALREADY_LINKED")]
+    assert [row[1] for row in _request_rows(request_id)] != ["DELETED"]
+
+
+def test_unreadable_listing_is_never_taken_as_a_rename():
+    class Lister:
+        def __init__(self, tree, broken=()):
+            self.tree, self.broken, self.issues, self.calls = tree, set(broken), [], []
+
+        def children(self, relative):
+            self.calls.append(relative)
+            if relative in self.broken:
+                self.issues.append({"relative_path": relative, "code": "PATH_UNAVAILABLE"})
+                return []
+            return [(name, f"{relative}/{name}" if relative else name) for name in self.tree.get(relative, [])]
+
+    tree = {"": ["SPDM (Admin)"], "SPDM (Admin)": ["75R9J_PV"], "SPDM (Admin)/75R9J_PV": ["WR-0001_유통"]}
+    absent = folder_auto_discovery._absent
+    assert absent(Lister(tree), "SPDM (Admin)/75R9J_PV/WR-0002_유통", {}) is True
+    assert absent(Lister(tree), "SPDM (Admin)/75R9J_PV/wr-0001_유통", {}) is False  # case-insensitive
+    assert absent(Lister(tree, broken={"SPDM (Admin)/75R9J_PV"}), "SPDM (Admin)/75R9J_PV/WR-0002_유통", {}) is False
+    gone_project = Lister(tree)
+    assert absent(gone_project, "SPDM (Admin)/OLD_PV/WR-0002_유통", {}) is True
+    assert gone_project.calls == ["", "SPDM (Admin)"]  # a missing folder is never listed itself

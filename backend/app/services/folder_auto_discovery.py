@@ -33,8 +33,13 @@ Scope and safety:
 * Runs are throttled per process and storage root (``MIN_INTERVAL_SECONDS``;
   ``force`` only shortens it to ``FORCE_MIN_INTERVAL_SECONDS``).
 * A request whose WR key + environment is already linked in the same project
-  (a copy, ``_old``, a rename) is reported (``WR_ALREADY_LINKED``), never
-  registered.
+  (a copy, ``_old``) is reported (``WR_ALREADY_LINKED``), never registered.
+  A rename (2026-10-17): when the linked folder is positively gone from storage
+  and exactly one unlinked folder of the project has its WR number +
+  environment, the existing request is re-linked to the new folder (a LINK
+  registration that tombstones the old folder's registrations in the same
+  transaction; request id, Cases and captures are kept) and reported in
+  ``renamed_requests``. Two or more such folders are ``RENAME_AMBIGUOUS``.
 * A caller never waits for a run: the memo is checked and the run lock is
   taken without blocking before a DB connection is opened; a concurrent call
   gets the last result with ``status: RUNNING``. A run is bounded by
@@ -58,10 +63,12 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -437,8 +444,11 @@ def _review(relative_path: str, code: str, reason: str, environment: str | None 
 def _register_request(conn, root, root_key: str, project_name: str, project_path: str,
                       siblings: list[str], request_path: str, environment: str,
                       project_targets: set[str], key: str, deadline: float,
-                      request_target: str | None = None) -> dict[str, Any]:
+                      request_target: str | None = None, supersedes: tuple[str, ...] = ()) -> dict[str, Any]:
     """Run scan -> preview -> registration for one new request folder.
+
+    ``supersedes`` (a renamed request folder, with ``request_target``): live registrations of the
+    old folder that become tombstones in the registration's transaction.
 
     Roles come from the depth schema only. The preview carries just the
     assignments the depth schema allows (§6): ``EXCLUDE`` for sibling request
@@ -507,7 +517,8 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
     failure: dict[str, Any] | None = None
     try:
         with folder_discovery.WRITE_LOCK:
-            environment_service.register(conn, built["id"], key, True, SYSTEM, root, creator_membership=False)
+            environment_service.register(conn, built["id"], key, True, SYSTEM, root, creator_membership=False,
+                                         supersedes=supersedes)
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         failure = _review(request_path, str(detail.get("code") or "REGISTRATION_FAILED"),
@@ -549,11 +560,130 @@ def _project_requests(linked: dict[str, Any], project_path: str) -> set[tuple[st
     return identities
 
 
+def _folded_name(name: str) -> str:
+    return unicodedata.normalize("NFC", str(name)).casefold()
+
+
+def _absent(lister: _Lister, relative_path: str, listings: dict[str, set[str] | None]) -> bool:
+    """Whether ``relative_path`` is positively gone: a readable ancestor listing no longer holds it.
+
+    A listing that failed or hit the entry limit is never taken as absence (a slow or unreachable
+    drive must not look like a rename). ``listings`` caches one run's listings by folder.
+    """
+    parent = ""
+    for part in [item for item in str(relative_path).split("/") if item]:
+        if parent not in listings:
+            issues = len(lister.issues)
+            children = lister.children(parent)
+            listings[parent] = None if len(lister.issues) > issues else {_folded_name(name) for name, _ in children}
+        names = listings[parent]
+        if names is None:
+            return False
+        if _folded_name(part) not in names:
+            return True
+        parent = f"{parent}/{part}" if parent else part
+    return False
+
+
+def _live_request_folders(conn, root_key: str) -> dict[str, dict[str, Any]]:
+    """Request folders of live folder registrations: casefolded path -> binding and registration ids."""
+    found: dict[str, dict[str, Any]] = {}
+    for path, registration_id, project_id, request_id, environment in conn.execute(
+            "SELECT g.relative_path,r.id,r.project_id,r.request_id,r.environment FROM folder_environment_registry g "
+            "JOIN folder_environment_registrations r ON r.id=g.registration_id "
+            "WHERE g.root_key=? AND g.role_kind='REQUEST' AND g.target_id=r.request_id AND r.status IN (?,?,?,?)",
+            [root_key, *ACTIVE_STATUSES]).fetchall():
+        scope = (str(project_id), str(request_id), str(environment))
+        item = found.setdefault(str(path).casefold(), {"path": str(path), "scope": scope, "registration_ids": [],
+                                                       "conflict": False})
+        item["conflict"] = item["conflict"] or item["scope"] != scope
+        item["registration_ids"].append(str(registration_id))
+    return found
+
+
+def _bound_elsewhere(conn, live: dict[str, dict[str, Any]], old_key: str, scope: tuple[str, str, str]) -> bool:
+    """The request has another folder binding (SPDM parent binding, legacy registry, another live path)."""
+    _project_id, request_id, environment = scope
+    if any(key != old_key and item["scope"][1:] == (request_id, environment) for key, item in live.items()):
+        return True
+    if conn.execute("SELECT 1 FROM spdm_storage_request_parents WHERE request_id=? LIMIT 1", [request_id]).fetchone():
+        return True
+    try:
+        return bool(conn.execute("SELECT 1 FROM folder_discovery_registry WHERE role_kind='REQUEST' AND target_id=? LIMIT 1",
+                                 [request_id]).fetchone())
+    except Exception:  # pragma: no cover - legacy table missing on a minimal schema
+        return False
+
+
+def _superseded_registrations(conn, root_key: str, holder: dict[str, Any]) -> tuple[str, ...]:
+    """Live registrations of the old folder: its REQUEST rows plus scans at or below it (re-interpretations)."""
+    project_id, request_id, environment = holder["scope"]
+    prefix = holder["path"].casefold().rstrip("/") + "/"
+    ids = list(holder["registration_ids"])
+    for registration_id, scan_path in conn.execute(
+            "SELECT r.id,s.relative_path FROM folder_environment_registrations r "
+            "JOIN folder_environment_previews p ON p.id=r.preview_id JOIN folder_environment_scans s ON s.id=p.scan_id "
+            "WHERE s.root_key=? AND r.project_id=? AND r.request_id=? AND r.environment=? AND r.status IN (?,?,?,?)",
+            [root_key, project_id, request_id, environment, *ACTIVE_STATUSES]).fetchall():
+        if (str(scan_path).casefold().rstrip("/") + "/").startswith(prefix):
+            ids.append(str(registration_id))
+    return tuple(dict.fromkeys(ids))
+
+
+_RENAME_AMBIGUOUS = ("이전 의뢰 폴더가 없어졌고 같은 의뢰번호·환경의 새 폴더가 여러 개입니다. "
+                     "하나만 남기거나 폴더 조사에서 기존 의뢰에 연결하세요.")
+_RENAME_UNSUPPORTED = ("이전 의뢰 폴더가 없어졌지만 이 의뢰의 연결은 자동으로 옮길 수 없습니다. "
+                       "폴더 조사에서 기존 의뢰에 연결하세요.")
+
+
+def _rename_source(conn, lister: _Lister, root_key: str, linked: dict[str, Any], live: dict[str, dict[str, Any]],
+                   listings: dict[str, set[str] | None], project_path: str, project_targets: set[str],
+                   identity: tuple[str, str], request_path: str, same_identity: list[str]) -> dict[str, Any] | None:
+    """The registered request a new folder of an already linked (WR key, environment) was renamed from.
+
+    None keeps the copy rule (``WR_ALREADY_LINKED``): a linked folder of that identity still exists
+    or its absence cannot be confirmed. ``{"review": ...}`` says why a missing folder is not followed.
+    """
+    prefix = project_path.casefold().rstrip("/") + "/"
+    holders: dict[str, str] = {}
+    for path in linked["request_paths"]:
+        if path.casefold().startswith(prefix) and request_identity(path.rsplit("/", 1)[-1])[:2] == identity:
+            holders.setdefault(path.casefold(), path)
+    if not holders or any(not _absent(lister, path, listings) for path in holders.values()):
+        return None
+    environment = identity[1]
+    if len(holders) > 1 or len(same_identity) > 1:
+        return {"review": _review(request_path, "RENAME_AMBIGUOUS", _RENAME_AMBIGUOUS, environment)}
+    old_key = next(iter(holders))
+    holder = live.get(old_key)
+    if (not holder or holder["conflict"] or holder["scope"][2] != environment
+            or holder["scope"][0] not in project_targets or [path.casefold() for path in same_identity] != [request_path.casefold()]
+            or _bound_elsewhere(conn, live, old_key, holder["scope"])):
+        return {"review": _review(request_path, "WR_ALREADY_LINKED", _RENAME_UNSUPPORTED, environment)}
+    return {"project_id": holder["scope"][0], "request_id": holder["scope"][1], "old_path": holder["path"],
+            "registration_ids": _superseded_registrations(conn, root_key, holder)}
+
+
+def _audit_rename(conn, item: dict[str, Any], superseded: tuple[str, ...]) -> None:
+    """Audit event of a followed rename, written by the discovery (background runs have no HTTP request)."""
+    try:
+        conn.execute(
+            "INSERT INTO audit_events (id, occurred_at, user_id, username, role, action, method, path, status_code, "
+            "request_id, client_ip, user_agent, detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [str(uuid4()), _utc_now(), SYSTEM.user_id, SYSTEM.username, None, "FOLDER_REQUEST_FOLDER_RENAMED",
+             "SYSTEM", "folder-auto-discovery", 200, str(uuid4()), None, "",
+             json.dumps({**item, "superseded_registration_ids": list(superseded)}, ensure_ascii=False)])
+    except Exception as exc:  # the re-link is durable; a missing audit row must not undo or repeat it
+        _logger.warning("Rename audit event could not be written request_id=%s error_type=%s",
+                        item.get("id"), type(exc).__name__)
+
+
 def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]:
     root_key = root_identity(root)
     lister = _Lister(root)
     created_projects: list[dict[str, str]] = []
     created_requests: list[dict[str, str]] = []
+    renamed_requests: list[dict[str, Any]] = []
     needs_review: list[dict[str, Any]] = []
     try:
         schema = depth_profiles.get_depth_schema(conn)
@@ -561,7 +691,7 @@ def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         needs_review.append(_review("", str(detail.get("code") or "DEPTH_SCHEMA_MISSING"),
                                     str(detail.get("message") or "현재 깊이 스키마가 없습니다.")))
-        return {"created_projects": [], "created_requests": [], "needs_review": needs_review,
+        return {"created_projects": [], "created_requests": [], "renamed_requests": [], "needs_review": needs_review,
                 "checked_at": _now_iso(), "coalesced": False, "partial": False, "attempted": 0, "deferred": []}
     schema_set_id = str(schema["schema_set_id"])
     linked = _linked_state(conn, root_key)
@@ -570,6 +700,8 @@ def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]
     stopped = False
     # Request folders left for a later run because the time budget ran out (reported by the rescan).
     deferred: list[str] = []
+    live_folders: dict[str, dict[str, Any]] | None = None  # read once, only when a rename is possible
+    listings: dict[str, set[str] | None] = {}
     for project_name, project_path in _project_candidates(lister, linked, schema, needs_review):
         if stopped:
             break
@@ -590,6 +722,13 @@ def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]
             continue
         known = _project_requests(linked, project_path)
         all_paths = [path for _, path in candidates]
+        # Unlinked folders per (WR number, environment): a rename is followed only when exactly one exists.
+        same_identity: dict[tuple[str, str | None], list[str]] = {}
+        for other_name, other_path in unlinked:
+            other_key, other_environment, other_code = request_identity(other_name)
+            if (not other_code and wr_number(other_name) and not _is_excluded(other_path, linked["excluded"])
+                    and _live_key(root_key, other_path, schema_set_id, linked["deleted_keys"]) not in linked["keys"]):
+                same_identity.setdefault((other_key, other_environment), []).append(other_path)
         for name, request_path in unlinked:
             folded = request_path.casefold()
             if _is_excluded(request_path, linked["excluded"]):
@@ -604,10 +743,18 @@ def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]
             if key in linked["keys"]:
                 continue
             identity = (wr_key, environment)
+            rename: dict[str, Any] | None = None
             if identity in known:
-                needs_review.append(_review(request_path, "WR_ALREADY_LINKED",
-                                            "같은 의뢰번호·환경의 다른 폴더가 이미 연결되어 있습니다.", environment))
-                continue
+                if wr_number(name) and folded not in pending:
+                    if live_folders is None:
+                        live_folders = _live_request_folders(conn, root_key)
+                    rename = _rename_source(conn, lister, root_key, linked, live_folders, listings, project_path,
+                                            project_targets, identity, request_path, same_identity.get(identity, []))
+                if rename is None or "review" in rename:
+                    needs_review.append(rename["review"] if rename else _review(
+                        request_path, "WR_ALREADY_LINKED", "같은 의뢰번호·환경의 다른 폴더가 이미 연결되어 있습니다.",
+                        environment))
+                    continue
             memo_key = (root_key, folded, environment)
             now = time.monotonic()
             with _state_lock:
@@ -630,9 +777,12 @@ def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]
             link = pending.get(folded)
             request_target = (link["request_id"] if link and link["environment"] == environment
                               and link["project_id"] in project_targets else None)
+            if rename:
+                request_target = rename["request_id"]
             outcome = _register_request(conn, root, root_key, project_name, project_path, siblings,
                                         request_path, environment, project_targets, key, deadline,
-                                        request_target=request_target)
+                                        request_target=request_target,
+                                        supersedes=rename["registration_ids"] if rename else ())
             if outcome.get("deferred"):
                 deferred.append(request_path)
                 stopped = True
@@ -657,7 +807,7 @@ def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]
                 _retry_memo.pop(memo_key, None)
             registered = outcome["registration"]
             project_id, request_id = str(registered["project_id"]), str(registered["request_id"])
-            if request_target:
+            if link and request_target:
                 drop_link(conn, root_key, request_path)
             if outcome["project_created"]:
                 created_projects.append({"id": project_id, "name": project_name})
@@ -666,12 +816,19 @@ def _discover(conn, root, budget_seconds: float | None = None) -> dict[str, Any]
             linked["requests"].add(folded)
             linked["keys"].add(key)
             known.add(identity)
+            if rename:
+                item = {"id": request_id, "name": outcome["request_name"], "environment": environment,
+                        "project_id": project_id, "old_path": rename["old_path"], "new_path": request_path}
+                renamed_requests.append(item)
+                _audit_rename(conn, item, rename["registration_ids"])
+                continue
             created_requests.append({"id": request_id, "name": outcome["request_name"],
                                      "environment": environment, "project_id": project_id,
                                      "linked": bool(request_target)})
     for issue in lister.issues:
         needs_review.append(_review(issue["relative_path"], issue["code"], _ISSUE_REASONS.get(issue["code"], "")))
     return {"created_projects": created_projects, "created_requests": created_requests,
+            "renamed_requests": renamed_requests,
             "needs_review": needs_review, "checked_at": _now_iso(), "coalesced": False,
             "partial": stopped, "attempted": attempts, "deferred": deferred}
 
@@ -751,15 +908,18 @@ def discover(*, force: bool = False, connection_factory=None, fresh: bool = Fals
 
 
 def visible_result(result: dict[str, Any], *, is_global_admin: bool) -> dict[str, Any]:
-    """Folder paths needing review are shown to global administrators only."""
+    """Folder paths (needs review, a followed rename's old/new path) are shown to global administrators only."""
     if is_global_admin:
         return result
-    return {**result, "needs_review": []}
+    renamed = [{key: value for key, value in item.items() if key not in {"old_path", "new_path"}}
+               for item in result.get("renamed_requests") or []]
+    return {**result, "needs_review": [], "renamed_requests": renamed}
 
 
 def audit_detail(result: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps({
         "created_projects": result["created_projects"],
         "created_requests": result["created_requests"],
+        "renamed_requests": result.get("renamed_requests") or [],
         "needs_review_count": len(result["needs_review"]),
     }, ensure_ascii=False))

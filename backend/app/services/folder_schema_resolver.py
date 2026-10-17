@@ -180,6 +180,11 @@ def active_refresh_snapshot(conn: ConnectionLike, root_key: str, project_id: str
     }
 
 
+def snapshot_matches_path(snapshot: dict[str, Any] | None, request_path: str) -> bool:
+    """Whether an active Refresh snapshot was taken of ``request_path`` (not of a renamed folder's old path)."""
+    return bool(snapshot) and _fold(str(snapshot.get("request_relative_path") or "")) == _fold(str(request_path))
+
+
 def _request_path(conn: ConnectionLike, root_key: str, project_id: str, request_id: str,
                   environment: str) -> str:
     request = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [request_id]).fetchone()
@@ -603,6 +608,10 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
         raise FolderSchemaError("FOLDER_SCHEMA_ROOT_MISMATCH", "조사된 저장소가 현재 저장소와 다릅니다.")
     request_path = _request_path(conn, root_key, project_id, request_id, environment)
     active = active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+    if active and not snapshot_matches_path(active, request_path):
+        # The request folder was renamed and re-linked (automatic discovery): the last snapshot
+        # describes the old folder, so the request resolves from its current registration.
+        active = None
     if active and registered_scan_id is None:
         profile_row = conn.execute(
             "SELECT id,environment FROM folder_environment_profiles WHERE id=?",

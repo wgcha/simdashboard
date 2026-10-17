@@ -205,6 +205,12 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 - `_project_candidates`: `MAX_CONTAINER_LEVELS`와 `_PROJECT` 정규식 대신 `upper`로 BFS한다. project_level의 비숨김 폴더는 모두 PROJECT, request_level 폴더는 의뢰 후보다.
 - `request_identity`: 키워드로 환경을 판정한다(D4). WR 키는 의뢰번호만이다(`wr_number`, 2026-10-17 정정): `WR-`/`WR_` 뒤(또는 `WR` 바로 뒤 숫자부터)의 ASCII 영문·숫자만 쓰고, `_`·공백·`]`·한글에서 끝난다 (`[WR-0001]_[유통_환경]` → `0001`, `WR-0000806_사용환경시뮬레이션` → `0000806`, `WR_A1_사용` → `a1`). 앞자리 0은 적힌 그대로 둔다(SPDM 번호를 복사한 값이며 `0806`과 `00806`을 합치지 않는다). WR 번호가 없으면(`WRONG_…` 포함) 폴더명 casefold를 쓴다. 이전 `\w+` 규칙은 한글·`_`까지 삼켜 공백 유무만 다른 폴더의 키가 달랐다. `NAME_NOT_STANDARD`는 `ENV_KEYWORD_*`로 대체한다. `_SIMTYPE` 정규식은 삭제한다(D5).
 - 이탈이 하나라도 있으면 `needs_review: DEPTH_DEVIATION`(첫 코드와 건수)으로 보내고 등록하지 않는다.
+- 같은 프로젝트에 같은 (WR 키, 환경)이 이미 연결되어 있으면 복사본으로 보고 `WR_ALREADY_LINKED`로 보낸다. 단 **이름 바뀐 의뢰 폴더**는 따라간다(사용자 결정 2026-10-17):
+  - 조건: 새 폴더 이름에 WR 번호가 있고, 그 (WR 키, 환경)으로 연결된 기존 폴더가 저장소에서 **확실히 없다**(읽을 수 있는 상위 폴더 목록에 그 이름이 없음 — 목록 실패·한도 초과·드라이브 읽기 미준비는 없음으로 보지 않는다). 그 폴더는 live 폴더 등록(`folder_environment_registry` REQUEST 행)으로만 연결되어 있고(`spdm_storage_request_parents`·구 `folder_discovery_registry` 연결이나 같은 환경의 다른 live 경로가 있으면 제외), 프로젝트 폴더 연결이 같으며, 같은 프로젝트의 미연결 후보 중 같은 (WR 키, 환경)이 **정확히 하나**다. `폴더 구조 만들기` 예약이 있는 폴더는 예약을 따른다.
+  - 동작: 새 폴더를 기존 의뢰에 대한 `LINK` 등록으로 만들고(`_register_request(request_target=…)`), 같은 트랜잭션에서 옛 폴더의 live 등록(그 경로의 REQUEST 행을 가진 등록과, 그 경로 아래를 조사한 재해석 등록)을 `DELETED` 묘비로 바꾼다(`register(supersedes=…)`, `deleted_by=system-folder-discovery`). §13의 삭제와 달리 **행을 지우지 않는다**: 의뢰 id·Case·캡처·확정 이력·드라이브 원본 기록은 그대로다. 옛 경로의 Case는 Case id가 경로에서 정해지므로 결과 화면에서 `HISTORY_ONLY`(기록)로 남고, 새 경로의 Case가 등록 캡처와 다음 동기화로 새로 만들어진다. 옛 경로를 찍은 활성 새로고침 스냅샷은 현재 경로와 다르므로 무시하고(`snapshot_matches_path`), 첫 새로고침처럼 다시 만든다(새 결과 알림 없음).
+  - 결과: `renamed_requests: [{id, name, environment, project_id, old_path, new_path}]`(경로는 전역 관리자에게만), 감사 `FOLDER_REQUEST_FOLDER_RENAMED`(백그라운드 실행에서도 남도록 탐색이 직접 기록). 나중에 새 LINK 등록을 삭제하면 §13.2-5에 따라 묘비가 만든 의뢰·Case도 함께 삭제 대상이 된다(원래 등록 삭제와 같은 범위).
+  - 옛 폴더가 있으면 그대로 `WR_ALREADY_LINKED`. 옛 폴더가 없고 같은 (WR 키, 환경) 새 폴더가 둘 이상(또는 옛 연결이 둘 이상)이면 각 후보를 `RENAME_AMBIGUOUS`로 보낸다. 옛 폴더가 없지만 위 연결 조건을 못 채우면 `WR_ALREADY_LINKED`(자동으로 옮길 수 없다는 사유).
+  - 프로젝트 폴더 이름 변경은 따라가지 않는다(새 프로젝트·새 의뢰로 등록되는 기존 동작 그대로, §12 미확정 참고).
 - `_skip_final_archive`는 제거한다. Final은 §5 규칙으로 역할만 판정하며, 결과 등록 대상에서는 계속 제외한다(D12). 의뢰 판정은 upper의 request_level 기준이다.
 
 ## 9. 결과 판독과의 관계 (변경 없음)
@@ -438,3 +444,4 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 ## 12. 미확정
 
 - `Final/CAD`: 실제 폴더에 존재하며(현재 비어 있음) 앱은 쓰지 않는다. 잠정적으로 FINAL_CAD(하위 CONTENT)로 둔다. 용도와 채우는 주체를 확정해야 한다.
+- 이름 바뀐 의뢰 폴더(§8, 2026-10-17): 옛 경로 Case를 기록(`HISTORY_ONLY`)으로 남길지 숨길지, 새 경로 Case로 합칠지(Case id가 경로 해시라 id 이전이 필요) 결정 필요. 프로젝트 폴더 이름 변경 추적(옛 프로젝트 경로가 없고 새 미연결 프로젝트 폴더의 WR 의뢰들이 그 프로젝트 의뢰와 맞을 때)은 미구현.

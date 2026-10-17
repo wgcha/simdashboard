@@ -271,6 +271,10 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
     root_key = root_identity(root)
     request_path = resolver._request_path(conn, root_key, project_id, request_id, environment)
     previous = resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+    if previous and not resolver.snapshot_matches_path(previous, request_path):
+        # The request folder was renamed and re-linked: refresh as the first refresh after its
+        # registration (no diff against the old folder, no "new results" notification for it).
+        previous = None
     reinterpreted = _newer_depth_registration(conn, root_key, project_id, request_id, environment, previous)
     if reinterpreted:
         # D9: a registration made with a different DEPTH_V1 profile after the
@@ -1466,6 +1470,8 @@ def _registration_location_projection(conn, root, project_id: str, request_id: s
         registered_scan_id=scan_id,
     )
     active = resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+    if not resolver.snapshot_matches_path(active, str(registered_schema.get("request_relative_path") or "")):
+        active = None  # a snapshot of a renamed request folder's old path carries no roles here
     if (active and str(active["profile_id"]) == str(registered_schema["profile"]["id"])
             and int(active["profile_revision"]) == int(registered_schema["profile"]["revision"])):
         active_schema = resolver.resolve_request_schema(conn, root, root_key, project_id, request_id, environment)
@@ -1528,7 +1534,12 @@ def _registration_location_projection(conn, root, project_id: str, request_id: s
     )
 
 
-def register(conn, preview_id, idempotency_key, capture, principal, root, *, creator_membership=True):
+def register(conn, preview_id, idempotency_key, capture, principal, root, *, creator_membership=True,
+             supersedes=()):
+    """Register a preview; ``supersedes`` (automatic discovery, a renamed request folder) lists live
+    registrations of the same project/request/environment that become ``DELETED`` tombstones in the
+    same transaction. Only the registration rows change: no Case, capture or other data is deleted.
+    """
     actor = principal.user_id
     existing = conn.execute("SELECT id,preview_id FROM folder_environment_registrations WHERE idempotency_key=?", [idempotency_key]).fetchone()
     if existing:
@@ -1597,6 +1608,7 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
         request_id = scan_row[4] or next((r.get("target_id") for r in plan_rows if r["role_kind"] == "REQUEST"), None)
         if not project_id or not request_id: legacy.fail("ENVIRONMENT_CONTEXT_REQUIRED", "프로젝트와 의뢰 연결을 확인하세요.")
         conn.execute("INSERT INTO folder_environment_registrations(id,preview_id,idempotency_key,environment,project_id,request_id,status,created_by,created_at,created_targets) VALUES(?,?,?,?,?,?,?,?,?,?)", [registration_id, preview_id, idempotency_key, scan_row[2], project_id, request_id, "REGISTERED", actor, now(), json.dumps(created_targets)])
+        _supersede(conn, supersedes, project_id, request_id, scan_row[2], actor)
         for row in plan_rows:
             if row["role_kind"] in {"EVALUATION", "SCENE"}:
                 continue
@@ -1657,6 +1669,22 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
                     conn.execute("ROLLBACK")
                     raise
     return registration(conn, registration_id)
+
+
+def _supersede(conn, registration_ids, project_id, request_id, environment, actor) -> None:
+    """Tombstone the registrations a renamed request folder replaces (inside the caller's transaction).
+
+    Each one must still be live and belong to the same project/request/environment, otherwise the
+    whole registration is refused (409 ``ENVIRONMENT_SUPERSEDE_STALE``) and rolled back.
+    """
+    for old_id in dict.fromkeys(str(item) for item in registration_ids or ()):
+        row = conn.execute("SELECT project_id,request_id,environment,status FROM folder_environment_registrations WHERE id=?",
+                           [old_id]).fetchone()
+        if (not row or (str(row[0]), str(row[1]), str(row[2])) != (str(project_id), str(request_id), str(environment))
+                or str(row[3]) == "DELETED"):
+            legacy.fail("ENVIRONMENT_SUPERSEDE_STALE", "이전 폴더 등록이 이미 바뀌었습니다. 다음 확인에서 다시 판단합니다.")
+        conn.execute("UPDATE folder_environment_registrations SET status='DELETED',deleted_at=?,deleted_by=? WHERE id=?",
+                     [now(), actor, old_id])
 
 
 def _check_single_request(saved_preview: dict, *, seeded_request: bool) -> None:
