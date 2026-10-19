@@ -293,6 +293,12 @@ def resolve_request_folder(session: reads.DriveReadSession, request_path: str) -
                 return []
             raise
 
+    try:
+        reads.listing(session.spdm_root, request_path)   # also the first listing of the walk: cached, no extra call
+        return request_path, False   # the registered spelling exists: nothing to resolve (the common case)
+    except SpdmStorageError as error:
+        if error.code != "SPDM_NOT_FOUND":
+            raise
     actual, ambiguous = reads.resolve_spelling(request_path, children)
     return (actual or request_path), ambiguous
 
