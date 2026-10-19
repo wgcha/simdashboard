@@ -1397,7 +1397,7 @@ def _derive_request_project(conn, saved, nodes):
         return None, mismatch
     root_key = saved["root_key"]
     from . import folder_auto_discovery  # local: auto-discovery imports this module
-    linked = folder_auto_discovery._linked_state(conn, root_key)["projects"].get(project_path.casefold(), set())
+    linked = folder_auto_discovery._linked_state(conn, root_key)["projects"].get(drive_reads.path_key(project_path), set())
     if len(linked) > 1:
         return None, ("PROJECT_AMBIGUOUS", "프로젝트 폴더가 여러 프로젝트에 연결되어 있습니다. 기존 업무 연결에서 프로젝트를 선택하세요.")
     row = {"id": stable("environment-node", root_key, project_path, "NODE"), "relative_path": project_path,

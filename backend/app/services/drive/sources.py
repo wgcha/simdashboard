@@ -33,6 +33,7 @@ step is a short connection of its own.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
@@ -44,6 +45,7 @@ from . import reads
 from .. import notifications
 from .reads import Accepted, Version, epoch_us, normal_sha1, version_of
 
+_logger = logging.getLogger(__name__)
 AUTO_ACTOR = "auto-sync"
 MAX_SCOPE_FILES = 50_000
 # Same set as folder_discovery_scan.RESULT_RELEVANT_EXTENSIONS (results, media, decks, reports).
@@ -246,16 +248,53 @@ def _walk_scope(session: reads.DriveReadSession, request_path: str) -> tuple[dic
     return files, skipped
 
 
-def _scope_rows(conn: ConnectionLike, root_key: str, request_path: str) -> dict[str, dict[str, Any]]:
+def _scope_rows(conn: ConnectionLike, root_key: str, request_path: str, *, stored_path: str | None = None,
+                scope_ids: tuple[str, str] | None = None) -> dict[str, dict[str, Any]]:
+    """Current rows below the request folder.
+
+    Folder names are compared by :func:`reads.path_key` (spaces carry no meaning), so rows registered under
+    another spelling of the request folder (``stored_path``, or any spelling of a row labelled with
+    ``scope_ids``) belong to the same scope; the caller re-spells them to the actual path.
+    """
     prefix = request_path.rstrip("/") + "/"
     found = rows(conn.execute(
         f"SELECT {_COLUMNS} FROM drive_source_versions WHERE root_key=? AND superseded_at IS NULL "
-        "AND substr(rel_path,1,?)=?", [root_key, len(prefix), prefix]))
-    return {str(row["rel_path"]): row for row in found}
+        "AND (substr(rel_path,1,?)=? OR (project_id=? AND request_id=?) OR substr(rel_path,1,?)=?)",
+        [root_key, len(prefix), prefix, scope_ids[0] if scope_ids else None, scope_ids[1] if scope_ids else None,
+         len(stored_path.rstrip("/")) + 1 if stored_path else len(prefix),
+         (stored_path.rstrip("/") + "/") if stored_path else prefix]))
+    wanted = reads.path_key(request_path) + "/"
+    return {str(row["rel_path"]): row for row in found if reads.path_key(str(row["rel_path"]) + "/").startswith(wanted)}
+
+
+def _under_stored(rel: str, stored_path: str) -> bool:
+    return reads.path_key(rel + "/").startswith(reads.path_key(stored_path) + "/")
 
 
 def _below_any(rel: str, prefixes: list[str]) -> bool:
-    return any(rel == prefix or rel.startswith(prefix.rstrip("/") + "/") for prefix in prefixes)
+    key = reads.path_key(rel)
+    return any(key == reads.path_key(prefix) or key.startswith(reads.path_key(prefix).rstrip("/") + "/")
+               for prefix in prefixes)
+
+
+def resolve_request_folder(session: reads.DriveReadSession, request_path: str) -> tuple[str, bool]:
+    """(actual spelling of the registered request folder on the drive, ambiguous).
+
+    The stored path is resolved segment by segment against the drive listings with
+    :func:`reads.name_key`; exactly one entry per segment decides.  Two entries that differ only by
+    whitespace are ``ambiguous`` and the stored path is kept (the old behaviour).  A folder that is
+    gone keeps the stored path too (its files are MISSING as before).
+    """
+    def children(parent: str) -> list[str] | None:
+        try:
+            return [str(entry.name) for entry in reads.listing(session.spdm_root, parent) if entry.kind == "dir"]
+        except SpdmStorageError as error:
+            if error.code == "SPDM_NOT_FOUND":
+                return []
+            raise
+
+    actual, ambiguous = reads.resolve_spelling(request_path, children)
+    return (actual or request_path), ambiguous
 
 
 def classify_request(session: reads.DriveReadSession, project_id: str, request_id: str, environment: str,
@@ -271,15 +310,35 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
         raise RuntimeError("classification must run without an open database connection")
     with connect() as conn:
         request_path = _request_path(conn, session.root_key, project_id, request_id, environment)
+    stored_path = request_path
+    request_path, path_ambiguous = resolve_request_folder(session, stored_path)
     session.scope = request_path
     session.scope_ids = (str(project_id), str(request_id))
     files, skipped = _walk_scope(session, request_path)
     with connect() as conn:
-        registered = _scope_rows(conn, session.root_key, request_path)
+        registered = _scope_rows(conn, session.root_key, request_path, stored_path=stored_path,
+                                 scope_ids=(str(project_id), str(request_id)))
+    # Rows registered under another spelling of a folder (spaces added/removed on the drive) are the same
+    # files: re-spelled to the listed path (id, version_no history and content are kept), not MISSING.
+    respelled: dict[str, str] = {}
+    twins: list[str] = []
+    by_key: dict[str, list[str]] = {}
+    for listed in files:
+        by_key.setdefault(reads.path_key(listed), []).append(listed)
+    for rel in list(registered):
+        if rel in files:
+            continue
+        candidates = by_key.get(reads.path_key(rel), [])
+        if len(candidates) == 1 and candidates[0] not in registered:
+            respelled[rel] = candidates[0]
+        elif len(candidates) == 1:
+            twins.append(str(registered.pop(rel)["id"]))   # both spellings are registered: the listed one wins
+    registered = {respelled.get(rel, rel): row for rel, row in registered.items()}
 
     now = _now()
     inserts: list[tuple[str, Version]] = []
     updates: list[tuple[str, dict[str, Any]]] = []
+    renames = {str(registered[new]["id"]): new for new in respelled.values()}
     for rel, entry in sorted(files.items()):
         live = version_of(entry)
         row = registered.get(rel)
@@ -320,21 +379,32 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
             "pending_item_id": live.item_id, "pending_detected_at": now, "last_checked_at": now,
         }))
     for rel, row in registered.items():
-        if rel in files or _below_any(rel, skipped) or row["source_state"] == "MISSING":
+        if rel in files or _below_any(rel, skipped) or row["source_state"] == "MISSING" or (
+                path_ambiguous and _under_stored(rel, stored_path)):
             continue
         updates.append((str(row["id"]), {"source_state": "MISSING", "last_checked_at": now}))
 
     newly_pending = any(fields.get("review_state") == "PENDING" for _row_id, fields in updates)
     newly_missing = any(fields.get("source_state") == "MISSING" for _row_id, fields in updates)
+    if path_ambiguous:
+        _logger.warning("Drive request folder name is ambiguous (names differ only by whitespace); "
+                        "the registered spelling is kept project_id=%s request_id=%s", project_id, request_id)
     with connect() as conn:
         relabel = bool(conn.execute(
             "SELECT 1 FROM drive_source_versions WHERE root_key=? AND superseded_at IS NULL AND substr(rel_path,1,?)=? "
             "AND (project_id IS NULL OR request_id IS NULL OR project_id<>? OR request_id<>?) LIMIT 1",
             [session.root_key, len(request_path) + 1, request_path.rstrip("/") + "/", project_id, request_id]).fetchone())
-    if inserts or updates or relabel:
+    if inserts or updates or relabel or renames or twins:
         with connect() as conn:
             conn.execute("BEGIN TRANSACTION")
             try:
+                for row_id in twins:
+                    conn.execute("UPDATE drive_source_versions SET superseded_at=? WHERE id=? AND superseded_at IS NULL",
+                                 [now, row_id])
+                for row_id, new_rel in renames.items():
+                    # One spelling per file: the version history of the new spelling (if any) continues.
+                    conn.execute("UPDATE drive_source_versions SET rel_path=?,version_no=? WHERE id=?",
+                                 [new_rel, _next_version_no(conn, session.root_key, new_rel), row_id])
                 for rel, live in inserts:
                     _insert(conn, session.root_key, rel, live, scope_ids=session.scope_ids, actor=AUTO_ACTOR)
                 for row_id, fields in updates:
@@ -359,7 +429,8 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
                 raise
         reads.load_overlay(session)
     kinds = {version_of(entry).kind for entry in files.values()}
-    return {"files": len(files), "new": len(inserts), "token_kind": (kinds.pop() if len(kinds) == 1 else ("mixed" if kinds else None))}
+    return {"files": len(files), "new": len(inserts), "respelled": len(renames), "path_ambiguous": path_ambiguous,
+            "token_kind": (kinds.pop() if len(kinds) == 1 else ("mixed" if kinds else None))}
 
 
 # --- pending changes API (05 §4) --------------------------------------------------------------

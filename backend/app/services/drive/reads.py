@@ -63,7 +63,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterator, TypeVar
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 
 from ...database_connection import connect, connection_held
 from ..storage import server_local
@@ -549,6 +549,50 @@ _spelling_lock = threading.Lock()
 
 def nfc(name: str) -> str:
     return unicodedata.normalize("NFC", str(name))
+
+
+def name_key(name: str) -> str:
+    """Identity of a folder/file name: NFC + casefold + no whitespace at all.
+
+    User rule (2026-10-19): spaces carry no meaning in SPDM folder names, only ``_`` separates parts, so
+    ``PROJ-000099_R95J 개발 과제`` and ``PROJ-000099_R95J개발과제`` are the same folder.  Every comparison of
+    a registered path with a storage listing goes through this key (never ``casefold`` alone).
+    """
+    return "".join(unicodedata.normalize("NFC", str(name)).casefold().split())
+
+
+def path_key(path: str) -> str:
+    """:func:`name_key` of every ``/`` segment (empty segments dropped)."""
+    return "/".join(name_key(part) for part in str(path).split("/") if part)
+
+
+def resolve_spelling(path: str, children: Callable[[str], Iterable[str] | None]) -> tuple[str | None, bool]:
+    """The actual spelling of the stored ``path``, segment by segment (whitespace-insensitive).
+
+    ``children(parent)`` returns the names listed in ``parent`` (``None`` when the listing failed).
+    Returns ``(actual, ambiguous)``: ``actual`` is ``None`` when a segment is missing or could not be
+    listed; ``ambiguous`` is true when two entries of one parent share the segment's key (the caller keeps
+    its old behaviour and reports).  An exact spelling always wins over a key match.
+    """
+    parent = ""
+    resolved: list[str] = []
+    for part in [item for item in str(path).split("/") if item]:
+        names = children(parent)
+        if names is None:
+            return None, False
+        names = list(names)
+        if part in names:
+            actual = part   # the stored spelling still exists: nothing to resolve
+        else:
+            matches = [name for name in names if name_key(name) == name_key(part)]
+            if len(matches) > 1:
+                return None, True   # two entries differ only by whitespace: never guess
+            if not matches:
+                return None, False
+            actual = matches[0]
+        resolved.append(actual)
+        parent = "/".join(resolved)
+    return "/".join(resolved), False
 
 
 class _NfcEntry:

@@ -20,7 +20,7 @@ PROJECT = f"{CONTAINER}/75R9J_PV"
 WR2 = f"{PROJECT}/[WR-0002]_[유통_환경]"
 CASE_PATH = "Working/Package_Model_SetCase3_CushionCase1/Drop/85qn80h_ref_organized/INDIVIDUAL"
 FINAL_ID = "0bb7b4f6567f4ce985bba010c7f569e7"
-SYNTHETIC_PROJECT_NAMES = {"75r9j_pv", "77777_pv", "proj-000099_r95j 개발 과제", "proj-000099_r95j개발과제",
+SYNTHETIC_PROJECT_NAMES = {"75r9j_pv", "77777_pv", "proj-000099_r95j 개발 과제", "proj-000099_r95j개발과제", "proj-000099_r95j_개발과제",
                            "proj-000099_r95j_copy", "other_pv"}
 AUTO_DISCOVERED_AUDITS = "SELECT count(*) FROM audit_events WHERE action='FOLDER_ENVIRONMENT_AUTO_DISCOVERED'"
 
@@ -172,7 +172,7 @@ def test_request_names_map_by_keyword_and_wr_key():
     assert folder_auto_discovery.wr_number("WR-_유통") is None and folder_auto_discovery.wr_number(None) is None
     assert identity("[WR-0003]_[기타]") == ("0003", None, "ENV_KEYWORD_NONE")
     assert identity("[WR-0003]_[사용_유통]") == ("0003", None, "ENV_KEYWORD_BOTH")
-    assert identity("Request 유통") == ("request 유통", "DISTRIBUTION", None)
+    assert identity("Request 유통") == ("request유통", "DISTRIBUTION", None)  # whitespace carries no meaning
     assert folder_auto_discovery.request_environment("WR_A1_SimType2") is None  # D5: no SimType rule
 
 
@@ -667,7 +667,8 @@ def test_rescan_requires_global_administrator(admin_client, inline_rescan, monke
 # --- renamed request folder (user decision 2026-10-17) ---------------------------------------------
 
 SPACED = f"{PROJECT}/WR-0000806_유통 환경 시뮬레이션"
-JOINED = f"{PROJECT}/WR-0000806_유통환경시뮬레이션"
+JOINED = f"{PROJECT}/WR-0000806_유통환경시뮬레이션"  # whitespace-only difference: the same folder
+RENAMED = f"{PROJECT}/WR-0000806_유통_환경_시뮬레이션"  # a real rename: paired by WR number
 RENAMED_AUDITS = "SELECT count(*) FROM audit_events WHERE action='FOLDER_REQUEST_FOLDER_RENAMED'"
 
 
@@ -751,18 +752,18 @@ def test_renamed_request_folder_with_two_candidates_needs_review(admin_client):
     client, root = admin_client
     project_id, request_id = _registered_request(client, root)
     requests_before = _count("SELECT count(*) FROM analysis_requests")
-    (root / SPACED).rename(root / JOINED)
-    (root / f"{JOINED}_v2" / "Working").mkdir(parents=True)
+    (root / SPACED).rename(root / RENAMED)
+    (root / f"{RENAMED}_v2" / "Working").mkdir(parents=True)
     result = _discover(client)
     assert result["created_requests"] == [] and result["renamed_requests"] == []
     codes = {item["relative_path"]: item["code"] for item in result["needs_review"]}
-    assert codes == {JOINED: "RENAME_AMBIGUOUS", f"{JOINED}_v2": "RENAME_AMBIGUOUS"}
+    assert codes == {RENAMED: "RENAME_AMBIGUOUS", f"{RENAMED}_v2": "RENAME_AMBIGUOUS"}
     assert "여러 개" in result["needs_review"][0]["reason"]
     assert _count("SELECT count(*) FROM analysis_requests") == requests_before
     assert [row[1] for row in _request_rows(request_id)] != ["DELETED"]  # still linked to the old folder
     # Once one candidate is gone the rename is followed.
-    (root / f"{JOINED}_v2" / "Working").rmdir()
-    (root / f"{JOINED}_v2").rmdir()
+    (root / f"{RENAMED}_v2" / "Working").rmdir()
+    (root / f"{RENAMED}_v2").rmdir()
     folder_auto_discovery.reset_for_tests()
     assert [item["id"] for item in _discover(client)["renamed_requests"]] == [request_id]
 
@@ -770,10 +771,10 @@ def test_renamed_request_folder_with_two_candidates_needs_review(admin_client):
 def test_copy_of_an_existing_request_folder_is_still_not_registered(admin_client):
     client, root = admin_client
     _project_id, request_id = _registered_request(client, root)
-    (root / JOINED / "Working").mkdir(parents=True)  # a copy: the registered folder still exists
+    (root / RENAMED / "Working").mkdir(parents=True)  # a copy: the registered folder still exists
     result = _discover(client)
     assert result["created_requests"] == [] and result["renamed_requests"] == []
-    assert [(item["relative_path"], item["code"]) for item in result["needs_review"]] == [(JOINED, "WR_ALREADY_LINKED")]
+    assert [(item["relative_path"], item["code"]) for item in result["needs_review"]] == [(RENAMED, "WR_ALREADY_LINKED")]
     assert [row[1] for row in _request_rows(request_id)] != ["DELETED"]
 
 
@@ -802,7 +803,8 @@ def test_unreadable_listing_is_never_taken_as_a_rename():
 # --- renamed project folder (user decision 2026-10-17) ---------------------------------------------
 
 OLD_PROJECT = f"{CONTAINER}/PROJ-000099_R95J 개발 과제"
-NEW_PROJECT = f"{CONTAINER}/PROJ-000099_R95J개발과제"
+NEW_PROJECT = f"{CONTAINER}/PROJ-000099_R95J_개발과제"  # not whitespace-only: paired by WR number
+JOINED_PROJECT = f"{CONTAINER}/PROJ-000099_R95J개발과제"  # whitespace-only: the same folder (name_key)
 R1, R2, R3 = "WR-0000991_유통 환경 시뮬레이션", "[WR-0000992]_[사용_환경]", "WR-0000993_유통 환경"
 PROJECT_RENAMED_AUDITS = "SELECT count(*) FROM audit_events WHERE action='FOLDER_PROJECT_FOLDER_RENAMED'"
 
@@ -880,7 +882,7 @@ def test_renamed_project_folder_keeps_the_project_and_follows_its_requests(admin
     # The new project folder is linked to the same project (makes later runs idempotent).
     with connect() as conn:
         linked = folder_auto_discovery._linked_state(conn, _root_key(root))
-    assert linked["projects"][NEW_PROJECT.casefold()] == {project_id}
+    assert linked["projects"][folder_auto_discovery._node_key(NEW_PROJECT)] == {project_id}
     assert (_count(PROJECT_RENAMED_AUDITS), _count(RENAMED_AUDITS)) == (audits[0] + 1, audits[1] + 2)
     folder_auto_discovery.reset_for_tests()
     again = _discover(client)
@@ -976,6 +978,6 @@ def test_present_old_project_folder_is_not_taken_as_a_rename(admin_client):
     (root / NEW_PROJECT / R1 / "Working").mkdir(parents=True)
     result = _discover(client)
     assert result["renamed_projects"] == [] and result["renamed_requests"] == []
-    assert [item["name"] for item in result["created_projects"]] == ["PROJ-000099_R95J개발과제"]
+    assert [item["name"] for item in result["created_projects"]] == ["PROJ-000099_R95J_개발과제"]
     for request_id in requests.values():
         assert "DELETED" not in _live_statuses(request_id)

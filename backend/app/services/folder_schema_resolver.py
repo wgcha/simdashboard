@@ -36,6 +36,7 @@ class FolderSchemaError(ValueError):
         self.issues = list(issues or [])
         super().__init__(message)
 from .folder_schema_locations import resolve_request_locations as resolve_request_locations  # re-exported
+from .drive import reads as drive_reads
 from .storage import provider_for_root
 
 
@@ -56,7 +57,8 @@ def _normal(value: Any, *, allow_root: bool = False) -> str:
 
 
 def _fold(value: str) -> str:
-    return "/".join(part.casefold() for part in PurePosixPath(value).parts)
+    """Comparison key of a folder path: NFC + casefold + no whitespace per segment (``reads.name_key``)."""
+    return "/".join(drive_reads.name_key(part) for part in PurePosixPath(value).parts)
 
 
 def _is_ancestor(path: str, descendant: str) -> bool:
@@ -180,9 +182,16 @@ def active_refresh_snapshot(conn: ConnectionLike, root_key: str, project_id: str
     }
 
 
+def _spelling(value: str) -> str:
+    return "/".join(drive_reads.nfc(part).casefold() for part in PurePosixPath(value).parts)
+
+
 def snapshot_matches_path(snapshot: dict[str, Any] | None, request_path: str) -> bool:
     """Whether an active Refresh snapshot was taken of ``request_path`` (not of a renamed folder's old path)."""
-    return bool(snapshot) and _fold(str(snapshot.get("request_relative_path") or "")) == _fold(str(request_path))
+    # Spelling counts here (NFC + case only): a snapshot holds node paths in the spelling it was taken at,
+    # so one taken before the folder was respaced (spaces added/removed) is stale; the next sync takes a
+    # new snapshot at the actual path.  Folder identity elsewhere is :func:`_fold` (no whitespace).
+    return bool(snapshot) and _spelling(str(snapshot.get("request_relative_path") or "")) == _spelling(str(request_path))
 
 
 def _request_path(conn: ConnectionLike, root_key: str, project_id: str, request_id: str,
