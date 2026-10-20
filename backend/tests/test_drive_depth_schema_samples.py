@@ -111,3 +111,16 @@ def test_check_is_bounded_too_and_never_reads_with_a_connection(scx, monkeypatch
 def profiles_connection():
     from app.database_connection import connect
     return connect()
+
+
+def test_run_option_names_reuse_the_sampled_listings_when_the_budget_is_spent(scx, monkeypatch):
+    """Issue #55: "runoption 폴더가 없습니다" while the scenes below were sampled -- the RUN_OPTION name walk
+    re-listed every folder and found the budget already spent by the sample walk.  Listings are now reused."""
+    _container_schema()
+    _wide_tree(scx, 10, 6)
+    # About what the sample walk alone needs (root, container, 10 projects, 20 requests x 6 folders).
+    monkeypatch.setattr(profiles, "SAMPLE_BUDGET_LISTINGS", 132)
+    body = scx.post(SAMPLES, {"segment": "DISTRIBUTION"})
+    assert body["levels"], body
+    [entry] = body["run_option_names"]
+    assert entry["name"] == "Scene" and entry["request_count"] >= 20, body["run_option_names"]

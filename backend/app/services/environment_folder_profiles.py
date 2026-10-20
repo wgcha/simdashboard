@@ -693,13 +693,22 @@ def _lister(root, *, seconds=None, max_listings=None):
             self.max_listings = max_listings if max_listings is not None else float("inf")
             self.listings = 0
             self.stopped = False
+            # A folder listed once is served again for free, also after the budget ran out: the
+            # RUN_OPTION name walk re-visits the folders the sample walk already listed (issue #55:
+            # "runoption 폴더가 없습니다" while the scenes below were sampled).
+            self.cache: dict[str, list] = {}
 
         def children(self, relative):
+            key = relative or ""
+            if key in self.cache:
+                return list(self.cache[key])
             if self.listings >= self.max_listings or time.monotonic() > self.deadline:
                 self.stopped = True
                 return []
             self.listings += 1
-            return super().children(relative)
+            found = super().children(relative)
+            self.cache[key] = list(found)
+            return found
 
     return _Budgeted()
 

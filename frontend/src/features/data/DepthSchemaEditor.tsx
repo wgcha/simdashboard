@@ -170,7 +170,7 @@ export function DepthSchemaEditor({ onSaved }: { onSaved?: (schema: DepthSchema)
               return <tr key={row.level} className={row.inSchema ? '' : 'depth-schema-content'}>
                 <td>L{row.level}</td>
                 <td>{locked ? <span>Working <small className="depth-schema-muted">(이름 고정)</small></span> : isRunOption
-                  ? <div className="depth-schema-runoptions" aria-label="Run Option 이름 전체 목록">{runOptions.length ? <table><thead><tr><th scope="col">이름</th><th scope="col">폴더 수</th><th scope="col">의뢰 수</th></tr></thead><tbody>{runOptions.map((item) => <tr key={item.name}><td>{item.name}</td><td>{item.count}</td><td>{item.request_count}</td></tr>)}</tbody></table> : <span className="depth-schema-muted">{loadingSamples ? '불러오는 중…' : '발견된 Run Option 폴더가 없습니다.'}</span>}{current?.run_option_names_truncated ? <small>목록이 500개에서 잘렸습니다.</small> : null}</div>
+                  ? <div className="depth-schema-runoptions" aria-label="Run Option 이름 전체 목록">{runOptions.length ? <table><thead><tr><th scope="col">이름</th><th scope="col">폴더 수</th><th scope="col">의뢰 수</th></tr></thead><tbody>{runOptions.map((item) => <tr key={item.name}><td>{item.name}</td><td>{item.count}</td><td>{item.request_count}</td></tr>)}</tbody></table> : <span className="depth-schema-muted">{loadingSamples ? '불러오는 중…' : current?.partial ? '조회 한도로 일부만 확인해 Run Option 폴더를 찾지 못했습니다. 다시 조사하세요.' : '발견된 Run Option 폴더가 없습니다.'}</span>}{current?.run_option_names_truncated ? <small>목록이 500개에서 잘렸습니다.</small> : null}</div>
                   : <SampleCell sample={row.sample} />}</td>
                 <td>{row.sample?.folder_count ?? '—'}</td>
                 <td>{editable
