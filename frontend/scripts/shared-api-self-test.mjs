@@ -3,7 +3,9 @@ import { formatServerTime, noteServerClock, parseServerTime, relativeServerTime,
 import { folderProgressPath, folderProgressStatusLabel, normalizeFolderProgress } from '../src/shared/api/folderProgress.ts'
 import { folderDefaultEnvironment, keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
 import { chunkRanges, depthRules, dropEntries, dropGuide, entryRelativePath, formatBytes as dropBytes, pickedFromInput, walkEntries } from '../src/shared/api/resultDropModel.ts'
-import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, setDepthRole, sumDeleteCounts, validateLowerLevels, validateUpperLevels } from '../src/shared/api/depthSchemaModel.ts'
+import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, rescanLine, setDepthRole, sumDeleteCounts, validateLowerLevels, validateUpperLevels } from '../src/shared/api/depthSchemaModel.ts'
+import { clearExclusions, descendants, effectivelyExcluded, excludedPaths, excludeReviewNodes, excludeSubtree, exclusionCount, includeSubtree, reviewNodes } from '../src/shared/api/folderExclusionModel.ts'
+import { timeoutGuard } from '../src/shared/api/requestTimeout.ts'
 import { normalizePhysicsAiLink, physicsAiNavHref, PHYSICSAI_LINK_OFF } from '../src/shared/api/physicsaiLinkModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
@@ -168,5 +170,53 @@ assert(physicsAiNavHref(PHYSICSAI_LINK_OFF, true) === null, 'flag off must hide 
 assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: false, base_path: '/physicsai/' }), true) === null, 'server flag off must hide the sidebar link')
 assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: true, base_path: '/physicsai/' }), true) === '/physicsai/', 'flag on must show the sidebar link at /physicsai/')
 assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: true, base_path: '/physicsai/' }), false) === null, 'signed-out sidebar must hide the link')
+
+// Structure review bulk exclusion (issue #55): "확인 필요" nodes are excluded in one action, a folder together with its subtree.
+const tree = [
+  { id: 'root', relative_path: '', status: 'CONFIRMED' },
+  { id: 'p', relative_path: 'P', status: 'CONFIRMED' },
+  { id: 'r1', relative_path: 'P/R1', status: 'UNRESOLVED' },
+  { id: 'r1w', relative_path: 'P/R1/Working', status: 'UNRESOLVED' },
+  { id: 'r1x', relative_path: 'P/R1/Working/X', status: 'CONFIRMED', deviation: { code: 'FINAL_VERSION_INVALID' } },
+  { id: 'r2', relative_path: 'P/R2', status: 'CONFIRMED' },
+  { id: 'r2x', relative_path: 'P/R2/Odd', status: 'ERROR' },
+  { id: 'r10', relative_path: 'P/R10', status: 'CONFIRMED' },
+]
+assert(reviewNodes(tree, {}).map((node) => node.id).join() === 'r1,r1w,r1x,r2x', 'review nodes are the unresolved / error / deviating ones')
+const allExcluded = excludeReviewNodes(tree, {})
+assert(exclusionCount(allExcluded) === 4 && allExcluded.r1.role_kind === 'EXCLUDE' && allExcluded.r1.target_mode === 'CREATE' && allExcluded.r1.confirm === true && allExcluded.r1.propagate_same_level === false, 'bulk exclusion creates EXCLUDE assignments')
+assert(reviewNodes(tree, allExcluded).length === 0, 'nothing is left to review after the bulk exclusion')
+assert(JSON.stringify(excludeReviewNodes(tree, allExcluded)) === JSON.stringify(allExcluded), 'bulk exclusion is idempotent')
+const keepLink = { r2: { node_id: 'r2', role_kind: 'REQUEST', target_mode: 'LINK', target_id: 'req-1', confirm: true, propagate_same_level: false } }
+assert(clearExclusions({ ...allExcluded, ...keepLink }).r2.target_mode === 'LINK' && exclusionCount(clearExclusions({ ...allExcluded, ...keepLink })) === 0, '선택 해제 keeps project/request links')
+const subtree = excludeSubtree(tree, {}, tree[2])
+assert(exclusionCount(subtree) === 1 && subtree.r1, 'a subtree exclusion is one assignment (the server cascades)')
+assert(excludedPaths(tree, subtree).join() === 'P/R1' && effectivelyExcluded(tree[3], subtree, ['P/R1']) && effectivelyExcluded(tree[4], subtree, ['P/R1']), 'descendants count as excluded')
+assert(!effectivelyExcluded(tree[7], subtree, ['P/R1']) && !effectivelyExcluded(tree[5], subtree, ['P/R1']), 'siblings with a common name prefix are not excluded')
+assert(reviewNodes(tree, subtree).map((node) => node.id).join() === 'r2x', 'excluding a folder removes its descendants from the review list')
+assert(descendants(tree, tree[2]).map((node) => node.id).join() === 'r1w,r1x', 'descendants by path')
+assert(exclusionCount(includeSubtree(tree, excludeReviewNodes(tree, {}), tree[2])) === 1, 'un-excluding a folder also drops explicit exclusions below it')
+assert(exclusionCount(excludeSubtree(tree, {}, tree[0])) === tree.length, 'the scan root lists its descendants explicitly (no path prefix to cascade on)')
+
+// Reads of the depth-schema editor never wait forever (issue #55): a deadline aborts, a caller abort is not a timeout.
+const slow = timeoutGuard(undefined, 20)
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert(slow.signal.aborted && slow.timedOut(), 'the deadline aborts the request')
+slow.dispose()
+const parent = new AbortController()
+const linked = timeoutGuard(parent.signal, 5000)
+parent.abort()
+assert(linked.signal.aborted && !linked.timedOut(), 'a caller abort passes through and is not reported as a timeout')
+linked.dispose()
+const quick = timeoutGuard(undefined, 20)
+quick.dispose()
+await new Promise((resolve) => setTimeout(resolve, 60))
+assert(!quick.signal.aborted, 'a finished request is not aborted later')
+
+// [저장 폴더 새로고침] started from the depth-schema editor.
+assert(rescanLine({ status: 'RUNNING', phase: 'SYNC', progress: { done: 2, total: 9 } }) === '저장 폴더 확인 중 · 의뢰 2/9', 'sync progress line')
+assert(rescanLine({ status: 'RUNNING', phase: 'DISCOVER', created_requests: [1, 2] }) === '저장 폴더 확인 중 · 새 폴더 2개', 'discover progress line')
+assert(rescanLine({ status: 'DONE', progress: { done: 9, total: 9 }, refreshed: 7, needs_review: [], failed: [], partial: true }).includes('한 번 더'), 'partial result asks for another run')
+assert(rescanLine({ status: 'FAILED', error: '실패' }) === '실패' && rescanLine(null) === '' && rescanLine({ status: 'IDLE' }) === '', 'failed / idle lines')
 
 console.log('Shared API self-test passed.')

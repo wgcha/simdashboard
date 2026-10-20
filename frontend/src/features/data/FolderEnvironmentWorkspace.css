@@ -160,3 +160,7 @@
 .folder-cleanup-forced code{word-break:break-all}
 .folder-cleanup-acknowledge-item label{display:grid;gap:4px}
 .folder-cleanup-acknowledge-item input{max-width:420px}
+.folder-review-bulk{display:flex;flex-wrap:wrap;gap:8px}
+.folder-node-subtree{justify-self:start}
+.depth-schema-apply{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.depth-schema-apply>span{flex:1 1 320px}

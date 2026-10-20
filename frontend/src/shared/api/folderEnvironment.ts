@@ -2,6 +2,7 @@ import { apiFetch } from './auth'
 import { apiClient, unwrapGenerated } from './client'
 import { apiErrorFromResponse } from './errors'
 import { apiUrl } from './url'
+import { timeoutGuard, timeoutMessage } from './requestTimeout'
 
 export type FolderEnvironment = 'USAGE' | 'DISTRIBUTION'
 /** EVALUATION, INPUT and RESULTS are legacy (pre DEPTH_V1) roles kept only for reading old snapshots. */
@@ -101,8 +102,8 @@ export type DepthSchemaEnvironmentsInput = Record<FolderEnvironment, { environme
 export type DepthSampleSegment = 'UPPER' | FolderEnvironment
 export type DepthSampleLevel = { level: number; folder_count: number; samples: Array<{ name: string; count: number }>; truncated: boolean }
 export type DepthRunOptionName = { name: string; count: number; request_count: number }
-export type DepthSchemaSamples = { levels: DepthSampleLevel[]; requests_sampled: number; run_option_names?: DepthRunOptionName[]; run_option_names_truncated?: boolean }
-export type DepthSchemaCheck = { by_code: Record<string, number>; examples: Array<{ relative_path: string; code: string }> }
+export type DepthSchemaSamples = { levels: DepthSampleLevel[]; requests_sampled: number; run_option_names?: DepthRunOptionName[]; run_option_names_truncated?: boolean; /** the server stopped at its read budget: later folders are missing */ partial?: boolean; issues?: Array<{ relative_path: string; code: string }> }
+export type DepthSchemaCheck = { by_code: Record<string, number>; examples: Array<{ relative_path: string; code: string }>; requests_checked?: number; partial?: boolean }
 export type DepthDeviationItem = { relative_path?: string; code: string; message?: string }
 /** POST /api/requests/{id}/reinterpret. The contract fixes only "blocked → deviation list"; other fields are optional. */
 export type RequestReinterpretResult = { status?: string; registered?: boolean; registration_id?: string | null; message?: string | null; deviations?: DepthDeviationItem[] }
@@ -138,11 +139,22 @@ export type RequestResultsCheck = {
 }
 
 // Endpoints added by the depth-schema contract are not in the generated OpenAPI client yet.
-async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await apiFetch(path, init)
-  if (!response.ok) throw await apiErrorFromResponse(response)
-  return await response.json() as T
+/** `timeout`: stop waiting after `ms` and fail with a readable message (a caller's own abort still wins). */
+async function requestJson<T>(path: string, init: RequestInit = {}, timeout?: { ms: number; what: string }): Promise<T> {
+  const guard = timeout ? timeoutGuard(init.signal ?? undefined, timeout.ms) : null
+  try {
+    const response = await apiFetch(path, guard ? { ...init, signal: guard.signal } : init)
+    if (!response.ok) throw await apiErrorFromResponse(response)
+    return await response.json() as T
+  } catch (error) {
+    if (timeout && guard?.timedOut()) throw new Error(timeoutMessage(timeout.ms, timeout.what))
+    throw error
+  } finally { guard?.dispose() }
 }
+/** Client waits: a little above the server's own read budgets (environment_folder_profiles SAMPLE_/CHECK_BUDGET_*). */
+export const DEPTH_SCHEMA_LOAD_TIMEOUT_MS = 30_000
+export const DEPTH_SAMPLES_TIMEOUT_MS = 45_000
+export const DEPTH_CHECK_TIMEOUT_MS = 90_000
 const jsonBody = (method: 'POST' | 'PUT', body: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
 export const folderEnvironmentApi = {
@@ -162,11 +174,11 @@ export const folderEnvironmentApi = {
   rescanStatus: async (signal?: AbortSignal): Promise<StorageRescanState> => unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments/rescan', { signal })) as StorageRescanState,
   profiles: async (signal?: AbortSignal) => (unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments', { signal })) as { items: FolderEnvironmentProfile[] }).items,
   history: async (offset = 0, signal?: AbortSignal, includeDeleted = false) => requestJson<{ items: FolderEnvironmentRegistration[]; total: number }>(apiUrl('/api/folder-discovery/environments/history', {}, { offset, limit: 50, include_deleted: includeDeleted }), { signal }),
-  getDepthSchema: (signal?: AbortSignal) => requestJson<DepthSchema>(apiUrl('/api/folder-discovery/environments/depth-schema' as never), { signal }),
+  getDepthSchema: (signal?: AbortSignal) => requestJson<DepthSchema>(apiUrl('/api/folder-discovery/environments/depth-schema' as never), { signal }, { ms: DEPTH_SCHEMA_LOAD_TIMEOUT_MS, what: '깊이 스키마' }),
   /** 409 `DEPTH_SCHEMA_CONFLICT` when another save happened first; see `isDepthSchemaConflict`. */
   saveDepthSchema: (expectedSchemaSetId: string, upper: DepthUpper, environments: DepthSchemaEnvironmentsInput) => requestJson<DepthSchema>(apiUrl('/api/folder-discovery/environments/depth-schema' as never), jsonBody('PUT', { expected_schema_set_id: expectedSchemaSetId, upper, environments })),
-  depthSchemaSamples: (segment: DepthSampleSegment, upper?: DepthUpper, signal?: AbortSignal) => requestJson<DepthSchemaSamples>(apiUrl('/api/folder-discovery/environments/depth-schema/samples' as never), { ...jsonBody('POST', upper ? { segment, upper } : { segment }), signal }),
-  depthSchemaCheck: (upper: DepthUpper, environments: DepthSchemaEnvironmentsInput) => requestJson<DepthSchemaCheck>(apiUrl('/api/folder-discovery/environments/depth-schema/check' as never), jsonBody('POST', { upper, environments })),
+  depthSchemaSamples: (segment: DepthSampleSegment, upper?: DepthUpper, signal?: AbortSignal) => requestJson<DepthSchemaSamples>(apiUrl('/api/folder-discovery/environments/depth-schema/samples' as never), { ...jsonBody('POST', upper ? { segment, upper } : { segment }), signal }, { ms: DEPTH_SAMPLES_TIMEOUT_MS, what: '예시 폴더' }),
+  depthSchemaCheck: (upper: DepthUpper, environments: DepthSchemaEnvironmentsInput) => requestJson<DepthSchemaCheck>(apiUrl('/api/folder-discovery/environments/depth-schema/check' as never), jsonBody('POST', { upper, environments }), { ms: DEPTH_CHECK_TIMEOUT_MS, what: '확인' }),
   reinterpretRequest: (requestId: string) => requestJson<RequestReinterpretResult>(apiUrl('/api/requests/{request_id}/reinterpret' as never, { request_id: requestId }), jsonBody('POST', {})),
   registrationDeletePreview: (registrationIds: string[]) => requestJson<RegistrationDeletePreview>(apiUrl('/api/folder-discovery/environments/registrations/delete-preview' as never), jsonBody('POST', { registration_ids: registrationIds })),
   /** 409 `REGISTRATION_DELETE_BLOCKED` (detail carries preview items) or `DELETE_PREVIEW_STALE`. */

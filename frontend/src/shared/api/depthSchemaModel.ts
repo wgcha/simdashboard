@@ -102,3 +102,18 @@ export function errorItems<T>(error: unknown): T[] {
   const detail = error && typeof error === 'object' && 'detail' in error ? (error as { detail: unknown }).detail : null
   return detail && typeof detail === 'object' && Array.isArray((detail as { items?: unknown }).items) ? (detail as { items: T[] }).items : []
 }
+
+type RescanLine = { status: string; phase?: string | null; progress?: { done: number; total: number }; created_requests?: unknown[]; refreshed?: number; needs_review?: unknown[]; failed?: unknown[]; partial?: boolean; error?: string | null }
+
+/** One line for the progress / result of a [저장 폴더 새로고침] started from the depth-schema editor. */
+export function rescanLine(state: RescanLine | null): string {
+  if (!state) return ''
+  if (state.status === 'RUNNING') {
+    const progress = state.progress ?? { done: 0, total: 0 }
+    return state.phase === 'SYNC' ? `저장 폴더 확인 중 · 의뢰 ${progress.done}/${progress.total}` : `저장 폴더 확인 중 · 새 폴더 ${state.created_requests?.length ?? 0}개`
+  }
+  if (state.status === 'FAILED') return state.error || '저장 폴더를 확인하지 못했습니다.'
+  if (state.status !== 'DONE') return ''
+  const parts = [`확인한 의뢰 ${state.progress?.done ?? 0}`, `갱신 ${state.refreshed ?? 0}`, `확인 필요 ${state.needs_review?.length ?? 0}`, `실패 ${state.failed?.length ?? 0}`]
+  return `저장 폴더 새로고침을 마쳤습니다 (${parts.join(' · ')})${state.partial ? '. 남은 폴더가 있어 상단 [저장 폴더 새로고침]을 한 번 더 누르세요' : ''}.`
+}

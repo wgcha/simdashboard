@@ -87,26 +87,32 @@ def put_depth_schema(payload: DepthSchemaPut, request: Request):
             raise _invalid(exc) from exc
 
 
+# Both reads walk the drive without a DB connection held (``drive_reads.run`` starts the session first) and stop
+# at the service's budget, so they answer in bounded time even on a wide drive tree (issue #55).
 @router.post("/depth-schema/samples")
-@drive_reads.read_session()
 def depth_schema_samples(payload: DepthSamples, request: Request):
     with connect() as conn:
         admin(request, conn)
+        root = legacy.configured_root(conn)
         try:
-            return service.depth_schema_samples(conn, legacy.configured_root(conn), payload.segment, payload.upper)
+            upper, lower = service.depth_schema_sample_inputs(conn, payload.segment, payload.upper)
         except ValueError as exc:
             raise _invalid(exc) from exc
+    try:
+        return drive_reads.run(lambda: service.depth_schema_samples(None, root, payload.segment, upper, lower))
+    except ValueError as exc:
+        raise _invalid(exc) from exc
 
 
 @router.post("/depth-schema/check")
-@drive_reads.read_session()
 def depth_schema_check(payload: DepthSchemaDraft, request: Request):
     with connect() as conn:
         admin(request, conn)
-        try:
-            return service.depth_schema_check(conn, legacy.configured_root(conn), payload.upper, payload.environments)
-        except ValueError as exc:
-            raise _invalid(exc) from exc
+        root = legacy.configured_root(conn)
+    try:
+        return drive_reads.run(lambda: service.depth_schema_check(None, root, payload.upper, payload.environments))
+    except ValueError as exc:
+        raise _invalid(exc) from exc
 
 
 # ---- deprecated folder-rule editing (§6 폐기) --------------------------------------

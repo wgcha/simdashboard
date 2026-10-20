@@ -22,7 +22,7 @@
 | D6 | 정의된 마지막 깊이보다 깊은 폴더는 역할 없는 내용물(CONTENT)로 허용한다 |
 | D7 | 가지가 중간 깊이에서 끝나도 정보 표시만 하고(`BRANCH_INCOMPLETE`), 등록은 허용한다 |
 | D8 | 사용환경의 `EVALUATION` 역할을 `SCENE`으로 통합한다. 두 환경 모두 Scene을 쓴다 |
-| D9 | 스키마를 저장해도 기존 등록 의뢰는 변경하지 않는다. 의뢰 화면의 **재해석** 버튼으로만 새 스키마를 적용한다 |
+| D9 | 스키마를 저장해도 기존 등록 의뢰는 변경하지 않는다. 의뢰 화면의 **재해석** 버튼으로만 새 스키마를 적용한다(2026-10-20: 저장 폴더 새로고침으로도 전체 적용, §17.3) |
 | D10 | 하위 L1은 **이름으로** 구분한다. `Working`(필수)과 `Final`(선택, Final 지정 후 생성). `Final`도 스키마 대상이다 |
 | D11 | Final 하위 L2는 이름으로 구분한다. `CAE` = 해석 입력·결과 파일, `Report` = 보고서 기능이 만든 PPTX·HTML(사용자가 Final 지정 때 하나 이상 선택, PDF는 만들지 않음). 앱의 SPDM 쓰기는 이 두 폴더로만 한다 |
 | D12 | Final/CAE·Report의 L3 이하는 고정 구조다: `<Case>/<finalization_id>/` 아래에 Working의 Case 이하 구조를 그대로 미러링한다. 관리자 편집 대상이 아니며 UI에 읽기 전용으로 표시한다 |
@@ -168,8 +168,8 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 |---|---|---|---|
 | GET | `/api/folder-discovery/environments/depth-schema` | – | `{schema_set_id, upper, environments:{USAGE:{profile_id, environment_keyword, lower, usage_sources}, DISTRIBUTION:{…}}, created_at, created_by}` |
 | PUT | `…/depth-schema` | `{expected_schema_set_id, upper, environments}` | GET과 동일. 경합하면 409 `DEPTH_SCHEMA_CONFLICT` |
-| POST | `…/depth-schema/samples` | `{segment: "UPPER"\|"USAGE"\|"DISTRIBUTION", upper?}` | `{levels:[{level, folder_count, samples:[{name, count}] (≤8), truncated}], requests_sampled, run_option_names?:[{name, count, request_count}]}` |
-| POST | `…/depth-schema/check` | `{upper, environments}` (초안) | `{by_code:{CODE: count}, examples:[{relative_path, code}] (≤20)}` |
+| POST | `…/depth-schema/samples` | `{segment: "UPPER"\|"USAGE"\|"DISTRIBUTION", upper?}` | `{levels:[{level, folder_count, samples:[{name, count}] (≤8), truncated}], requests_sampled, run_option_names?:[{name, count, request_count}], partial, issues?}` (`partial`=읽기 예산에서 멈춤, §17) |
+| POST | `…/depth-schema/check` | `{upper, environments}` (초안) | `{by_code:{CODE: count}, examples:[{relative_path, code}] (≤20), requests_checked, partial}` |
 | POST | `/api/requests/{request_id}/reinterpret` | – | 현재 스키마로 scan → preview → register. 이탈이 있으면 등록하지 않고 이탈 목록을 반환 |
 
 - `run_option_names` (DISTRIBUTION만): L5 위치에서 발견된 폴더 이름의 **전체** 목록(중복 제거, casefold 기준 병합, 개수와 의뢰 수 포함). 샘플 20개 제한을 받지 않고 해당 환경의 모든 의뢰를 대상으로 한다(목록 한도 500, 초과 시 `truncated`).
@@ -193,7 +193,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
   - Root 행은 표시만 하고, 하위 탭의 L1 Working 행은 잠근다. 하위 탭 아래에 Final 고정 구조(L1 Final / L2 CAE·Report / L3 Case / L4 버전 / L5~ 미러)를 읽기 전용으로 함께 표시한다.
   - 유통 탭의 RUN_OPTION 행은 예시 대신 **RunOption 이름 전체 목록**(이름 · 폴더 수 · 의뢰 수)을 펼쳐 보여준다. 읽기 전용이다.
   - 탭을 열면 `samples`를 자동 호출한다. 행 수는 샘플 깊이에 맞춰 자동이고, 마지막 행 삭제만 가능하다.
-  - 버튼은 **확인**(check 결과를 코드별 건수로 표시)과 **저장** 2개뿐이다.
+  - 버튼은 **확인**(check 결과를 코드별 건수로 표시)과 **저장** 2개뿐이다. 저장 뒤에는 [저장 폴더 새로고침 시작] 버튼이 나타난다(§17.3).
 - `FolderEnvironmentWorkspace`
   - 역할 select, "같은 깊이 적용", 프로필 select와 그 localStorage 기억, "구조를 규칙으로 저장"을 삭제한다.
   - 역할은 읽기 전용으로 표시하고 이탈 배지를 붙인다. 남는 편집은 "제외"와 PROJECT/REQUEST "기존 업무 연결"뿐이다.
@@ -446,6 +446,26 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 5. §13.2-5: 같은 프로젝트의 등록 둘을 하나씩 지우면 프로젝트가 남지 않음. 중간에 수동 의뢰를 추가했으면 마지막 삭제는 성공하고 프로젝트·수동 의뢰는 남음. 삭제 이후에 만든 엔터티는 상속하지 않음
 6. 결과를 가져온 예전 프로젝트·Orion은 이름 확인 없이 409 `PROJECT_CLEANUP_CONFIRM_REQUIRED`, 확인하면 삭제. 미리보기 후 프로젝트가 사라지면 `DELETE_PREVIEW_STALE`, IN 목록을 잘게 나눠도 같은 계획, 과대 선택은 422
 7. 외래 키 전수 조사 통과(DuckDB·PostgreSQL)
+
+## 17. 깊이 스키마 화면의 무한 로딩·일괄 제외·저장 후 적용 (이슈 #55, 2026-10-20)
+
+### 17.1 무한 로딩 원인과 수정
+
+- 사용자 보고: SCX 드라이브 서버에서 깊이 스키마(저장된 규칙) 화면이 "불러오는 중"에서 끝나지 않는다.
+- 원인(가짜 드라이브 재현): `…/depth-schema/samples`·`…/check`가 읽기 세션 안에서 **DB 연결을 연 채** 트리를 걸었다. 읽지 못한 폴더마다 miss 라운드가 돌고 라운드당 최대 600개를 드라이브에서 읽어(시간 제한 없음, 최대 8라운드), 넓은 트리(프로젝트 30 × 의뢰 6)에서 수백 번 listing 뒤에도 일부는 `DRIVE_READ_LIMIT`으로 빠진 불완전한 답을 냈다. 화면에는 응답 제한 시간이 없었고, 스키마 GET이 실패하면 오류 알림 아래에 "불러오는 중…"이 영구히 남았으며, `alive` 참조가 StrictMode 개발 빌드에서 영구 false가 되어 응답이 반영되지 않을 수 있었다.
+- 수정(백엔드): 두 엔드포인트는 DB 연결을 닫은 뒤 `drive_reads.run`으로 읽고, 서비스는 **예산**(`SAMPLE_BUDGET_SECONDS`=25초/`SAMPLE_BUDGET_LISTINGS`=1500, check는 60초/2000)에서 멈추고 `partial: true`로 알린다. USAGE 예시는 의뢰 20개를 찾으면 프로젝트 listing을 멈추고, 상위 구조 예시는 의뢰 40개까지만 그 아래 깊이를 본다(`truncated`).
+- 수정(화면): `getDepthSchema` 30초·`samples` 45초·`check` 90초 제한(`shared/api/requestTimeout.ts`), 스키마 불러오기 실패와 예시 폴더 실패는 오류 + [다시 시도], `partial`이면 "일부만 조사" 안내와 [다시 조사].
+
+### 17.2 구조 확인 일괄 제외 (폴더 연결·규칙 → 폴더 연결 → 구조 확인)
+
+- [확인 필요 N개 모두 제외]: 확인 필요 노드(미확정·오류·이탈 배지)를 한 번에 `role_kind: 'EXCLUDE'` 지정한다. [선택 해제]는 제외 지정만 모두 푼다(기존 업무 연결은 유지).
+- 폴더 상세의 [하위 N개와 함께 제외]/[… 제외 해제]: 서버가 제외 폴더 아래를 함께 제외하므로(`_preview_depth`) 지정은 그 폴더 1건이며, 화면은 하위를 "제외"로 세고 확인 필요 목록에서 뺀다. 조사 루트(경로 없음) 노드는 접두 경로가 없어 하위를 명시 지정한다.
+- 기존 [확인 필요만 보기] 필터는 유지한다. 지정을 바꾸면 미리보기를 다시 만든다. 순수 규칙: `shared/api/folderExclusionModel.ts`.
+
+### 17.3 저장 후 적용
+
+- 저장 알림: "상단 [저장 폴더 새로고침]을 누르면 등록된 모든 의뢰에 새 스키마가 적용됩니다."(이 문서 D9의 재해석 안내를 대체; 재해석 버튼은 의뢰 단위 수단으로 남는다).
+- 저장 직후 편집기에 [저장 폴더 새로고침 시작]이 나타나 `POST …/environments/rescan`(`rescanStart`)을 시작하고 2초마다 `GET`으로 진행을 편집기에 표시한다. 시작 시 `window` 이벤트 `simdash:storage-rescan-started`를 보낸다(상단 표시줄이 듣게 할 수 있음).
 
 ## 12. 미확정
 

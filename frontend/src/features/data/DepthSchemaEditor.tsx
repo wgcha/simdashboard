@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { folderEnvironmentApi, type DepthLevel, type DepthLowerRole, type DepthSampleLevel, type DepthSampleSegment, type DepthSchema, type DepthSchemaCheck, type DepthSchemaEnvironmentsInput, type DepthSchemaSamples, type DepthUpperRole, type FolderEnvironment } from '../../shared/api/folderEnvironment'
-import { depthRowEditable, depthRows, deviationLabel, errorCode, lowerRoleOptions, setDepthRole, UPPER_MAX_LEVELS, UPPER_ROLES, validateLowerLevels, validateUpperLevels } from '../../shared/api/depthSchemaModel'
+import { DEPTH_SAMPLES_TIMEOUT_MS, folderEnvironmentApi, type StorageRescanState, type DepthLevel, type DepthLowerRole, type DepthSampleLevel, type DepthSampleSegment, type DepthSchema, type DepthSchemaCheck, type DepthSchemaEnvironmentsInput, type DepthSchemaSamples, type DepthUpperRole, type FolderEnvironment } from '../../shared/api/folderEnvironment'
+import { depthRowEditable, depthRows, deviationLabel, errorCode, lowerRoleOptions, rescanLine, setDepthRole, UPPER_MAX_LEVELS, UPPER_ROLES, validateLowerLevels, validateUpperLevels } from '../../shared/api/depthSchemaModel'
 import { roleLabel } from './FolderEnvironmentPanels'
 
 type Tab = DepthSampleSegment
@@ -35,11 +35,21 @@ export function DepthSchemaEditor({ onSaved }: { onSaved?: (schema: DepthSchema)
   const [check, setCheck] = useState<DepthSchemaCheck | null>(null)
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [samplesError, setSamplesError] = useState('')
+  const [sampleNonce, setSampleNonce] = useState(0)
+  const [justSaved, setJustSaved] = useState(false)
+  const [rescan, setRescan] = useState<StorageRescanState | null>(null)
+  const [rescanBusy, setRescanBusy] = useState(false)
+  const [rescanError, setRescanError] = useState('')
   const alive = useRef(true)
-  useEffect(() => () => { alive.current = false }, [])
+  // Set true again on every mount: React StrictMode runs the cleanup once before the real mount, which used to leave `alive`
+  // false for good so no response was ever applied ("불러오는 중…" forever).
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
-  const load = () => folderEnvironmentApi.getDepthSchema().then((value) => { if (!alive.current) return; setSchema(value); setDrafts(draftsFrom(value)); setCheck(null) })
-  useEffect(() => { load().catch((error) => { if (alive.current) setNotice(message(error, '깊이 스키마를 불러오지 못했습니다.')) }) }, [])
+  const load = () => folderEnvironmentApi.getDepthSchema().then((value) => { if (!alive.current) return; setSchema(value); setDrafts(draftsFrom(value)); setCheck(null); setLoadError('') })
+  const loadFirst = () => { setLoadError(''); load().catch((error) => { if (alive.current) setLoadError(message(error, '깊이 스키마를 불러오지 못했습니다.')) }) }
+  useEffect(() => { loadFirst() }, [])
 
   const upperKey = JSON.stringify(drafts?.upper ?? [])
   const sampleKey = tab === 'UPPER' ? 'UPPER' : `${tab}:${upperKey}`
@@ -47,15 +57,16 @@ export function DepthSchemaEditor({ onSaved }: { onSaved?: (schema: DepthSchema)
     if (!drafts || samples[sampleKey]) return
     if (tab !== 'UPPER' && validateUpperLevels(drafts.upper).length) return
     const controller = new AbortController()
-    setLoadingSamples(true)
+    setLoadingSamples(true); setSamplesError('')
     folderEnvironmentApi.depthSchemaSamples(tab, tab === 'UPPER' ? undefined : { levels: drafts.upper }, controller.signal)
       .then((value) => setSamples((current) => ({ ...current, [sampleKey]: value })))
-      .catch((error) => { if (!controller.signal.aborted) setNotice(message(error, '예시 폴더를 불러오지 못했습니다.')) })
+      .catch((error) => { if (!controller.signal.aborted) setSamplesError(message(error, '예시 폴더를 불러오지 못했습니다.')) })
       .finally(() => { if (!controller.signal.aborted) setLoadingSamples(false) })
     return () => { controller.abort(); setLoadingSamples(false) }
-    // Samples follow the open tab and the upper draft only.
+    // Samples follow the open tab and the upper draft only (and a retry).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sampleKey, Boolean(drafts)])
+  }, [sampleKey, Boolean(drafts), sampleNonce])
+  const retrySamples = () => { setSamples((current) => { const { [sampleKey]: _dropped, ...rest } = current; return rest }); setSampleNonce((value) => value + 1) }
 
   const errors = useMemo(() => drafts ? {
     UPPER: validateUpperLevels(drafts.upper),
@@ -85,7 +96,8 @@ export function DepthSchemaEditor({ onSaved }: { onSaved?: (schema: DepthSchema)
       const saved = await folderEnvironmentApi.saveDepthSchema(schema.schema_set_id, { levels: drafts.upper }, environments)
       if (!alive.current) return
       setSchema(saved); setDrafts(draftsFrom(saved)); setCheck(null)
-      setNotice('깊이 스키마를 저장했습니다. 이미 등록된 의뢰는 의뢰 화면의 재해석으로만 새 스키마가 적용됩니다.')
+      setNotice('깊이 스키마를 저장했습니다. 상단 [저장 폴더 새로고침]을 누르면 등록된 모든 의뢰에 새 스키마가 적용됩니다.')
+      setJustSaved(true); setRescan(null); setRescanError('')
       onSaved?.(saved)
     } catch (error) {
       if (errorCode(error) === 'DEPTH_SCHEMA_CONFLICT') {
@@ -95,13 +107,32 @@ export function DepthSchemaEditor({ onSaved }: { onSaved?: (schema: DepthSchema)
     }
   })
 
+  /** [저장 폴더 새로고침] from here: the same full rescan as the top bar, followed until it ends. */
+  const startRescan = async () => {
+    if (rescanBusy) return
+    setRescanBusy(true); setRescanError(''); setRescan(null)
+    try {
+      let state = await folderEnvironmentApi.rescanStart()
+      window.dispatchEvent(new CustomEvent('simdash:storage-rescan-started', { detail: state }))
+      while (alive.current) {
+        setRescan(state)
+        if (state.status !== 'RUNNING') break
+        await new Promise((resolve) => window.setTimeout(resolve, 2000))
+        if (!alive.current) return
+        state = await folderEnvironmentApi.rescanStatus()
+      }
+    } catch (error) {
+      if (alive.current) setRescanError(message(error, '저장 폴더 새로고침을 시작하지 못했습니다.'))
+    } finally { if (alive.current) setRescanBusy(false) }
+  }
+
   const current = samples[sampleKey]
   const levels = drafts ? (tab === 'UPPER' ? drafts.upper : drafts[tab]) : []
   const rows = depthRows<string>(levels, current?.levels ?? [])
   const options = (level: number): string[] => tab === 'UPPER' ? UPPER_ROLES : lowerRoleOptions(tab, level)
   const changeRole = (level: number, role: string) => {
     if (!drafts) return
-    setCheck(null)
+    setCheck(null); setJustSaved(false)
     if (tab === 'UPPER') setDrafts({ ...drafts, upper: setDepthRole(drafts.upper, level, role as DepthUpperRole | '') })
     else setDrafts({ ...drafts, [tab]: setDepthRole(drafts[tab], level, role as DepthLowerRole | '') })
   }
@@ -114,7 +145,15 @@ export function DepthSchemaEditor({ onSaved }: { onSaved?: (schema: DepthSchema)
     <div className="folder-environment-card-head"><div><h2>저장된 규칙</h2><p>Root로부터의 깊이마다 역할을 한 번 정합니다. 같은 깊이의 모든 폴더가 같은 역할을 갖습니다.</p></div>{schema && <span>{schema.schema_set_id}</span>}</div>
     <nav className="saved-work-tabs" aria-label="깊이 스키마 구간">{TABS.map(([key, title]) => <button type="button" key={key} className={tab === key ? 'active' : ''} aria-current={tab === key ? 'page' : undefined} disabled={Boolean(busy)} onClick={() => setTab(key)}>{title}{errors?.[key].length ? ' · 확인 필요' : ''}</button>)}</nav>
     {notice && <div className="folder-environment-notice info" role="status">{notice}</div>}
-    {!drafts ? <p role="status">깊이 스키마를 불러오는 중…</p> : <>
+    {justSaved && <div className="folder-environment-notice info depth-schema-apply" role="status" data-testid="depth-schema-apply">
+      <span>새 스키마를 적용하려면 [저장 폴더 새로고침]을 실행하세요. 등록된 모든 의뢰를 다시 확인합니다. 상단의 [저장 폴더 새로고침]과 같은 동작이며, 진행 상황은 상단 표시줄과 여기서 볼 수 있습니다.</span>
+      <button type="button" className="primary-button" disabled={rescanBusy} onClick={() => void startRescan()}>{rescanBusy ? '새로고침 중…' : '저장 폴더 새로고침 시작'}</button>
+      {rescan && rescanLine(rescan) && <b role="status">{rescanLine(rescan)}</b>}
+      {rescanError && <b role="alert">{rescanError}</b>}
+    </div>}
+    {!drafts ? (loadError
+      ? <div className="folder-environment-notice info" role="alert" data-testid="depth-schema-load-error"><span>{loadError}</span><button type="button" className="ghost-button" onClick={loadFirst}>다시 시도</button></div>
+      : <p role="status">깊이 스키마를 불러오는 중…</p>) : <>
       {lowerEnv && errors?.UPPER.length ? <p role="alert">상위 구조를 먼저 바르게 지정해야 예시 폴더를 볼 수 있습니다.</p> : null}
       <div className="depth-schema-table-wrap">
         <table className="depth-schema-table" aria-label={`${TABS.find(([key]) => key === tab)?.[1]} 깊이 표`}>
@@ -146,7 +185,9 @@ export function DepthSchemaEditor({ onSaved }: { onSaved?: (schema: DepthSchema)
           </tbody>
         </table>
       </div>
-      {loadingSamples && <p className="depth-schema-muted" role="status">예시 폴더를 불러오는 중…</p>}
+      {loadingSamples && <p className="depth-schema-muted" role="status">예시 폴더를 불러오는 중… (최대 {Math.round(DEPTH_SAMPLES_TIMEOUT_MS / 1000)}초)</p>}
+      {samplesError && !loadingSamples && <div className="folder-environment-notice info" role="alert" data-testid="depth-schema-samples-error"><span>{samplesError}</span><button type="button" className="ghost-button" onClick={retrySamples}>다시 시도</button></div>}
+      {current?.partial && !loadingSamples && <p className="depth-schema-muted" role="status" data-testid="depth-schema-samples-partial">시간·개수 제한으로 일부 폴더만 조사했습니다. 예시와 폴더 수가 실제보다 적을 수 있습니다. <button type="button" className="ghost-button" onClick={retrySamples}>다시 조사</button></p>}
       {(errors?.[tab] ?? []).length > 0 && <ul className="depth-schema-errors" role="alert">{errors?.[tab].map((item) => <li key={item}>{item}</li>)}</ul>}
       {lowerEnv && <details className="depth-schema-final" open>
         <summary>Final 고정 구조 (읽기 전용)</summary>
@@ -156,11 +197,12 @@ export function DepthSchemaEditor({ onSaved }: { onSaved?: (schema: DepthSchema)
       </details>}
       {check && <section className="depth-schema-check" aria-label="확인 결과">
         <strong>{Object.values(check.by_code).reduce((sum, value) => sum + value, 0) ? '이탈 건수' : '이탈 없음'}</strong>
+        {check.partial && <p className="depth-schema-muted" role="status" data-testid="depth-schema-check-partial">시간·개수 제한으로 일부 폴더만 확인했습니다{check.requests_checked != null ? ` (의뢰 ${check.requests_checked}개 조사)` : ''}. 결과가 전체보다 적을 수 있습니다.</p>}
         <ul>{Object.entries(check.by_code).filter(([, count]) => count > 0).map(([code, count]) => <li key={code}><b>{count}</b> {deviationLabel(code)} <code>{code}</code></li>)}</ul>
         {check.examples.length > 0 && <details><summary>예시 {check.examples.length}건</summary><ul>{check.examples.map((item) => <li key={`${item.code}:${item.relative_path}`}><code>{item.relative_path}</code> · {deviationLabel(item.code)}</li>)}</ul></details>}
       </section>}
     </>}
-    <footer className="folder-environment-footer"><span>저장해도 기존 등록 의뢰는 바뀌지 않습니다. 의뢰 화면의 재해석으로 적용하세요.</span>
+    <footer className="folder-environment-footer"><span>저장 후 [저장 폴더 새로고침]을 누르면 등록된 모든 의뢰에 새 스키마가 적용됩니다.</span>
       <button type="button" className="ghost-button" disabled={disabled || invalid} onClick={() => void runCheck()}>{busy === '확인 중…' ? busy : '확인'}</button>
       <button type="button" className="primary-button" disabled={disabled || invalid} onClick={() => void save()}>{busy === '저장 중…' ? busy : '저장'}</button>
     </footer>

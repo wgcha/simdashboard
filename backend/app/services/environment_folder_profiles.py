@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fnmatch import fnmatchcase
 import json
+import time
 from uuid import uuid4
 
 from ..database_connection import rows
@@ -663,17 +664,55 @@ SAMPLE_NAMES = 8
 RUN_OPTION_NAME_LIMIT = 500
 
 
-def _lister(root):
+# The editor's example folders and its dry-run read the drive without a DB connection and stop at a
+# budget (issue #55 VoC: "불러오기" never finished on a real drive; a wide tree took hundreds of
+# listings through the read session's miss rounds and answered incomplete data after minutes).
+SAMPLE_BUDGET_SECONDS = 25.0
+SAMPLE_BUDGET_LISTINGS = 1500
+CHECK_BUDGET_SECONDS = 60.0
+CHECK_BUDGET_LISTINGS = 2000
+UPPER_PROBE_REQUESTS = 40          # request folders listed to show the level below the requests
+
+
+def _lister(root, *, seconds=None, max_listings=None):
+    """The shared bounded lister; with a budget it stops listing (``stopped``) instead of walking on."""
     from .folder_auto_discovery import _Lister
-    return _Lister(root)
+
+    if seconds is None and max_listings is None:
+        return _Lister(root)
+
+    class _Budgeted(_Lister):
+        def __init__(self):
+            super().__init__(root)
+            self.deadline = time.monotonic() + (seconds if seconds is not None else float("inf"))
+            self.max_listings = max_listings if max_listings is not None else float("inf")
+            self.listings = 0
+            self.stopped = False
+
+        def children(self, relative):
+            if self.listings >= self.max_listings or time.monotonic() > self.deadline:
+                self.stopped = True
+                return []
+            self.listings += 1
+            return super().children(relative)
+
+    return _Budgeted()
+
+
+def _stopped(lister) -> bool:
+    return bool(getattr(lister, "stopped", False))
 
 
 def _visible_children(lister, relative):
     return [(name, path) for name, path in lister.children(relative) if not is_ignored_name(name)]
 
 
-def _upper_requests(lister, upper):
-    """BFS the upper section. Returns (levels{d: [(name,path)]}, requests[(name,path)])."""
+def _upper_requests(lister, upper, *, accept=None, want=None):
+    """BFS the upper section. Returns (levels{d: [(name,path)]}, requests[(name,path)]).
+
+    ``want``: stop listing request parents once that many request folders passing ``accept`` are known
+    (a sample needs a few requests, not every project of the drive).
+    """
     request_level = len(upper["levels"])
     frontier = [("", "")]
     levels = {}
@@ -681,6 +720,9 @@ def _upper_requests(lister, upper):
         next_frontier = []
         for _name, path in frontier:
             next_frontier.extend(_visible_children(lister, path))
+            if want and depth == request_level and sum(
+                    1 for item in next_frontier if not is_project_shared_name(item[0]) and (accept is None or accept(item[0]))) >= want:
+                break
         levels[depth] = next_frontier
         frontier = next_frontier
     # §15 D22: request-level CAD/Report folders are not request candidates.
@@ -698,27 +740,55 @@ def _level_summary(level, names, truncated=False):
             "truncated": truncated or len(ordered) > SAMPLE_NAMES}
 
 
-def depth_schema_samples(conn, root, segment, upper=None):
-    """Read-only depth samples for the editor (§6 POST …/depth-schema/samples)."""
+def depth_schema_sample_inputs(conn, segment, upper=None):
+    """(upper, DISTRIBUTION lower) the sample walk needs, read from the draft or the saved schema.
+
+    Resolved before the drive is read so the walk itself holds no database connection.
+    """
     if segment not in {"UPPER", "USAGE", "DISTRIBUTION"}:
         raise ValueError("segment는 UPPER, USAGE, DISTRIBUTION 중 하나여야 합니다.")
-    upper = validate_depth_upper(upper) if upper is not None else get_depth_schema(conn)["upper"]
-    lister = _lister(root)
+    saved = get_depth_schema(conn) if (upper is None or segment == "DISTRIBUTION") else None
+    upper = validate_depth_upper(upper) if upper is not None else saved["upper"]
+    lower = saved["environments"]["DISTRIBUTION"]["lower"] if segment == "DISTRIBUTION" else None
+    return upper, lower
+
+
+def depth_schema_samples(conn, root, segment, upper=None, lower=None):
+    """Read-only depth samples for the editor (§6 POST …/depth-schema/samples).
+
+    Bounded by ``SAMPLE_BUDGET_SECONDS`` / ``SAMPLE_BUDGET_LISTINGS``: what was not reached is left out and
+    the answer says ``partial``.  ``conn`` is only needed when ``upper`` (and for DISTRIBUTION ``lower``) is not given.
+    """
+    if segment not in {"UPPER", "USAGE", "DISTRIBUTION"}:
+        raise ValueError("segment는 UPPER, USAGE, DISTRIBUTION 중 하나여야 합니다.")
+    if upper is None or (segment == "DISTRIBUTION" and lower is None):
+        saved_upper, saved_lower = depth_schema_sample_inputs(conn, segment, upper)
+        upper, lower = saved_upper, lower or saved_lower
+    else:
+        upper = validate_depth_upper(upper)
+    lister = _lister(root, seconds=SAMPLE_BUDGET_SECONDS, max_listings=SAMPLE_BUDGET_LISTINGS)
     if segment == "UPPER":
         request_level = len(upper["levels"])
-        frontier, levels = [("", "")], []
+        frontier, levels, probe_cut = [("", "")], [], False
         for depth in range(1, max(request_level, 1) + 2):
             children = []
-            for _name, path in frontier:
+            parents = frontier
+            if depth == request_level + 1 and len(frontier) > UPPER_PROBE_REQUESTS:
+                parents, probe_cut = frontier[:UPPER_PROBE_REQUESTS], True   # a few requests show what lies below them
+            for _name, path in parents:
                 children.extend(_visible_children(lister, path))
             if depth == request_level:
                 children = [(name, path) for name, path in children if not is_project_shared_name(name)]
             if not children:
                 break
-            levels.append(_level_summary(depth, [name for name, _ in children]))
+            levels.append(_level_summary(depth, [name for name, _ in children], truncated=probe_cut and depth == request_level + 1))
             frontier = children
-        return {"levels": levels, "requests_sampled": 0}
-    _levels, requests = _upper_requests(lister, upper)
+        result = {"levels": levels, "requests_sampled": 0, "partial": _stopped(lister)}
+        if lister.issues:
+            result["issues"] = lister.issues[:20]
+        return result
+    _levels, requests = _upper_requests(lister, upper, accept=lambda name: keyword_environment(name)[0] == segment,
+                                        want=SAMPLE_REQUESTS if segment == "USAGE" else None)
     matching = [(name, path) for name, path in requests if keyword_environment(name)[0] == segment]
     by_level: dict[int, list[str]] = {}
     for _name, request_path in matching[:SAMPLE_REQUESTS]:
@@ -734,9 +804,10 @@ def depth_schema_samples(conn, root, segment, upper=None):
     result = {"levels": [_level_summary(level, names) for level, names in sorted(by_level.items())],
               "requests_sampled": min(len(matching), SAMPLE_REQUESTS)}
     if segment == "DISTRIBUTION":
-        names, truncated = run_option_names(conn, root, upper=upper, lister=lister, requests=matching)
+        names, truncated = run_option_names(conn, root, upper=upper, lister=lister, requests=matching, lower=lower)
         result["run_option_names"] = names
         result["run_option_names_truncated"] = truncated
+    result["partial"] = _stopped(lister)
     if lister.issues:
         result["issues"] = lister.issues[:20]
     return result
@@ -791,7 +862,7 @@ def depth_schema_check(conn, root, upper, environments):
     clean_upper, lowers, _sources = _validated_draft(upper, environments)
     schemas = {env: {"upper": clean_upper, "lower": lowers[env], "environment_keyword": ENVIRONMENT_KEYWORDS[env]}
                for env in lowers}
-    lister = _lister(root)
+    lister = _lister(root, seconds=CHECK_BUDGET_SECONDS, max_listings=CHECK_BUDGET_LISTINGS)
     entries = []
 
     def add(path, parent, name, children_listed=True):
@@ -834,7 +905,7 @@ def depth_schema_check(conn, root, upper, environments):
             by_code[deviation["code"]] = by_code.get(deviation["code"], 0) + 1
             if len(examples) < CHECK_EXAMPLES:
                 examples.append({"relative_path": entry["relative_path"], "code": deviation["code"]})
-    result = {"by_code": by_code, "examples": examples, "requests_checked": len(requests)}
+    result = {"by_code": by_code, "examples": examples, "requests_checked": len(requests), "partial": _stopped(lister)}
     if lister.issues:
         result["issues"] = lister.issues[:20]
     return result
