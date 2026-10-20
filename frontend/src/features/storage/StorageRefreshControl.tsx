@@ -1,25 +1,56 @@
 import { RefreshCw, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { fetchStorageConfig, saveStorageConfig } from '../../shared/api/storage'
-import { folderEnvironmentApi, type StorageRescanState } from '../../shared/api/folderEnvironment'
+import { folderEnvironmentApi, type FolderDiscoveryReview, type StorageRescanReinterpret, type StorageRescanState } from '../../shared/api/folderEnvironment'
 import { DriveSettingsEntry } from './DriveAdminPanel'
 
 const POLL_MS = 2000
 const ENVIRONMENT_LABEL: Record<string, string> = { USAGE: '사용', DISTRIBUTION: '유통' }
+/** Window event the depth-schema editor dispatches after it started a rescan itself (detail = rescan state). */
+const STORAGE_RESCAN_STARTED_EVENT = 'simdash:storage-rescan-started'
+/** Needs-review codes of folders at the request level: an administrator may exclude them (issue #55). */
+const NOT_EXCLUDABLE = new Set([
+  'ADMIN_EXCLUDED', 'FOLDER_NAME_WHITESPACE_DUPLICATE', 'EXCLUSION_REMOVED', 'AUTO_DISCOVERY_DISABLED', 'SPDM_ROOT_UNSET',
+  'DISCOVERY_FAILED', 'DISCOVERY_TIME_BUDGET', 'LIST_LIMIT', 'PATH_UNAVAILABLE', 'DRIVE_READ_LIMIT', 'DRIVE_LIST_FAILED',
+  'PROJECT_NAME_EXISTS', 'PROJECT_AMBIGUOUS', 'PROJECT_RENAME_AMBIGUOUS', 'PROJECT_RENAME_UNSUPPORTED', 'DEPTH_SCHEMA_MISSING',
+])
+
+function isExcludable(item: FolderDiscoveryReview): boolean {
+  return Boolean(item.relative_path) && !NOT_EXCLUDABLE.has(item.code ?? '')
+}
 
 function progressLabel(state: StorageRescanState | null): string {
   if (!state || state.status !== 'RUNNING') return '저장 폴더 확인 중'
   if (state.phase === 'SYNC') return `저장 폴더 확인 중 · 의뢰 ${state.progress.done}/${state.progress.total}`
+  if (state.phase === 'REINTERPRET') return `저장 폴더 확인 중 · 새 깊이 스키마 적용 ${state.progress.done}/${state.progress.total}`
   return state.rounds > 0 ? `저장 폴더 확인 중 · 새 폴더 ${state.created_requests.length}개` : '저장 폴더 확인 중 · 새 폴더 찾기'
 }
 
 function summary(state: StorageRescanState): string {
+  const excluded = state.needs_review.filter((item) => item.code === 'ADMIN_EXCLUDED').length
   const parts = [
     `새 프로젝트 ${state.created_projects.length}`, `새 의뢰 ${state.created_requests.length}`,
     `확인한 의뢰 ${state.progress.done}`, `갱신 ${state.refreshed}`,
-    `확인 필요 ${state.needs_review.length}`, `실패 ${state.failed.length}`,
+    `확인 필요 ${state.needs_review.length - excluded}`, `실패 ${state.failed.length}`,
   ]
+  if (state.reinterpreted.length || state.reinterpret_blocked.length) parts.push(`새 스키마 적용 ${state.reinterpreted.length}`, `적용 못함 ${state.reinterpret_blocked.length}`)
+  if (excluded) parts.push(`제외 ${excluded}`)
   return `저장 폴더를 다시 확인했습니다 (${parts.join(' · ')})${state.partial ? '. 남은 폴더가 있어 한 번 더 실행하세요' : ''}.`
+}
+
+function hasReport(state: StorageRescanState): boolean {
+  return state.status === 'FAILED' || state.needs_review.length > 0 || state.failed.length > 0
+    || state.reinterpreted.length > 0 || state.reinterpret_blocked.length > 0
+}
+
+function ReinterpretItem({ item, blocked }: { item: StorageRescanReinterpret; blocked: boolean }) {
+  return <li>
+    <strong>{item.project_name ? `${item.project_name} / ` : ''}{item.request_name || item.request_id} ({ENVIRONMENT_LABEL[item.environment] ?? item.environment})</strong>
+    <span>{blocked ? item.message : '현재 깊이 스키마로 다시 등록했습니다.'}</span>
+    {blocked && item.deviations.map((deviation) => <small key={`${deviation.code}|${deviation.relative_path}`}>{deviation.code}{deviation.relative_path ? ` · ${deviation.relative_path}` : ''}</small>)}
+    {blocked && item.deviation_count > item.deviations.length && <small>그 밖에 {item.deviation_count - item.deviations.length}건</small>}
+    {blocked && item.deviations.length === 0 && item.code && <small>{item.code}</small>}
+  </li>
 }
 
 /**
@@ -33,6 +64,9 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
   const [report, setReport] = useState<StorageRescanState | null>(null)
   const polling = useRef(false)
   const mounted = useRef(true)
+  const callbacks = useRef({ onChanged, onMessage, onError })
+  callbacks.current = { onChanged, onMessage, onError }
+  const [excluding, setExcluding] = useState(false)
   const [rootPath, setRootPath] = useState('')
   const [rootMessage, setRootMessage] = useState('')
   const [rootLocked, setRootLocked] = useState(false)
@@ -49,11 +83,28 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
     finally { setRootBusy(false) }
   }
   const finish = async (state: StorageRescanState) => {
-    try { await onChanged() } catch { /* the summary still matters */ }
+    try { await callbacks.current.onChanged() } catch { /* the summary still matters */ }
     if (!mounted.current) return
-    if (state.status === 'FAILED') onError(state.error || '저장 폴더를 확인하지 못했습니다.')
-    else onMessage(summary(state))
-    setReport(state.needs_review.length || state.failed.length || state.status === 'FAILED' ? state : null)
+    if (state.status === 'FAILED') callbacks.current.onError(state.error || '저장 폴더를 확인하지 못했습니다.')
+    else callbacks.current.onMessage(summary(state))
+    setReport(hasReport(state) ? state : null)
+  }
+  /** [제외] / [모두 제외] / [다시 포함]: the server moves the folders in its rescan state; reload that state. */
+  const changeExclusion = async (paths: string[], restore: boolean) => {
+    if (excluding || paths.length === 0) return
+    setExcluding(true)
+    try {
+      const result = restore ? await folderEnvironmentApi.restoreFolders(paths) : await folderEnvironmentApi.excludeFolders(paths)
+      const done = (restore ? result.restored : result.excluded) ?? []
+      const next = await folderEnvironmentApi.rescanStatus()
+      if (!mounted.current) return
+      setReport(next)
+      const skipped = result.skipped.length ? ` (${result.skipped.length}개는 처리하지 않음: ${result.skipped[0].message})` : ''
+      callbacks.current.onMessage(`${done.length}개 폴더를 ${restore ? '다시 포함' : '제외'}했습니다${skipped}.`)
+      void callbacks.current.onChanged().catch(() => undefined)
+    } catch (reason) {
+      if (mounted.current) callbacks.current.onError(reason instanceof Error ? reason.message : '폴더 제외 설정을 저장하지 못했습니다.')
+    } finally { if (mounted.current) setExcluding(false) }
   }
   const poll = async (initial: StorageRescanState) => {
     if (polling.current) return
@@ -69,7 +120,7 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
       }
       if (mounted.current && (state.status === 'DONE' || state.status === 'FAILED')) await finish(state)
     } catch (reason) {
-      if (mounted.current) onError(reason instanceof Error ? reason.message : '저장 폴더 확인 상태를 불러오지 못했습니다.')
+      if (mounted.current) callbacks.current.onError(reason instanceof Error ? reason.message : '저장 폴더 확인 상태를 불러오지 못했습니다.')
     } finally {
       polling.current = false
       if (mounted.current) { setBusy(false); setRescan(null) }
@@ -91,16 +142,33 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
     mounted.current = true
     // A rescan started earlier (another tab, a reload) is followed until it ends.
     folderEnvironmentApi.rescanStatus().then((state) => { if (mounted.current && state.status === 'RUNNING') void poll(state) }).catch(() => undefined)
-    return () => { mounted.current = false }
+    // The depth-schema editor starts a rescan after a save: attach to it so the top bar shows the progress.
+    const attach = (event: Event) => {
+      const state = (event as CustomEvent<StorageRescanState | undefined>).detail
+      if (state && state.status === 'RUNNING' && mounted.current) { setReport(null); void poll(state) }
+    }
+    window.addEventListener(STORAGE_RESCAN_STARTED_EVENT, attach)
+    return () => { mounted.current = false; window.removeEventListener(STORAGE_RESCAN_STARTED_EVENT, attach) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  const pending = report ? report.needs_review.filter((item) => item.code !== 'ADMIN_EXCLUDED') : []
+  const excluded = report ? report.needs_review.filter((item) => item.code === 'ADMIN_EXCLUDED') : []
+  const excludable = pending.filter(isExcludable)
   return <div className="storage-global-actions">
     <details className="storage-global-settings" onToggle={(event) => { if (event.currentTarget.open) void loadRoot() }}><summary aria-label="고정 결과 원본 폴더 설정">저장소 설정</summary><div><label><span>고정 결과 원본 폴더</span><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="서버 결과 원본 root 경로" disabled={rootBusy || rootLocked} /></label><button type="button" onClick={() => void saveRoot()} disabled={rootBusy || rootLocked || !rootPath.trim()}>저장</button>{rootLocked ? <small role="status">환경 설정이 사용하는 경로라 여기서 바꿀 수 없습니다.</small> : rootMessage ? <small role="status">{rootMessage}</small> : null}<DriveSettingsEntry /></div></details>
     <button type="button" className="ghost-button" data-testid="storage-global-refresh" disabled={busy} title="현재 깊이 스키마로 저장소 전체를 다시 확인해 새 프로젝트·의뢰를 등록하고 등록된 의뢰를 갱신합니다." onClick={() => void run()}><RefreshCw className={busy ? 'storage-spin' : undefined} /> {busy ? progressLabel(rescan) : '저장 폴더 새로고침'}</button>
     {report && <section className="storage-rescan-report" aria-label="저장 폴더 확인 결과" data-testid="storage-rescan-report">
       <header><strong>저장 폴더 확인 결과</strong><button type="button" className="storage-rescan-close" aria-label="닫기" onClick={() => setReport(null)}><X /></button></header>
       {report.status === 'FAILED' && <p className="storage-rescan-error" role="alert">{report.error || '저장 폴더를 확인하지 못했습니다.'}</p>}
-      {report.needs_review.length > 0 && <><h3>등록하지 않은 폴더 {report.needs_review.length}개</h3><ul>{report.needs_review.map((item) => <li key={`${item.relative_path}|${item.code ?? ''}`}><code>{item.relative_path || '(저장소 루트)'}</code><span>{item.reason}</span>{item.code && <small>{item.code}{item.deviation_path ? ` · ${item.deviation_path}` : ''}</small>}</li>)}</ul></>}
+      {report.reinterpret_blocked.length > 0 && <><h3>새 깊이 스키마를 적용하지 못한 의뢰 {report.reinterpret_blocked.length}개</h3><ul data-testid="storage-rescan-blocked">{report.reinterpret_blocked.map((item) => <ReinterpretItem key={`${item.request_id}|${item.environment}`} item={item} blocked />)}</ul></>}
+      {report.reinterpreted.length > 0 && <details data-testid="storage-rescan-reinterpreted"><summary>새 깊이 스키마를 적용한 의뢰 {report.reinterpreted.length}개</summary><ul>{report.reinterpreted.map((item) => <ReinterpretItem key={`${item.request_id}|${item.environment}`} item={item} blocked={false} />)}</ul></details>}
+      {report.reinterpret_deferred > 0 && <p className="storage-rescan-error" role="status">시간 제한으로 {report.reinterpret_deferred}개 의뢰는 새 스키마를 적용하지 못했습니다. 한 번 더 실행하세요.</p>}
+      {pending.length > 0 && <>
+        <h3>등록하지 않은 폴더 {pending.length}개</h3>
+        {excludable.length > 0 && <div className="storage-rescan-actions"><button type="button" className="ghost-button" data-testid="storage-rescan-exclude-all" disabled={excluding} title="확인할 필요가 없는 폴더를 제외합니다. 이후 새로고침에서는 '제외한 폴더'에 모아 보여줍니다." onClick={() => { if (window.confirm(`${excludable.length}개 폴더를 모두 제외할까요? 제외한 폴더는 자동 등록하지 않으며, 아래 '제외한 폴더'에서 다시 포함할 수 있습니다.`)) void changeExclusion(excludable.map((item) => item.relative_path), false) }}>모두 제외 ({excludable.length})</button></div>}
+        <ul>{pending.map((item) => <li key={`${item.relative_path}|${item.code ?? ''}`}><code>{item.relative_path || '(저장소 루트)'}</code><span>{item.reason}</span>{item.code && <small>{item.code}{item.deviation_path ? ` · ${item.deviation_path}` : ''}</small>}{isExcludable(item) && <button type="button" className="ghost-button storage-rescan-item-action" disabled={excluding} onClick={() => void changeExclusion([item.relative_path], false)}>제외</button>}</li>)}</ul>
+      </>}
+      {excluded.length > 0 && <details data-testid="storage-rescan-excluded"><summary>제외한 폴더 {excluded.length}개</summary><ul>{excluded.map((item) => <li key={item.relative_path}><code>{item.relative_path}</code><span>{item.reason}</span>{item.restorable && <button type="button" className="ghost-button storage-rescan-item-action" disabled={excluding} onClick={() => void changeExclusion([item.relative_path], true)}>다시 포함</button>}</li>)}</ul></details>}
       {report.failed.length > 0 && <><h3>확인하지 못한 의뢰 {report.failed.length}개</h3><ul>{report.failed.map((item) => <li key={`${item.request_id}|${item.environment}`}><strong>{item.project_name ? `${item.project_name} / ` : ''}{item.request_name || item.request_id} ({ENVIRONMENT_LABEL[item.environment] ?? item.environment})</strong><span>{item.message || '확인하지 못했습니다.'}</span><small>{item.code}</small></li>)}</ul></>}
     </section>}
   </div>

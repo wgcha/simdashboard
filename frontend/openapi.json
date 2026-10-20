@@ -6368,6 +6368,86 @@
         }
       }
     },
+    "/api/folder-discovery/environments/exclusions": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Exclude Folders",
+        "description": "[제외] / [모두 제외] in the rescan result: request folders the discovery never registers (issue #55).\n\nGlobal administrators only. Only request-level folders listed in the last rescan/discovery result are\naccepted (no free path); registered and whitespace-ambiguous folders are refused (``skipped``).\nThe rescan state moves the folders to ``ADMIN_EXCLUDED`` at once.",
+        "operationId": "exclude_folders_api_folder_discovery_environments_exclusions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Exclusions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/exclusions/restore": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Restore Folders",
+        "description": "[다시 포함]: undo an exclusion made from the rescan result (the folder is a candidate again).",
+        "operationId": "restore_folders_api_folder_discovery_environments_exclusions_restore_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Exclusions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/refresh": {
       "post": {
         "tags": [
@@ -19655,6 +19735,24 @@
           "unit"
         ],
         "title": "DropVideoSubsystemSummary"
+      },
+      "Exclusions": {
+        "properties": {
+          "relative_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Relative Paths"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_paths"
+        ],
+        "title": "Exclusions"
       },
       "FileExclusion": {
         "properties": {

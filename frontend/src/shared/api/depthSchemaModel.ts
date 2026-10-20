@@ -110,6 +110,7 @@ export function rescanLine(state: RescanLine | null): string {
   if (!state) return ''
   if (state.status === 'RUNNING') {
     const progress = state.progress ?? { done: 0, total: 0 }
+    if (state.phase === 'REINTERPRET') return `저장 폴더 확인 중 · 새 깊이 스키마 적용 ${progress.done}/${progress.total}`
     return state.phase === 'SYNC' ? `저장 폴더 확인 중 · 의뢰 ${progress.done}/${progress.total}` : `저장 폴더 확인 중 · 새 폴더 ${state.created_requests?.length ?? 0}개`
   }
   if (state.status === 'FAILED') return state.error || '저장 폴더를 확인하지 못했습니다.'

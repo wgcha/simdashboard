@@ -64,7 +64,14 @@ export type FolderDiscoveryResult = {
 }
 
 /** One folder the discovery did not register, with the reason (global administrators only). */
-export type FolderDiscoveryReview = { relative_path: string; reason: string; code?: string; environment?: FolderEnvironment | null; deviation_code?: string; deviation_count?: number; deviation_path?: string }
+export type FolderDiscoveryReview = { relative_path: string; reason: string; code?: string; environment?: FolderEnvironment | null; deviation_code?: string; deviation_count?: number; deviation_path?: string; /** ADMIN_EXCLUDED only: the exclusion was made from the rescan result and can be undone. */ restorable?: boolean }
+/** A request the rescan reinterpreted (or could not) with the current depth schema (issue #55). */
+export type StorageRescanReinterpret = {
+  project_id: string; project_name: string; request_id: string; request_name: string; environment: string
+  registration_id?: string | null; code?: string; message: string
+  deviation_count: number; deviations: Array<{ code: string; message: string; relative_path: string; blocking: boolean }>
+}
+export type FolderExclusionResult = { excluded?: string[]; restored?: string[]; skipped: Array<{ relative_path: string; code: string; message: string }> }
 export type StorageRescanFailure = { project_id: string; project_name: string; request_id: string; request_name: string; environment: string; code: string; message: string }
 /** [저장 폴더 새로고침] full rescan (POST/GET /api/folder-discovery/environments/rescan, 2026-10-17). */
 export type StorageRescanState = {
@@ -72,11 +79,16 @@ export type StorageRescanState = {
   started_at: string | null
   finished_at: string | null
   started_by: string | null
-  phase: 'DISCOVER' | 'SYNC' | null
+  phase: 'DISCOVER' | 'REINTERPRET' | 'SYNC' | null
   progress: { done: number; total: number }
   created_projects: Array<{ id: string; name: string }>
   created_requests: Array<{ id: string; name: string; environment: FolderEnvironment; project_id: string }>
   needs_review: FolderDiscoveryReview[]
+  /** Requests registered with an older depth schema that were reinterpreted / blocked by a deviation (issue #55). */
+  reinterpreted: StorageRescanReinterpret[]
+  reinterpret_blocked: StorageRescanReinterpret[]
+  reinterpret_unchanged: number
+  reinterpret_deferred: number
   rounds: number
   scopes: number
   refreshed: number
@@ -172,6 +184,10 @@ export const folderEnvironmentApi = {
   },
   rescanStart: async (): Promise<StorageRescanState> => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/rescan', {})) as StorageRescanState,
   rescanStatus: async (signal?: AbortSignal): Promise<StorageRescanState> => unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments/rescan', { signal })) as StorageRescanState,
+  /** [제외] / [모두 제외] in the rescan result: request folders the discovery never registers (issue #55). */
+  excludeFolders: (relativePaths: string[]) => requestJson<FolderExclusionResult>(apiUrl('/api/folder-discovery/environments/exclusions' as never), jsonBody('POST', { relative_paths: relativePaths })),
+  /** [다시 포함]: undo an exclusion made from the rescan result. */
+  restoreFolders: (relativePaths: string[]) => requestJson<FolderExclusionResult>(apiUrl('/api/folder-discovery/environments/exclusions/restore' as never), jsonBody('POST', { relative_paths: relativePaths })),
   profiles: async (signal?: AbortSignal) => (unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments', { signal })) as { items: FolderEnvironmentProfile[] }).items,
   history: async (offset = 0, signal?: AbortSignal, includeDeleted = false) => requestJson<{ items: FolderEnvironmentRegistration[]; total: number }>(apiUrl('/api/folder-discovery/environments/history', {}, { offset, limit: 50, include_deleted: includeDeleted }), { signal }),
   getDepthSchema: (signal?: AbortSignal) => requestJson<DepthSchema>(apiUrl('/api/folder-discovery/environments/depth-schema' as never), { signal }, { ms: DEPTH_SCHEMA_LOAD_TIMEOUT_MS, what: '깊이 스키마' }),

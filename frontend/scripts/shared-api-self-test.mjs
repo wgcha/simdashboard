@@ -216,6 +216,7 @@ assert(!quick.signal.aborted, 'a finished request is not aborted later')
 // [저장 폴더 새로고침] started from the depth-schema editor.
 assert(rescanLine({ status: 'RUNNING', phase: 'SYNC', progress: { done: 2, total: 9 } }) === '저장 폴더 확인 중 · 의뢰 2/9', 'sync progress line')
 assert(rescanLine({ status: 'RUNNING', phase: 'DISCOVER', created_requests: [1, 2] }) === '저장 폴더 확인 중 · 새 폴더 2개', 'discover progress line')
+assert(rescanLine({ status: 'RUNNING', phase: 'REINTERPRET', progress: { done: 1, total: 4 } }) === '저장 폴더 확인 중 · 새 깊이 스키마 적용 1/4', 'reinterpret progress line')
 assert(rescanLine({ status: 'DONE', progress: { done: 9, total: 9 }, refreshed: 7, needs_review: [], failed: [], partial: true }).includes('한 번 더'), 'partial result asks for another run')
 assert(rescanLine({ status: 'FAILED', error: '실패' }) === '실패' && rescanLine(null) === '' && rescanLine({ status: 'IDLE' }) === '', 'failed / idle lines')
 

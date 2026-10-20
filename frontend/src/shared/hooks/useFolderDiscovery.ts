@@ -79,8 +79,10 @@ export function useFolderDiscovery<P, R>(options: FolderDiscoveryOptions<P, R>) 
           fresh.forEach((item) => seenRequests.current.add(item.id))
           if (fresh.length) messages.push(`새 의뢰 ${fresh.length}건 확인`)
         }
-        const nextReviewKey = latest.current.isAdmin ? result.needs_review.map((item) => `${item.relative_path}\u0000${item.code ?? ''}`).sort().join('\n') : ''
-        if (nextReviewKey && nextReviewKey !== reviewKey.current) messages.push(`확인 필요 폴더 ${result.needs_review.length}건: ${result.needs_review[0].reason}`)
+        // Folders an administrator excluded ([제외] in the rescan result) are not "확인 필요".
+        const review = result.needs_review.filter((item) => item.code !== 'ADMIN_EXCLUDED')
+        const nextReviewKey = latest.current.isAdmin ? review.map((item) => `${item.relative_path}\u0000${item.code ?? ''}`).sort().join('\n') : ''
+        if (nextReviewKey && nextReviewKey !== reviewKey.current) messages.push(`확인 필요 폴더 ${review.length}건: ${review[0].reason}`)
         reviewKey.current = nextReviewKey
         if (messages.length) latest.current.onNotice(messages.join(' · '))
       }).catch((reason: unknown) => {

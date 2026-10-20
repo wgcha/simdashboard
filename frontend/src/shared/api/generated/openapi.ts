@@ -2183,6 +2183,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/exclusions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exclude Folders
+         * @description [제외] / [모두 제외] in the rescan result: request folders the discovery never registers (issue #55).
+         *
+         *     Global administrators only. Only request-level folders listed in the last rescan/discovery result are
+         *     accepted (no free path); registered and whitespace-ambiguous folders are refused (``skipped``).
+         *     The rescan state moves the folders to ``ADMIN_EXCLUDED`` at once.
+         */
+        post: operations["exclude_folders_api_folder_discovery_environments_exclusions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/exclusions/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Folders
+         * @description [다시 포함]: undo an exclusion made from the rescan result (the folder is a candidate again).
+         */
+        post: operations["restore_folders_api_folder_discovery_environments_exclusions_restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/refresh": {
         parameters: {
             query?: never;
@@ -6508,6 +6552,11 @@ export interface components {
             threshold: number;
             /** Unit */
             unit: string;
+        };
+        /** Exclusions */
+        Exclusions: {
+            /** Relative Paths */
+            relative_paths: string[];
         };
         /** FileExclusion */
         FileExclusion: {
@@ -13425,6 +13474,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    exclude_folders_api_folder_discovery_environments_exclusions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Exclusions"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_folders_api_folder_discovery_environments_exclusions_restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Exclusions"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

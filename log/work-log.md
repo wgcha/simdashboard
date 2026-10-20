@@ -9,6 +9,13 @@
 - Final 버전 ID 선택(사용자 질문 "지정ID가 꼭 있어야하는지?"): `Final/CAE/<Case>/` 아래 32자리 hex는 버전, 아니면 버전 층 없음 — 그 폴더부터 Case 내용이 시작하고 Working L3 역할을 한 칸 위에서 미러, 이탈 없음(depth-schema D12a). Final/Report는 그대로 ID 기대. "최신 Final"은 폴더 이름이 아니라 지정 기록 기준 그대로이며 ID 없는 내용은 기록 없는 하나의 Final로 표시만 한다. 대시보드 Final 지정 쓰기는 계속 ID 폴더를 만든다. `ROLE_RULES_REVISION` 3(기존 스냅샷 1회 재해석).
 - 검증: 신규 `tests/test_drive_request_sync_tree.py` 4건·`tests/test_final_version_optional.py` 8건(수정 없이는 일괄 읽기 테스트 2건 실패 확인), `test_depth_schema.py`(Report 경고로 한 줄 조정), 회귀 `test_drive_reads`·`test_drive_discovery_tree`·`test_folder_auto_sync`·`test_drive_usage_sync`·`test_folder_name_whitespace_drive` 83 통과, 재해석·등록 삭제·새 Scene 등록 일부 25 통과.
 - 남은 확인: 화면 `DepthSchemaEditor`의 Final 구조표(L4 `Final 버전 (32자리 hex)`)와 `depthSchemaModel.ts`의 `FINAL_VERSION_INVALID` 문구는 이 변경에서 손대지 않았다(CAE에서는 선택임을 표기 필요).
+## 2026-10-20 — 이슈 #55 저장 폴더 새로고침: 프로젝트 공백 쌍둥이 병합·모든 프로젝트 자동 추가·새 스키마 적용·일괄 제외
+
+- 증상(실서버, SCX 드라이브): `PROJ-000099_R95J 개발 과제`와 `PROJ-000099_R95J개발과제`(의뢰 WR-…800/804 대 801/805가 두 철자로 나뉨)가 둘 다 `FOLDER_NAME_WHITESPACE_DUPLICATE`로 보이고 아무것도 등록되지 않음. `PROJ-000002_testProject`는 의뢰가 모두 키워드 없음이라 프로젝트가 아예 안 생김. 스키마를 고쳐도 기존 의뢰에 적용하려면 의뢰마다 재해석. `WR-00000004_내충격 강성강도`(ENV_KEYWORD_NONE)가 매번 확인 필요로 나옴.
+- 수정: ① 프로젝트 레벨 공백 쌍둥이는 `_ProjectFolder` 한 묶음 = 한 프로젝트(모든 철자 연결, 모든 철자의 의뢰 탐색; 같은 키 의뢰는 `FOLDER_NAME_WHITESPACE_DUPLICATE`). ② `_ensure_project`: 모든 프로젝트 레벨 폴더가 의뢰 없이도 프로젝트(멤버십 없음)와 `folder_project_links` 행을 가짐(`PROJECT_NAME_EXISTS` 유지; 프로젝트 정리는 `EMPTY`로 분류, 지워도 폴더가 남아 있으면 다시 생김). ③ `storage_rescan._reinterpret_all`: 옛 `schema_set_id`의 등록 의뢰를 `reinterpret_request`로 현재 스키마에 다시 등록(막히면 이탈 요약만), 드라이브는 의뢰별 읽기 세션·단계 시간 한도, 진행 `REINTERPRET`. ④ `POST …/exclusions`·`…/restore`(관리자 제외·다시 포함, `folder_discovery_exclusions`)와 결과 창 [제외]/[모두 제외]/"제외한 폴더 n개". ⑤ 깊이 스키마 편집기가 시작한 새로고침을 상단 버튼이 `simdash:storage-rescan-started` 이벤트로 이어받음.
+- 마이그레이션 0045(`folder_project_links`, `folder_discovery_exclusions`; 헤드 확인 테스트·PG 시작 점검·`database.py` 갱신).
+- 문서: depth-schema §8, folder-schema-refresh.md, scx-drive.md.
+- 검증: `tests/test_discovery_issue55.py` 14(쌍둥이 병합·멱등, 의뢰 없는 프로젝트, 정리 후 재생성, 재해석·막힘·시간 한도, 제외·복구·권한, 드라이브 새로고침 2건), 기존 `test_folder_auto_discovery.py`·`test_folder_name_whitespace.py` 갱신 후 통과, `npx tsc -b --noEmit`, `npm run test:api`.
 
 ## 2026-10-17 — 알림 "18시간 전": 상대 시각을 서버 시계 기준으로, 서버 시간대 표시
 
