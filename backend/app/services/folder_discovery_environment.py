@@ -20,7 +20,7 @@ from .drive import reads as drive_reads
 from . import environment_folder_profiles
 from . import folder_discovery as legacy
 from . import spdm_storage
-from .folder_discovery_scan import issue_summary, limits_for_root, relevant_content_fingerprint, root_identity, scan, stat_fingerprint
+from .folder_discovery_scan import incomplete_message, issue_summary, limits_for_root, relevant_content_fingerprint, root_identity, scan, stat_fingerprint
 from .environment_folder_profiles import resolve_role
 from . import usage_source_review
 from . import notifications
@@ -37,7 +37,8 @@ _logger = logging.getLogger(__name__)
 # snapshot from an older revision is re-interpreted once even when the folder
 # fingerprints are unchanged, so a rule fix reaches already scanned folders.
 # 2: undecided folders that only failed the name pattern may inherit a LEVEL role.
-ROLE_RULES_REVISION = 2
+# 3: the Final/CAE version (designation ID) level is optional (issue #55).
+ROLE_RULES_REVISION = 3
 
 
 def now(): return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -270,6 +271,9 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         raise resolver.FolderSchemaError("FOLDER_SCHEMA_ENVIRONMENT_INVALID", "지원하지 않는 폴더 환경입니다.")
     root_key = root_identity(root)
     request_path = resolver._request_path(conn, root_key, project_id, request_id, environment)
+    # SCX drive (issue #55): the request tree (also read by the schema resolver below) is listed in one
+    # read round; before any write, so the body may be repeated.
+    drive_reads.require_subtree(request_path)
     previous = resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
     if previous and not resolver.snapshot_matches_path(previous, request_path):
         # The request folder was renamed and re-linked: refresh as the first refresh after its
@@ -373,8 +377,9 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
     if fresh.get("status") != "COMPLETE":
         # Partial trees are not activated (issue #51 decision, docs/features/scx-drive.md §8.8): an
         # unscanned subtree would read as removed. The issues are logged by the sync caller.
-        raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 모두 확인할 수 없습니다.", 422,
-                                         issues=fresh.get("issues"))
+        raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE",
+                                         incomplete_message("현재 의뢰 폴더를 모두 확인할 수 없습니다.", fresh.get("issues")),
+                                         422, issues=fresh.get("issues"))
     content_entries: list = []
     depth_rules = environment_folder_profiles.is_depth_rules(profile["rules"])
     # DEPTH_V1 reads the Final branch for its roles, but Final is never a
@@ -1925,6 +1930,7 @@ def reinterpret_request(conn, actor, request_id: str, *, root=None) -> dict:
         legacy.fail("DEPTH_SCHEMA_REQUEST_LEVEL_MISMATCH",
                     "의뢰 폴더 깊이가 현재 깊이 스키마의 의뢰 깊이와 다릅니다. 상위 구조를 확인하세요.", 422)
     actor_id = getattr(actor, "user_id", actor)
+    drive_reads.require_subtree(request_path)   # SCX drive (issue #55): the deep tree in one read round
     with legacy.WRITE_LOCK:
         scanned = save_scan(conn, root, request_path, environment, None, project_id, request_id, actor_id)
         if scanned["status"] != "COMPLETE":

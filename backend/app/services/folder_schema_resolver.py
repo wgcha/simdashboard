@@ -706,13 +706,18 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
     # made the re-scan slow enough to end INCOMPLETE. Roles are path-based, so the request
     # subtree is interpreted the same way.
     current_path = request_path if _is_ancestor(scan_path, request_path) else scan_path
+    # SCX drive (issue #55): list the whole deep request tree in one read round before the scan, not
+    # a few levels per miss (FINAL/CAE/<case>/<id>/Drop/... ran the session out of rounds).
+    drive_reads.require_subtree(current_path)
     try:
         current_scan = folder_discovery_scan.scan(root, current_path)
     except (OSError, ValueError, spdm_storage.SpdmStorageError) as exc:
         raise FolderSchemaError("FOLDER_SCHEMA_SCAN_UNAVAILABLE", "현재 의뢰 폴더를 안전하게 조사할 수 없습니다.", 422) from exc
     if current_scan.get("status") != "COMPLETE":
-        raise FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 안전하게 모두 조사할 수 없습니다.", 422,
-                                issues=current_scan.get("issues"))
+        raise FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE",
+                                folder_discovery_scan.incomplete_message(
+                                    "현재 의뢰 폴더를 안전하게 모두 조사할 수 없습니다.", current_scan.get("issues")),
+                                422, issues=current_scan.get("issues"))
     interpreted = folder_discovery_environment._interpret(
         current_scan["nodes"], root_key, environment, project_id, request_id, rules,
         seed_request_path=request_path,

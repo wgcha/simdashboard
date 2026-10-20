@@ -134,10 +134,11 @@ def test_working_missing_and_unexpected_children():
     assert resolved[DIST]["deviation"]["code"] == "WORKING_MISSING"
     assert resolved[f"{DIST}/Misc"]["deviation"]["code"] == "UNEXPECTED_REQUEST_CHILD"
     final = profiles.resolve_tree([PROJECT, DIST, f"{DIST}/Working", f"{DIST}/Final", f"{DIST}/Final/Other",
-                                   f"{DIST}/Final/CAE/C/not-an-id"], dist_rules())
+                                   f"{DIST}/Final/Report/C/not-an-id"], dist_rules())
     codes = {e["relative_path"]: (e["deviation"] or {}).get("code") for e in final}
     assert codes[f"{DIST}/Final/Other"] == "UNEXPECTED_FINAL_CHILD"
-    assert codes[f"{DIST}/Final/CAE/C/not-an-id"] == "FINAL_VERSION_INVALID"
+    # The Final version ID level is optional under CAE (test_final_version_optional.py); Report keeps it.
+    assert codes[f"{DIST}/Final/Report/C/not-an-id"] == "FINAL_VERSION_INVALID"
     assert {"UNEXPECTED_FINAL_CHILD", "FINAL_VERSION_INVALID"} <= profiles.WARNING_DEVIATIONS
 
 

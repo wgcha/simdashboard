@@ -27,7 +27,7 @@
 | `Final/Report/<Case>/<확정 ID>/` | 앱이 만든 보고서만, 폴더 바로 아래: `<Case>_report.pptx`, `<Case>_report.html` |
 | `Final/.finalizations/<확정 ID>/` | 서명된 `plan.json`, 보고서 임시 보관 `reports/`와 `reports.json`, 서명된 작업 `job.json`·진행 `progress.json`, 복사 완료 기록 `copied.jsonl`(줄마다 서명), 작업 잠금 `.job.lock`, 공개 전 임시 폴더 `staging/{CAE,Report,partial}`, `complete.json`, 해시 확인 기록 `verified.json`(서명). 의뢰 잠금은 `Final/.finalizations/.request.lock` |
 
-- 확정 ID는 32자리 소문자 hex(`uuid4().hex`, `_OPERATION_ID`)로 DEPTH_V1 `FINAL_VERSION` 형식과 같다.
+- 확정 ID는 32자리 소문자 hex(`uuid4().hex`, `_OPERATION_ID`)로 DEPTH_V1 `FINAL_VERSION` 형식과 같다. Final 지정이 쓰는 폴더는 항상 `<Case>/<ID>/`지만, 폴더 스키마는 CAE에서 ID 층 없는 폴더(수동으로 둔 Final)도 이탈 없이 읽는다(depth-schema D12a). 그런 폴더는 지정 기록이 없으므로 최신 Final·진척 판정에 들어가지 않는다.
 - 보고서 파일 이름은 서버가 Case 이름으로 정한다(Windows 금지·제어 문자 `_`, 공백 `_`, 80자, 예약 이름 앞 `_`). 클라이언트가 보낸 이름은 쓰지 않는다.
 - CAD는 복사하지 않는다. 앱의 SPDM 쓰기는 의뢰의 `Final/` 아래뿐이다. Working과 기존 Final 파일은 옮기거나 덮어쓰거나 지우지 않는다(D14). 앱이 옮기는 것은 이 확정이 만든 `staging/CAE`·`staging/Report` 폴더뿐이다(공개).
 

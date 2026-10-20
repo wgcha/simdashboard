@@ -89,6 +89,26 @@ def issue_summary(issues, limit: int = 3) -> str:
     return ", ".join(items) + (f" (+{more})" if more > 0 else "")
 
 
+def issue_detail(issues, limit: int = 1) -> str:
+    """Which folder/operation a scan could not read, for a user-facing message (issue #55).
+
+    ``"<path> (list_dir, DRIVE_READ_NOT_PREPARED) 외 2건"``; empty when the scan carries no issue.
+    """
+    items = [item for item in list(issues or []) if isinstance(item, dict)]
+    parts = []
+    for item in items[:limit]:
+        facts = [str(value) for value in (item.get("operation"), item.get("error_code") or item.get("code")) if value]
+        parts.append(f"{item.get('relative_path') or '.'}" + (f" ({', '.join(facts)})" if facts else ""))
+    more = len(items) - len(parts)
+    return ", ".join(parts) + (f" 외 {more}건" if parts and more > 0 else "")
+
+
+def incomplete_message(base: str, issues) -> str:
+    """``base`` + the first unread path and operation: ``"… 읽지 못한 곳: <path> (list_dir, CODE)"``."""
+    detail = issue_detail(issues)
+    return f"{base} 읽지 못한 곳: {detail}" if detail else base
+
+
 def normal(relative: str) -> str:
     if not relative:
         return ""

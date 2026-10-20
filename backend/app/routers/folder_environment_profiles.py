@@ -213,6 +213,7 @@ def project_cleanup_delete(payload: CleanupConfirm, request: Request):
 # ---- request reinterpret (§6, D9) --------------------------------------------------
 
 @requests_router.post("/api/requests/{request_id}/reinterpret")
+@drive_reads.read_session()
 def reinterpret(request_id: str, request: Request):
     with connect() as conn:
         admin(request, conn)

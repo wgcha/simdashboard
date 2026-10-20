@@ -235,7 +235,7 @@ DEVIATION_MESSAGES = {
     "WORKING_MISSING": "의뢰 폴더 아래에 Working 폴더가 없습니다.",
     "UNEXPECTED_REQUEST_CHILD": "의뢰 폴더 바로 아래에는 Working과 Final만 둘 수 있습니다.",
     "UNEXPECTED_FINAL_CHILD": "Final 바로 아래에는 CAE, Report, CAD만 둘 수 있습니다.",
-    "FINAL_VERSION_INVALID": "Final Case 아래 폴더 이름이 Final 지정 ID(32자리 hex) 형식이 아닙니다.",
+    "FINAL_VERSION_INVALID": "Final/Report의 Case 아래 폴더 이름이 Final 지정 ID(32자리 hex) 형식이 아닙니다.",
 }
 BLOCKING_DEVIATIONS = frozenset({"ENV_KEYWORD_BOTH", "ENV_KEYWORD_NONE", "WORKING_MISSING", "UNEXPECTED_REQUEST_CHILD"})
 WARNING_DEVIATIONS = frozenset({"UNEXPECTED_FINAL_CHILD", "FINAL_VERSION_INVALID"})
@@ -488,11 +488,16 @@ def resolve_path(parts, schema):
         return node(k, "FINAL", None, "CONTENT", environment=environment, **extra)
     if k == 3:
         return node(3, "FINAL", "SIMULATION_CASE", "CONFIRMED", environment=environment, **extra)
-    if k == 4:
-        valid = bool(_FINAL_VERSION.fullmatch(parts[depth - 1]))
+    # Final/CAE: the Final version level (32-hex designation ID) is optional (issue #55, 2026-10-20).
+    # A hex folder below the Case is a version (as before); any other folder means there is no version
+    # level and the Case's content starts there, mirroring Working L3 one level higher. Final/Report
+    # is written by the app under an ID folder, so a non-ID folder there stays a warning.
+    versioned = bool(_FINAL_VERSION.fullmatch(parts[request_level + 3]))
+    unversioned_cae = final_role == "FINAL_CAE" and not versioned
+    if k == 4 and not unversioned_cae:
         return node(4, "FINAL", "FINAL_VERSION", "CONFIRMED",
-                    None if valid else "FINAL_VERSION_INVALID", environment, **extra)
-    mirrored = k - 2  # Final k=5 mirrors Working L3
+                    None if versioned else "FINAL_VERSION_INVALID", environment, **extra)
+    mirrored = k - 1 if unversioned_cae else k - 2  # versioned Final k=5 mirrors Working L3
     if mirrored <= len(lower):
         return node(k, "FINAL", lower[mirrored - 1]["role"], "CONFIRMED", environment=environment, **extra)
     return node(k, "FINAL", None, "CONTENT", environment=environment, **extra)

@@ -2,6 +2,14 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-20 — 의뢰 동기화 읽기 회차 소진(SCAN_INCOMPLETE)과 Final 버전 ID 선택화 (이슈 #55)
+
+- 실서버 증상: 저장 폴더 새로고침의 의뢰 확인이 `FOLDER_SCHEMA_SCAN_INCOMPLETE "현재 의뢰 폴더를 안전하게 모두 조사할 수 없습니다."`(WR-00000800/801/804/805). 2658815는 자동 탐색만 고쳤고, 의뢰 하나의 확인(`sync_drive`/`sync_scope`→`refresh_scope`→스캔, 수동 새로고침, 재해석)은 읽기 세션 8회차 안에서 트리를 미스마다 4단계씩 받았다. Final 버전·Drop이 여럿이면 폴더 하나당 2회차를 써서 회차가 먼저 바닥났다(가짜 드라이브 재현: Final 버전 6개 → 7회 미스 후 INCOMPLETE).
+- 수정: `refresh_scope`·`resolver.resolve_request_schema`·`reinterpret_request`가 스캔 전(쓰기 전)에 `drive_reads.require_subtree(의뢰 폴더)`로 트리를 한 회차에 받는다(분류 단계가 이미 읽은 폴더는 재사용). 재해석 라우트에 `read_session` 추가. 불완전 메시지에 `읽지 못한 곳: <경로> (list_dir, <코드>) 외 N건`(`folder_discovery_scan.incomplete_message`).
+- Final 버전 ID 선택(사용자 질문 "지정ID가 꼭 있어야하는지?"): `Final/CAE/<Case>/` 아래 32자리 hex는 버전, 아니면 버전 층 없음 — 그 폴더부터 Case 내용이 시작하고 Working L3 역할을 한 칸 위에서 미러, 이탈 없음(depth-schema D12a). Final/Report는 그대로 ID 기대. "최신 Final"은 폴더 이름이 아니라 지정 기록 기준 그대로이며 ID 없는 내용은 기록 없는 하나의 Final로 표시만 한다. 대시보드 Final 지정 쓰기는 계속 ID 폴더를 만든다. `ROLE_RULES_REVISION` 3(기존 스냅샷 1회 재해석).
+- 검증: 신규 `tests/test_drive_request_sync_tree.py` 4건·`tests/test_final_version_optional.py` 8건(수정 없이는 일괄 읽기 테스트 2건 실패 확인), `test_depth_schema.py`(Report 경고로 한 줄 조정), 회귀 `test_drive_reads`·`test_drive_discovery_tree`·`test_folder_auto_sync`·`test_drive_usage_sync`·`test_folder_name_whitespace_drive` 83 통과, 재해석·등록 삭제·새 Scene 등록 일부 25 통과.
+- 남은 확인: 화면 `DepthSchemaEditor`의 Final 구조표(L4 `Final 버전 (32자리 hex)`)와 `depthSchemaModel.ts`의 `FINAL_VERSION_INVALID` 문구는 이 변경에서 손대지 않았다(CAE에서는 선택임을 표기 필요).
+
 ## 2026-10-17 — 알림 "18시간 전": 상대 시각을 서버 시계 기준으로, 서버 시간대 표시
 
 - 증상(실서버, Windows·KST·PG18): 방금 생긴 알림이 `18시간 전`. 등록 이력(절대 시각)은 서버 PC 시계와 같았다.

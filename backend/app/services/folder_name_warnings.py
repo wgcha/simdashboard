@@ -30,7 +30,7 @@ DEVIATION_TEXT = {
     "WORKING_MISSING": "의뢰 폴더 아래에 Working 폴더가 없습니다.",
     "UNEXPECTED_REQUEST_CHILD": "의뢰 폴더 바로 아래에 Working·Final 이외의 폴더가 있습니다.",
     "UNEXPECTED_FINAL_CHILD": "Final 폴더 바로 아래에 CAE·Report·CAD 이외의 폴더가 있습니다.",
-    "FINAL_VERSION_INVALID": "Final Case 아래 폴더 이름이 Final 지정 형식이 아닙니다.",
+    "FINAL_VERSION_INVALID": "Final/Report의 Case 아래 폴더 이름이 Final 지정 형식이 아닙니다.",
 }
 
 

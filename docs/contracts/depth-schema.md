@@ -26,6 +26,7 @@
 | D10 | 하위 L1은 **이름으로** 구분한다. `Working`(필수)과 `Final`(선택, Final 지정 후 생성). `Final`도 스키마 대상이다 |
 | D11 | Final 하위 L2는 이름으로 구분한다. `CAE` = 해석 입력·결과 파일, `Report` = 보고서 기능이 만든 PPTX·HTML(사용자가 Final 지정 때 하나 이상 선택, PDF는 만들지 않음). 앱의 SPDM 쓰기는 이 두 폴더로만 한다 |
 | D12 | Final/CAE·Report의 L3 이하는 고정 구조다: `<Case>/<finalization_id>/` 아래에 Working의 Case 이하 구조를 그대로 미러링한다. 관리자 편집 대상이 아니며 UI에 읽기 전용으로 표시한다 |
+| D12a | **Final 버전(지정 ID) 층은 CAE에서 선택 사항이다**(이슈 #55, 2026-10-20). `Final/CAE/<Case>/` 아래 32자리 hex 폴더는 지금처럼 Final 버전(FINAL_VERSION)이다. hex가 아닌 폴더는 "버전 층이 없다"는 뜻이라 그 폴더부터 Case의 내용이 시작하며(Working L3 역할을 한 층 위에서 미러), 이탈이 아니다. `Final/Report`는 앱이 ID 폴더에 쓰므로 그대로 ID 폴더를 기대하고 아니면 `FINAL_VERSION_INVALID` 경고다 |
 
 ## 3. 표준 트리
 
@@ -37,8 +38,9 @@ Root                                   L0 (역할 없음)
       │  ├─ .finalizations/…            앱 메타(plan.json, complete.json, .request.lock) — 무시
       │  ├─ CAE                         L2 FINAL_CAE      해석 입력·결과 파일
       │  │  └─ <Case>                   L3 SIMULATION_CASE
-      │  │     └─ <finalization_id>     L4 FINAL_VERSION  32자리 hex
-      │  │        └─ …                  L5~ = Working의 Case 이하 구조 미러 (사용: Scene / 유통: LoadCase/Run/RunOption/Scene)
+      │  │     ├─ <finalization_id>     L4 FINAL_VERSION  32자리 hex (선택, D12a)
+      │  │     │  └─ …                  L5~ = Working의 Case 이하 구조 미러 (사용: Scene / 유통: LoadCase/Run/RunOption/Scene)
+      │  │     └─ <hex 아닌 폴더> …      버전 층 없음: L4부터 Working L3 이하 미러 (한 칸 위)
       │  ├─ Report                      L2 FINAL_REPORTS  보고서 PPTX·HTML
       │  └─ CAD                         L2 FINAL_CAD      하위는 CONTENT (앱 쓰기 없음) — 미확정, §12
       │     └─ <Case>/<finalization_id>/…  CAE와 같은 구조
@@ -136,8 +138,9 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
    - Final 가지 (D11, D12)
      - k=2: `CAE` → FINAL_CAE, `Report` → FINAL_REPORTS, `CAD` → FINAL_CAD(이하 CONTENT), `.finalizations` → 무시. 그 외 이름은 `UNEXPECTED_FINAL_CHILD`
      - k=3: SIMULATION_CASE
-     - k=4: FINAL_VERSION. 이름이 32자리 hex가 아니면 `FINAL_VERSION_INVALID`
-     - k≥5: Working 하위 구간의 L3 이후 역할을 적용(미러)
+     - k=4: **CAE**: 이름이 32자리 hex면 FINAL_VERSION, 아니면 버전 층이 없는 것이라 Working L3 역할을 한 칸 위(k=4)에서 적용하고 이탈은 없다(D12a). **Report**: FINAL_VERSION이고 hex가 아니면 `FINAL_VERSION_INVALID`
+     - k≥5: Working 하위 구간의 L3 이후 역할을 적용(미러). 버전 층이 있으면 k−2번째, CAE에서 버전 층이 없으면 k−1번째 층(k=4 폴더 이름이 hex인지로 같은 Case 아래 폴더마다 따로 판정)
+     - **"최신 Final"**: 앱의 최신 Final은 폴더 이름이 아니라 Final 지정 기록(`finalization_operations` / `.finalizations`의 서명된 완료 기록)으로 정한다. 폴더 규칙은 역할 표시만 한다. 한 Case 아래 ID 폴더와 ID 없는 폴더가 함께 있으면 ID 폴더는 지금처럼 각각 하나의 버전이고, ID 없는 내용은 **ID·기록이 없는 하나의 Final**로 보인다(수동으로 둔 것): 지정 기록이 없으므로 진척의 "Final 지정" 단계와 최신 Final 판정에는 들어가지 않으며 이탈 경고도 없다. 대시보드의 Final 지정 쓰기는 항상 ID 폴더(`<Case>/<finalization_id>/`)를 만든다
      - Final 가지는 **결과 판독 소스가 아니다.** 결과 캡처·Case 결과 화면은 Working만 읽는다. Final 역할은 Final 지정 이력과 대조·표시용이다
    - 의뢰에 Working이 없으면 `WORKING_MISSING`으로 등록을 막는다
    - 2 ≤ k ≤ n: `lower[k].role` (이름 무관)
@@ -158,7 +161,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 | `WORKING_MISSING` | 의뢰 아래 Working 없음 | 차단 |
 | `UNEXPECTED_REQUEST_CHILD` | 의뢰 바로 아래에 Working/Final 이외 폴더 | 차단 |
 | `UNEXPECTED_FINAL_CHILD` | Final 바로 아래에 CAE/Report/CAD/.finalizations 이외 폴더 | 경고(등록 허용) |
-| `FINAL_VERSION_INVALID` | Final/CAE·Report/<Case> 아래 폴더명이 finalization id 형식이 아님 | 경고(등록 허용) |
+| `FINAL_VERSION_INVALID` | Final/Report/<Case> 아래 폴더명이 finalization id 형식이 아님(**CAE는 이탈 아님**, D12a) | 경고(등록 허용) |
 
 ## 6. API
 
@@ -217,6 +220,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
   - 결과: `renamed_projects: [{id, name, old_path, new_path}]`(경로는 전역 관리자에게만), 감사 `FOLDER_PROJECT_FOLDER_RENAMED`(탐색이 직접 기록). 프로젝트 **표시 이름은 바꾸지 않는다**(옛 폴더 이름 그대로, 필요하면 관리자가 수정).
 - 폴더 이름의 공백(2026-10-19, 사용자 규칙: 폴더 이름의 공백은 의미가 없고 `_`만 부분을 가른다): 폴더 동일성 키는 `drive.reads.name_key` = NFC + casefold + 모든 공백 제거(경로는 `path_key`, 세그먼트별). 등록 경로와 저장소 목록을 비교하는 모든 곳(연결 상태·`_absent`·이름 변경 따라가기·`folder_schema_resolver._fold`·`_request_path`·드라이브 원본 분류)이 이 키를 쓴다. 키가 같은 폴더는 같은 폴더다 — 새 프로젝트·의뢰·Case로 등록하지 않고 WR 짝짓기도 필요 없다. 연결된 의뢰 폴더와 키는 같지만 철자가 다르면(공백 추가·제거) 의뢰 이름 변경 규칙의 `register(supersedes=…)`로 **실제 철자 경로에 다시 등록**한다(저장 경로를 바꾸는 한 곳; 의뢰·프로젝트 id와 데이터 유지, 옛 등록은 `DELETED` 묘비, 옛 경로 Case는 기록). 프로젝트 폴더 철자만 바뀐 경우도 같은 프로젝트에 LINK하고 `renamed_projects`로 알린다. 철자가 다른 옛 경로를 찍은 스냅샷은 낡은 것으로 보고(`snapshot_matches_path`는 NFC·대소문자만 무시) 다음 동기화가 실제 경로로 새로 찍는다. 같은 부모 아래 공백만 다른 폴더가 둘 이상이면 모호하다: `FOLDER_NAME_WHITESPACE_DUPLICATE`(양쪽 모두 `needs_review`, 한국어 사유, 자동 연결·등록 안 함, 그 폴더들은 형제 제외로 스캔에서도 빠짐). 의뢰 이름의 WR 없는 키(`request_identity`)와 프로젝트 이름 중복(`PROJECT_NAME_EXISTS`)도 같은 키로 비교한다. 멱등 키·예약 키는 철자 그대로(기존 값 불변).
 - 폴더 이름(2026-10-17): 공백·이중 공백·괄호·한글(NFC/NFD 무관, 환경 키워드도 NFC로 비교)이 든 프로젝트·의뢰 폴더도 같은 규칙으로 등록한다. 끝 공백·마침표·Windows 금지 문자·예약 이름은 `FOLDER_NAME_INVALID`(등록 안 함). 한 폴더의 예외는 `DISCOVERY_FAILED` 항목이 되고 탐색 응답은 500이 되지 않는다. 조사 미완료는 첫 문제 폴더(`issue_path`)를, 드라이브 호출 실패는 `DRIVE_READ_FAILED`(호출 이름·코드)를 알린다(SCX 드라이브 회차·이름 처리는 [SCX 드라이브 §8.2](../features/scx-drive.md)).
+- 요청 동기화·새로고침·재해석의 드라이브 읽기(이슈 #55, 2026-10-20): 의뢰 폴더 트리(`FINAL/CAE/<Case>/<id>/Drop/…` 포함)는 조사 전에 `drive.reads.require_subtree`로 **한 회차**에 모두 받는다(`refresh_scope`·`resolve_request_schema`·`reinterpret_request`). 역할 해석 개정 `ROLE_RULES_REVISION` 3: 이미 활성화된 스냅샷은 다음 확인에서 한 번 다시 해석된다. 조사가 `SCAN_INCOMPLETE`로 끝나면 메시지에 읽지 못한 첫 경로와 드라이브 작업(`list_dir`/`stat`)·오류 코드를 붙인다.
 - `_skip_final_archive`는 제거한다. Final은 §5 규칙으로 역할만 판정하며, 결과 등록 대상에서는 계속 제외한다(D12). 의뢰 판정은 upper의 request_level 기준이다.
 
 ## 9. 결과 판독과의 관계 (변경 없음)
