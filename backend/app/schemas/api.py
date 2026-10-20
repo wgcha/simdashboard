@@ -240,6 +240,13 @@ class PhysicsAiLinkResponse(BaseModel):
     base_path: str
 
 
+class EslLinkResponse(BaseModel):
+    """ESL(등가정적하중) 플랫폼 링크 표시 상태(사이드바 "등가정적하중")."""
+
+    enabled: bool
+    base_path: str
+
+
 class SelectionMetadataResponse(BaseModel):
     code: str | None = None
     name: str

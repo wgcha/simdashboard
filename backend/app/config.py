@@ -411,3 +411,15 @@ def physicsai_link_enabled() -> bool:
     ``VITE_PHYSICSAI_TARGET`` 등)에서만 켠다. 꺼져 있으면 링크를 숨긴다.
     """
     return os.getenv("SIMDASH_PHYSICSAI_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+ESL_BASE_PATH = "/esl/"
+
+
+def esl_link_enabled() -> bool:
+    """사이드바 "등가정적하중" 링크 표시 여부(``SIMDASH_ESL_ENABLED``, 기본 off).
+
+    ESL 플랫폼이 같은 주소의 ``/esl/``로 연결된 서버(Vite 개발 프록시의
+    ``VITE_ESL_TARGET`` 등)에서만 켠다. 꺼져 있으면 링크를 숨긴다(PhysicsAI와 같은 규칙).
+    """
+    return os.getenv("SIMDASH_ESL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
