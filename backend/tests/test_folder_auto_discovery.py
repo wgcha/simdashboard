@@ -187,7 +187,8 @@ def test_keyword_both_none_and_depth_deviation_need_review(admin_client):
     (root / PROJECT / "[WR-0008]_[사용_환경]" / "Misc").mkdir()  # UNEXPECTED_REQUEST_CHILD
 
     result = _discover(client)
-    assert result["created_projects"] == [] and result["created_requests"] == []
+    # Issue #55: the project folder gets its project although none of its requests can be registered.
+    assert [item["name"] for item in result["created_projects"]] == ["75R9J_PV"] and result["created_requests"] == []
     reviews = {item["relative_path"]: item for item in result["needs_review"]}
     assert {path: item["code"] for path, item in reviews.items()} == {
         f"{PROJECT}/[WR-0003]_[기타]": "ENV_KEYWORD_NONE",
@@ -198,7 +199,8 @@ def test_keyword_both_none_and_depth_deviation_need_review(admin_client):
     missing = reviews[f"{PROJECT}/[WR-0007]_[유통_환경]"]
     assert (missing["deviation_code"], missing["deviation_count"]) == ("WORKING_MISSING", 1)
     assert reviews[f"{PROJECT}/[WR-0008]_[사용_환경]"]["deviation_code"] == "UNEXPECTED_REQUEST_CHILD"
-    assert (_count("SELECT count(*) FROM analysis_requests"), _count("SELECT count(*) FROM projects")) == baseline
+    assert (_count("SELECT count(*) FROM analysis_requests"), _count("SELECT count(*) FROM projects")) == (
+        baseline[0], baseline[1] + 1)
 
     # An unchanged request kept in review is not deep-scanned again on the next run.
     scans = _count("SELECT count(*) FROM folder_environment_scans")
@@ -501,8 +503,11 @@ def test_race_lost_to_another_process_is_not_reported_as_created(admin_client, m
 
     monkeypatch.setattr(environment_service, "register", other_process_wins)
     result = _discover(client)
-    assert result["created_requests"] == [] and result["created_projects"] == []
-    assert _count(AUTO_DISCOVERED_AUDITS) == audits_before
+    # The request was registered by the other process, not by this run; the project (added by this run
+    # before any request, issue #55) is reported.
+    assert result["created_requests"] == []
+    assert [item["name"] for item in result["created_projects"]] == ["75R9J_PV"]
+    assert _count(AUTO_DISCOVERED_AUDITS) == audits_before + 1
 
 
 def test_discovery_can_be_disabled_for_isolated_runs(monkeypatch):

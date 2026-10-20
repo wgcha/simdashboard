@@ -169,6 +169,43 @@ def rescan_status(request: Request):
     with connect() as conn:
         admin(request, conn)
     return storage_rescan.state()
+class Exclusions(BaseModel):
+    relative_paths: list[str] = Field(min_length=1, max_length=1000)
+
+
+@router.post("/exclusions")
+def exclude_folders(payload: Exclusions, request: Request):
+    """[제외] / [모두 제외] in the rescan result: request folders the discovery never registers (issue #55).
+
+    Global administrators only. Only request-level folders listed in the last rescan/discovery result are
+    accepted (no free path); registered and whitespace-ambiguous folders are refused (``skipped``).
+    The rescan state moves the folders to ``ADMIN_EXCLUDED`` at once.
+    """
+    paths = [str(path)[:1024] for path in payload.relative_paths]
+    with connect() as conn:
+        admin(request, conn)
+        result = folder_auto_discovery.exclude_folders(conn, legacy.configured_root(conn), paths,
+                                                       actor=str(request.state.principal.user_id),
+                                                       listed=storage_rescan.listed_reviews())
+        if result["excluded"]:
+            write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                              action="FOLDER_DISCOVERY_EXCLUDED", detail={"paths": result["excluded"]}, connection=conn)
+    storage_rescan.mark_excluded(result["excluded"])
+    return result
+
+
+@router.post("/exclusions/restore")
+def restore_folders(payload: Exclusions, request: Request):
+    """[다시 포함]: undo an exclusion made from the rescan result (the folder is a candidate again)."""
+    paths = [str(path)[:1024] for path in payload.relative_paths]
+    with connect() as conn:
+        admin(request, conn)
+        result = folder_auto_discovery.restore_folders(conn, legacy.configured_root(conn), paths)
+        if result["restored"]:
+            write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                              action="FOLDER_DISCOVERY_EXCLUSION_REMOVED", detail={"paths": result["restored"]}, connection=conn)
+    storage_rescan.mark_restored(result["restored"])
+    return result
 def _classify_for_refresh(session, payload: "Refresh", request: Request) -> None:
     """scx: record new/changed/missing drive files of the request before a manual refresh (05 §4).
 

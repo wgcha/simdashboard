@@ -99,6 +99,8 @@ class _PostgresStartupConnection:
                                           "job_dir_rel", "state", "job_id", "solver", "last_status", "output_path",
                                           "output_rel", "error_code", "error_message", "created_at", "updated_at",
                                           "resolved_at"},
+                "folder_project_links": {"root_key", "relative_path", "path_key", "project_id", "created_by", "created_at"},
+                "folder_discovery_exclusions": {"root_key", "path_key", "relative_path", "excluded_by", "excluded_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])

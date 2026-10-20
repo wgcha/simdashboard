@@ -134,12 +134,15 @@ def test_duplicate_project_folders_and_registered_request_with_a_new_twin(admin_
     (root / CONTAINER / "PROJ-X_가나" / "WR-0000901_유통환경" / "Working").mkdir(parents=True)
     before = _counts()
     result = _discover(client)
+    # Project-level whitespace twins are ONE project (issue #55, one project row for both spellings); the request
+    # folder with the same key under both spellings is the ambiguous one (nothing chosen, nothing registered).
     codes = {item["relative_path"]: item["code"] for item in result["needs_review"]
              if item["relative_path"].startswith(f"{CONTAINER}/PROJ-X_")}
-    assert codes == {f"{CONTAINER}/PROJ-X_가 나": "FOLDER_NAME_WHITESPACE_DUPLICATE",
-                     f"{CONTAINER}/PROJ-X_가나": "FOLDER_NAME_WHITESPACE_DUPLICATE"}
+    assert codes == {f"{CONTAINER}/PROJ-X_가 나/WR-0000901_유통환경": "FOLDER_NAME_WHITESPACE_DUPLICATE",
+                     f"{CONTAINER}/PROJ-X_가나/WR-0000901_유통환경": "FOLDER_NAME_WHITESPACE_DUPLICATE"}
+    assert [item["name"] for item in result["created_projects"] if item["name"].startswith("PROJ-X_")] == ["PROJ-X_가 나"]
     assert not [item for item in result["created_requests"] if item["name"] == "WR-0000901_유통환경"]
-    assert _counts()[:2] == before[:2]
+    assert _counts()[:2] == (before[0] + 1, before[1])
 
     # A registered request whose folder gets a whitespace-twin: nothing is followed or registered.
     project_id, request_id = _registered_request(client, root)

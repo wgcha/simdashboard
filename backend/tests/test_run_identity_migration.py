@@ -76,7 +76,9 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert password_change and password_change.down_revision == "0042_drive_connected_account"
     relay_submissions = script.get_revision("0044_scx_relay_submissions")
     assert relay_submissions and relay_submissions.down_revision == "0043_password_change_required"
-    assert tuple(script.get_heads()) == ("0044_scx_relay_submissions",)
+    discovery_links = script.get_revision("0045_folder_discovery_links")
+    assert discovery_links and discovery_links.down_revision == "0044_scx_relay_submissions"
+    assert tuple(script.get_heads()) == ("0045_folder_discovery_links",)
 
 
 def test_result_location_links_migration_widens_alembic_version_before_other_ddl(monkeypatch: pytest.MonkeyPatch) -> None:

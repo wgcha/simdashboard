@@ -149,6 +149,9 @@ _STAGE_LEAVES = (
     ("notifications", (("project_id", "project"), ("request_id", "request"))),
     # "폴더 구조 만들기" link reservations (migration 0041) of a deleted project/request.
     ("folder_link_reservations", (("project_id", "project"), ("request_id", "request"))),
+    # Project folders linked without a registered request (migration 0045, issue #55). The next discovery
+    # adds the project again while its folder exists (the cleanup never touches SPDM folders, D14).
+    ("folder_project_links", (("project_id", "project"),)),
 )
 _STAGES = (
     _STAGE_LEAVES,

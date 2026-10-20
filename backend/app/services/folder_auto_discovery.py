@@ -20,9 +20,20 @@ Scope and safety:
   (``ENV_KEYWORD_BOTH`` / ``ENV_KEYWORD_NONE``), never registered. A request
   whose scan has a blocking depth deviation (e.g. ``WORKING_MISSING``) is
   reported as ``DEPTH_DEVIATION`` and not registered; warnings do not block.
-* A project is created only together with its first registered request, in
-  the same registration transaction, and without any membership grant. An
-  already linked project folder is passed as a ``LINK`` assignment.
+* Every project-level folder (per the depth schema) gets a project, also when none of its requests
+  can be registered (issue #55, 2026-10-20: ``PROJ-000002_testProject`` whose requests all lack
+  사용/유통): :func:`_ensure_project` creates it without any membership grant and links the folder
+  in ``folder_project_links`` (migration 0045); a folder with a registered request is linked by that
+  registration's ``PROJECT`` registry row as before. The request registration then passes the
+  project as a ``LINK`` assignment. ``PROJECT_NAME_EXISTS`` still protects an unlinked same-name project.
+* Project-level folders whose names differ only by whitespace (``name_key``) are ONE project (issue #55):
+  :class:`_ProjectFolder` groups the spellings, every spelling is linked to the same project id and the
+  requests of all spellings are discovered. Request-level folders with the same key under the merged
+  project stay ``FOLDER_NAME_WHITESPACE_DUPLICATE`` (the dashboard cannot choose); the container
+  levels above the project level are still ambiguous when they differ only by whitespace.
+* Administrator exclusions (issue #55): :func:`exclude_folders` / :func:`restore_folders` keep request
+  folders chosen in the rescan result in ``folder_discovery_exclusions`` (migration 0045); they are listed
+  as ``ADMIN_EXCLUDED`` (``restorable``) and never registered.
 * Idempotent: a folder that is already linked (live environment registry,
   SPDM request binding, legacy folder registry) or whose deterministic
   idempotency key (path + schema set) was already used by a live
@@ -87,7 +98,7 @@ from ..database_connection import connect
 from . import environment_folder_profiles as depth_profiles
 from . import folder_discovery, folder_discovery_environment as environment_service, spdm_storage
 from .drive import reads as drive_reads
-from .folder_discovery_scan import root_identity
+from .folder_discovery_scan import normal as normal_path, root_identity
 from .storage import provider_for_root
 
 MIN_INTERVAL_SECONDS = 60.0
@@ -287,9 +298,14 @@ class _Lister:
         # Folders sharing a parent whose names differ only by whitespace (path -> sorted sibling names):
         # ambiguous, never linked or registered (needs_review FOLDER_NAME_WHITESPACE_DUPLICATE).
         self.duplicates: dict[str, list[str]] = {}
+        # Request folders with the same name key under project folders that are merged (whitespace twins).
+        self.merged_duplicates: set[str] = set()
+        # Folder depth whose whitespace twins are one folder, not ambiguous (the PROJECT level, issue #55).
+        self.merge_depth = 0
 
     def children(self, relative: str) -> list[tuple[str, str]]:
         path = "/".join(relative.split("/")) if relative else ""
+        depth = len([part for part in relative.split("/") if part]) + 1
         found: list[tuple[str, str]] = []
         try:
             self.fs.assert_safe(path)
@@ -317,7 +333,7 @@ class _Lister:
         for name, child in found:
             groups.setdefault(drive_reads.name_key(name), []).append((name, child))
         for group in groups.values():
-            if len(group) > 1:
+            if len(group) > 1 and depth != self.merge_depth:
                 names = sorted(name for name, _child in group)
                 for _name, child in group:
                     self.duplicates[child] = names
@@ -402,6 +418,12 @@ def _linked_state(conn, root_key: str) -> dict[str, Any]:
             projects.setdefault(_node_key(str(path)), set()).add(str(target))
             project_paths.setdefault(_node_key(str(path)), str(path))
             project_spellings.setdefault(_node_key(str(path)), set()).add(str(path))
+    # Project folders linked without a registered request (migration 0045): one row per spelling.
+    for path, project_id in conn.execute(
+            "SELECT relative_path,project_id FROM folder_project_links WHERE root_key=?", [root_key]).fetchall():
+        projects.setdefault(_node_key(str(path)), set()).add(str(project_id))
+        project_paths.setdefault(_node_key(str(path)), str(path))
+        project_spellings.setdefault(_node_key(str(path)), set()).add(str(path))
     deleted_keys: set[str] = set()
     for key, status in conn.execute(
             "SELECT idempotency_key,status FROM folder_environment_registrations WHERE idempotency_key LIKE 'auto-discovery-%'"
@@ -427,7 +449,8 @@ def _linked_state(conn, root_key: str) -> dict[str, Any]:
             "project_spellings": project_spellings,
             "request_spellings": _spellings(request_paths),
             "unlinked_project_names": unlinked_names,
-            "excluded": _manual_exclusions(conn)}
+            "excluded": _manual_exclusions(conn, root_key),
+            "table_excluded": _table_exclusions(conn, root_key)}
 
 
 def _spellings(paths: set[str]) -> dict[str, set[str]]:
@@ -438,7 +461,20 @@ def _spellings(paths: set[str]) -> dict[str, set[str]]:
     return found
 
 
-def _manual_exclusions(conn) -> set[str]:
+def _table_exclusions(conn, root_key: str) -> set[str]:
+    """Request folders excluded from the rescan result (``folder_discovery_exclusions``, node keys)."""
+    return {str(row[0]) for row in conn.execute(
+        "SELECT path_key FROM folder_discovery_exclusions WHERE root_key=?", [root_key]).fetchall()}
+
+
+def _manual_exclusions(conn, root_key: str | None = None) -> set[str]:
+    """Folders an administrator excluded: in an applied registration preview, and (with ``root_key``)
+    in the rescan result's exclusion list (:func:`exclude_folders`)."""
+    found = _registration_exclusions(conn)
+    return found | _table_exclusions(conn, root_key) if root_key is not None else found
+
+
+def _registration_exclusions(conn) -> set[str]:
     """Folders an administrator explicitly excluded in an applied registration preview.
 
     Decoding every preview is costly, so the set is cached until the number or
@@ -510,9 +546,61 @@ def _project_candidates(lister: _Lister, linked: dict[str, Any], schema: dict[st
     found: list[tuple[str, str]] = []
     for name, path in level:
         if _is_excluded(path, linked["excluded"]):
-            needs_review.append(_review(path, "ADMIN_EXCLUDED", "관리자가 제외한 폴더입니다. 필요하면 폴더 조사에서 다시 연결하세요."))
+            needs_review.append(_excluded_review(path, linked))
             continue
         found.append((name, path))
+    return sorted(found, key=lambda item: item[1].casefold())
+
+
+def _excluded_review(path: str, linked: dict[str, Any]) -> dict[str, Any]:
+    """Needs-review item of an administrator-excluded folder; ``restorable`` when the rescan result's
+    exclusion list holds it (the screen offers "다시 포함"), not when a registration preview excluded it."""
+    restorable = _node_key(path) in linked.get("table_excluded", ())
+    reason = ("관리자가 제외한 폴더입니다. [다시 포함]으로 되돌릴 수 있습니다." if restorable
+              else "관리자가 제외한 폴더입니다. 필요하면 폴더 조사에서 다시 연결하세요.")
+    return {**_review(path, "ADMIN_EXCLUDED", reason), "restorable": restorable}
+
+
+@dataclass(frozen=True)
+class _ProjectFolder:
+    """One project: its folder, or several folders whose names differ only by whitespace (``name_key``)."""
+    key: str
+    name: str                                  # the first spelling by casefolded path (display name of a new project)
+    path: str
+    spellings: tuple[tuple[str, str], ...]     # (name, path) of every spelling, ordered by casefolded path
+
+
+def _project_groups(projects: list[tuple[str, str]]) -> list[_ProjectFolder]:
+    found: dict[str, list[tuple[str, str]]] = {}
+    for name, path in projects:
+        found.setdefault(_node_key(path), []).append((name, path))
+    groups = []
+    for key, items in found.items():
+        items.sort(key=lambda item: item[1].casefold())
+        groups.append(_ProjectFolder(key, items[0][0], items[0][1], tuple(items)))
+    return sorted(groups, key=lambda group: group.path.casefold())
+
+
+def _group_requests(lister: _Lister, schema: dict[str, Any], group: _ProjectFolder) -> list[tuple[str, str]]:
+    """Request candidates below every spelling of a project; the same request key under two spellings is
+    ambiguous (``FOLDER_NAME_WHITESPACE_DUPLICATE``, left out of the candidates and never registered)."""
+    merged: list[tuple[str, str]] = []
+    for _name, path in group.spellings:
+        merged.extend(_request_candidates(lister, schema, path))
+    if len(group.spellings) == 1:
+        return merged
+    by_key: dict[str, list[tuple[str, str]]] = {}
+    for item in merged:
+        by_key.setdefault(_node_key(item[1]), []).append(item)
+    found: list[tuple[str, str]] = []
+    for items in by_key.values():
+        if len(items) == 1:
+            found.append(items[0])
+            continue
+        names = sorted(name for name, _path in items)
+        for _name, path in items:
+            lister.duplicates[path] = names
+            lister.merged_duplicates.add(path)
     return sorted(found, key=lambda item: item[1].casefold())
 
 
@@ -868,7 +956,7 @@ def _project_paths_by_id(linked: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def _project_renames(conn, lister: _Lister, root_key: str, linked: dict[str, Any], schema: dict[str, Any],
-                     projects: list[tuple[str, str]], paths_of: dict[str, list[str]],
+                     projects: list[_ProjectFolder], paths_of: dict[str, list[str]],
                      listings: dict[str, set[str] | None], request_lists: dict[str, list[tuple[str, str]]],
                      needs_review: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Unlinked project folders that are a renamed linked project folder.
@@ -886,7 +974,7 @@ def _project_renames(conn, lister: _Lister, root_key: str, linked: dict[str, Any
     Returns casefolded C path -> ``{"project_id", "old_paths"}`` or ``{"skip": True}``. Request
     candidates listed here are kept in ``request_lists`` for the main loop.
     """
-    unlinked = [(name, path) for name, path in projects if _node_key(path) not in linked["projects"]]
+    unlinked = [group for group in projects if group.key not in linked["projects"]]
     if not unlinked:
         return {}
     project_level, _request_level = _upper_levels(schema)
@@ -910,11 +998,11 @@ def _project_renames(conn, lister: _Lister, root_key: str, linked: dict[str, Any
             gone[project_id] = bool(paths) and all(_absent(lister, path, listings) for path in paths)
         return gone[project_id]
 
-    matches: dict[str, tuple[str, set[str]]] = {}
+    matches: dict[str, tuple[_ProjectFolder, set[str]]] = {}
     claimants: dict[str, list[str]] = {}
-    for _name, path in unlinked:
-        requests = _request_candidates(lister, schema, path)
-        request_lists[_node_key(path)] = requests
+    for group in unlinked:
+        requests = _group_requests(lister, schema, group)
+        request_lists[group.key] = requests
         identities = {identity for request_name, request_path in requests
                       if _node_key(request_path) not in linked["requests"]
                       and not _is_excluded(request_path, linked["excluded"])
@@ -925,17 +1013,19 @@ def _project_renames(conn, lister: _Lister, root_key: str, linked: dict[str, Any
             continue  # no absent project shares a request: a new project (or a copy) as before
         if any(pending_link(conn, root_key, request_path) for _, request_path in requests):
             continue
-        matches[_node_key(path)] = (path, matched)
+        matches[group.key] = (group, matched)
         for project_id in absent:
-            claimants.setdefault(project_id, []).append(_node_key(path))
+            claimants.setdefault(project_id, []).append(group.key)
     plans: dict[str, dict[str, Any]] = {}
-    for folded, (path, matched) in matches.items():
+    for folded, (group, matched) in matches.items():
         project_id = next(iter(matched))
         if len(matched) != 1 or claimants.get(project_id) != [folded]:
-            needs_review.append(_review(path, "PROJECT_RENAME_AMBIGUOUS", _PROJECT_RENAME_AMBIGUOUS))
+            needs_review.extend(_review(path, "PROJECT_RENAME_AMBIGUOUS", _PROJECT_RENAME_AMBIGUOUS)
+                                for _name, path in group.spellings)
             plans[folded] = {"skip": True}
         elif _project_bound_by_legacy(conn, project_id):
-            needs_review.append(_review(path, "PROJECT_RENAME_UNSUPPORTED", _PROJECT_RENAME_UNSUPPORTED))
+            needs_review.extend(_review(path, "PROJECT_RENAME_UNSUPPORTED", _PROJECT_RENAME_UNSUPPORTED)
+                                for _name, path in group.spellings)
             plans[folded] = {"skip": True}
         else:
             plans[folded] = {"project_id": project_id, "old_paths": sorted(paths_of[project_id], key=str.casefold)}
@@ -989,39 +1079,43 @@ def _discover(conn, root, budget_seconds: float | None = None, carry: dict[str, 
     # Request folders left for a later run because the time budget ran out (reported by the rescan).
     deferred: list[str] = []
     listings: dict[str, set[str] | None] = {}
-    projects = _project_candidates(lister, linked, schema, needs_review, listings)
+    # Project-level folders with the same name key are ONE project (issue #55): no whitespace-twin ambiguity there.
+    lister.merge_depth = _upper_levels(schema)[0]
+    projects = _project_groups(_project_candidates(lister, linked, schema, needs_review, listings))
     paths_of = _project_paths_by_id(linked)
     request_lists: dict[str, list[tuple[str, str]]] = {}
     project_renames = _project_renames(conn, lister, root_key, linked, schema, projects, paths_of, listings,
                                        request_lists, needs_review)
     # SCX drive (issue #51): list every unlinked request folder of every project in ONE read round (the
     # needs-review stamp reads ``<request>/Working``); one stat miss per folder used up the rounds.
-    for _name, project_path in projects:
-        if _node_key(project_path) not in request_lists:
-            request_lists[_node_key(project_path)] = _request_candidates(lister, schema, project_path)
+    for group in projects:
+        if group.key not in request_lists:
+            request_lists[group.key] = _group_requests(lister, schema, group)
     drive_reads.require_listings([path for items in request_lists.values() for _name, path in items
                                   if _node_key(path) not in linked["requests"]])
     # Registrations of earlier rounds of this run count against MAX_NEW_REQUESTS_PER_RUN.
     state = {"attempts": len(created_requests) + len(renamed_requests), "stopped": False}
-    for project_name, project_path in projects:
+    for group in projects:
         if state["stopped"]:
             break
         try:
-            _discover_project(conn, root, root_key, lister, linked, schema_set_id, schema, project_name, project_path,
+            _discover_project(conn, root, root_key, lister, linked, schema_set_id, schema, group,
                               project_renames, request_lists, paths_of, listings, deadline, state, deferred,
                               created_projects, created_requests, renamed_requests, renamed_projects, needs_review)
         except Exception as exc:  # noqa: BLE001 - one bad folder must never fail the whole run (no 500)
             _logger.warning("Automatic discovery of one project folder failed path_hash=%s error=%s",
-                            hashlib.sha256(project_path.encode("utf-8")).hexdigest()[:12], _error_code(exc),
+                            hashlib.sha256(group.path.encode("utf-8")).hexdigest()[:12], _error_code(exc),
                             exc_info=True)
-            needs_review.append({**_review(project_path, "DISCOVERY_FAILED",
+            needs_review.append({**_review(group.path, "DISCOVERY_FAILED",
                                            f"이 프로젝트 폴더를 확인하지 못했습니다({_error_code(exc)}): {str(exc)[:120]} "
                                            "다음 확인에서 다시 시도합니다."), "error_code": _error_code(exc)})
     attempts, stopped = state["attempts"], state["stopped"]
     for path in sorted(lister.duplicates):
         if depth_profiles.is_ignored_name(path.rsplit("/", 1)[-1]):
             continue
-        needs_review.append({**_review(path, "FOLDER_NAME_WHITESPACE_DUPLICATE", _WHITESPACE_DUPLICATE),
+        needs_review.append({**_review(path, "FOLDER_NAME_WHITESPACE_DUPLICATE",
+                                       _WHITESPACE_DUPLICATE_MERGED if path in lister.merged_duplicates
+                                       else _WHITESPACE_DUPLICATE),
                              "duplicate_names": lister.duplicates[path]})
     for issue in lister.issues:
         item = _review(issue["relative_path"], issue["code"], _issue_reason(issue))
@@ -1036,49 +1130,132 @@ def _discover(conn, root, budget_seconds: float | None = None, carry: dict[str, 
 
 _WHITESPACE_DUPLICATE = ("같은 위치에 공백만 다른 폴더 이름이 둘 이상 있습니다(폴더 이름의 공백은 구분하지 않습니다). "
                          "하나만 남기거나 이름을 정리하세요. 정리되기 전에는 자동으로 연결·등록하지 않습니다.")
+_WHITESPACE_DUPLICATE_MERGED = ("공백만 다른 이름의 프로젝트 폴더들(같은 프로젝트로 취급합니다) 아래에 같은 이름의 의뢰 폴더가 둘 이상 있습니다"
+                                "(폴더 이름의 공백은 구분하지 않습니다). 하나만 남기거나 이름을 정리하세요. "
+                                "정리되기 전에는 자동으로 연결·등록하지 않습니다.")
 _NAME_INVALID = ("폴더 이름이 Windows 파일 규칙에 맞지 않아(끝의 공백·마침표, 금지 문자 <>:\"\\|?* 또는 예약 이름) "
                  "등록할 수 없습니다. 드라이브에서 폴더 이름을 고치면 다음 확인에서 등록됩니다.")
 
 
+def _ensure_project(conn, root_key: str, spellings: list[tuple[str, str]], project_ids: set[str], name: str,
+                    linked: dict[str, Any]) -> tuple[str, bool]:
+    """The project of a project-level folder, created when it has none, with every spelling linked (issue #55).
+
+    ``spellings``: (name, path) of the folder and its whitespace twins; ``project_ids``: the project they are
+    already linked to (at most one). Missing spelling links are written to ``folder_project_links`` (idempotent:
+    a spelling already linked by a registration's PROJECT registry row or a link row is left alone); a new
+    project is created like the registration plan creates one (``materialize``, no membership grant) with the
+    path-derived id, so concurrent processes derive the same id. Link rows of the same project and name key
+    whose spelling is gone are dropped (a respelled folder). Returns (project id, created now).
+    """
+    key = _node_key(spellings[0][1])
+    known = {_cf(path) for path in linked["project_spellings"].get(key, ())}
+    missing = [path for _name, path in spellings if _cf(path) not in known]
+    if project_ids and not missing:
+        return next(iter(project_ids)), False
+    created = False
+    with folder_discovery.WRITE_LOCK:
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            if project_ids:
+                project_id = next(iter(project_ids))
+            else:
+                project_id = environment_service.stable("environment-project", root_key, spellings[0][1], "PROJECT")
+                if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
+                    folder_discovery.materialize(
+                        conn, {"role_kind": "PROJECT", "target_id": project_id, "name": name}, SYSTEM,
+                        creator_membership=False)
+                    created = True
+            now = _utc_now()
+            for path in missing:
+                conn.execute(
+                    "INSERT INTO folder_project_links(root_key,relative_path,path_key,project_id,created_by,created_at) "
+                    "VALUES(?,?,?,?,?,?) ON CONFLICT (root_key, relative_path) DO NOTHING",
+                    [root_key, path, key, project_id, SYSTEM.user_id, now])
+            if missing:
+                current = [path for _name, path in spellings]
+                stale = [str(row[0]) for row in conn.execute(
+                    "SELECT relative_path FROM folder_project_links WHERE root_key=? AND path_key=? AND project_id=?",
+                    [root_key, key, project_id]).fetchall() if str(row[0]) not in current]
+                for path in stale:
+                    conn.execute("DELETE FROM folder_project_links WHERE root_key=? AND relative_path=? AND project_id=?",
+                                 [root_key, path, project_id])
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    linked["projects"][key] = {project_id}
+    linked["project_paths"].setdefault(key, spellings[0][1])
+    linked["project_spellings"].setdefault(key, set()).update(missing)
+    linked["unlinked_project_names"].pop(drive_reads.name_key(name.strip()), None)
+    return project_id, created
+
+
 def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[str, Any], schema_set_id: str,
-                      schema: dict[str, Any], project_name: str, project_path: str,
+                      schema: dict[str, Any], group: _ProjectFolder,
                       project_renames: dict[str, dict[str, Any]], request_lists: dict[str, list[tuple[str, str]]],
                       paths_of: dict[str, list[str]], listings: dict[str, set[str] | None], deadline: float,
                       state: dict[str, Any], deferred: list[str], created_projects: list[dict[str, str]],
                       created_requests: list[dict[str, str]], renamed_requests: list[dict[str, Any]],
                       renamed_projects: list[dict[str, Any]], needs_review: list[dict[str, Any]]) -> None:
-    """One project folder of :func:`_discover` (its unlinked request folders, in name order)."""
+    """One project of :func:`_discover` (its folder spellings and their unlinked request folders, in name order)."""
     live_folders: dict[str, dict[str, Any]] | None = None  # read once, only when a rename is possible
-    if not spdm_storage._valid_windows_name(project_name):
-        needs_review.append(_review(project_path, "FOLDER_NAME_INVALID", _NAME_INVALID))
+    project_level = _upper_levels(schema)[0]
+    spellings: list[tuple[str, str]] = []
+    for spelling_name, spelling_path in group.spellings:
+        if spdm_storage._valid_windows_name(spelling_name):
+            spellings.append((spelling_name, spelling_path))
+        else:
+            needs_review.append(_review(spelling_path, "FOLDER_NAME_INVALID", _NAME_INVALID))
+    if not spellings:
         return
-    project_rename = project_renames.get(_node_key(project_path))
+    project_name, project_path = spellings[0]
+    valid_projects = {_cf(path) for _name, path in spellings}
+    project_rename = project_renames.get(group.key)
     if project_rename and project_rename.get("skip"):
         return
-    project_targets = set(linked["projects"].get(_node_key(project_path), set()))
+    project_targets = set(linked["projects"].get(group.key, set()))
     if project_rename:
         project_targets = {project_rename["project_id"]}  # keep the project; link the new folder to it
     if len(project_targets) > 1:
-        needs_review.append(_review(project_path, "PROJECT_AMBIGUOUS", "프로젝트 폴더가 여러 프로젝트에 연결되어 있습니다."))
+        needs_review.extend(_review(path, "PROJECT_AMBIGUOUS", "프로젝트 폴더가 여러 프로젝트에 연결되어 있습니다.")
+                            for _name, path in spellings)
         return
-    candidates = request_lists.get(_node_key(project_path))
+    candidates = request_lists.get(group.key)
     if candidates is None:
-        candidates = _request_candidates(lister, schema, project_path)
+        candidates = _group_requests(lister, schema, group)
+    # Requests below a spelling whose name is invalid are not discovered (that spelling is reported above).
+    candidates = [(name, path) for name, path in candidates
+                  if _cf("/".join(path.split("/")[:project_level])) in valid_projects]
     unlinked = [(name, path) for name, path in candidates if _node_key(path) not in linked["requests"]]
     # Folders whose name key is linked but whose spelling is not (spaces added or removed on storage):
     # the same request, followed to the actual spelling below.
     respaced = [(name, path) for name, path in candidates if _node_key(path) in linked["requests"]
                 and _respelled(path, linked["request_spellings"].get(_node_key(path), ()))]
-    project_old = sorted(spelling for spelling in linked["project_spellings"].get(_node_key(project_path), ())
-                         if _respelled(project_path, (spelling,)))
-    if not unlinked and not respaced:
-        return
+    # Linked spellings of the project folder that no longer exist (a whitespace-only respelling, not a twin).
+    project_old = sorted(spelling for spelling in linked["project_spellings"].get(group.key, ())
+                         if _respelled(spelling, [path for _name, path in spellings]))
     pending = {_node_key(path): link for _, path in unlinked if (link := pending_link(conn, root_key, path))}
     if not project_targets and pending:
         project_targets = {next(iter(pending.values()))["project_id"]}
     if not project_targets and drive_reads.name_key(project_name.strip()) in linked["unlinked_project_names"]:
-        needs_review.append(_review(project_path, "PROJECT_NAME_EXISTS",
-                                    "같은 이름의 프로젝트가 이미 있습니다. 폴더 조사에서 기존 프로젝트에 연결하세요."))
+        needs_review.extend(_review(path, "PROJECT_NAME_EXISTS",
+                                    "같은 이름의 프로젝트가 이미 있습니다. 폴더 조사에서 기존 프로젝트에 연결하세요.")
+                            for _name, path in spellings)
+        return
+    if not project_rename:
+        # Issue #55: every project-level folder has a project (also without a registrable request) and every
+        # spelling of it is linked to the same project id. A followed project folder rename is linked by its
+        # first registration (reported as renamed_projects).
+        if not project_targets and time.monotonic() > deadline:
+            deferred.append(project_path)
+            state["stopped"] = True
+            return
+        project_id, created = _ensure_project(conn, root_key, spellings, project_targets, project_name, linked)
+        project_targets = {project_id}
+        if created and not any(item["id"] == project_id for item in created_projects):
+            created_projects.append({"id": project_id, "name": project_name})
+    if not unlinked and not respaced:
         return
     # Request folders of a renamed project folder were linked below its (absent) old folder.
     project_paths = [project_path, *_old_project_paths(lister, paths_of, project_path, project_targets, listings)]
@@ -1110,8 +1287,7 @@ def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[s
         if request_path in respaced_paths and respace is None:
             continue   # linked via SPDM parent tables / legacy registry or in conflict: left as before
         if _is_excluded(request_path, linked["excluded"]):
-            needs_review.append(_review(request_path, "ADMIN_EXCLUDED",
-                                        "관리자가 제외한 폴더입니다. 필요하면 폴더 조사에서 다시 연결하세요."))
+            needs_review.append(_excluded_review(request_path, linked))
             continue
         if not spdm_storage._valid_windows_name(name):
             needs_review.append(_review(request_path, "FOLDER_NAME_INVALID", _NAME_INVALID))
@@ -1158,13 +1334,15 @@ def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[s
             state["stopped"] = True
             break
         state["attempts"] += 1
-        siblings = [path for path in all_paths if _node_key(path) != folded]
+        request_project = "/".join(request_path.split("/")[:project_level])   # the spelling that holds this request
+        siblings = [path for path in all_paths if _node_key(path) != folded
+                    and _cf(path).startswith(_cf(request_project) + "/")]
         link = pending.get(folded)
         request_target = (link["request_id"] if link and link["environment"] == environment
                           and link["project_id"] in project_targets else None)
         if rename:
             request_target = rename["request_id"]
-        outcome = _register_request(conn, root, root_key, project_name, project_path, siblings,
+        outcome = _register_request(conn, root, root_key, request_project.rsplit("/", 1)[-1], request_project, siblings,
                                     request_path, environment, project_targets, key, deadline,
                                     request_target=request_target,
                                     supersedes=rename["registration_ids"] if rename else ())
@@ -1194,14 +1372,14 @@ def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[s
         project_id, request_id = str(registered["project_id"]), str(registered["request_id"])
         if link and request_target:
             drop_link(conn, root_key, request_path)
-        if outcome["project_created"]:
-            created_projects.append({"id": project_id, "name": project_name})
+        if outcome["project_created"] and not any(item["id"] == project_id for item in created_projects):
+            created_projects.append({"id": project_id, "name": request_project.rsplit("/", 1)[-1]})
         if project_rename and not project_rename.get("reported"):
             # The first registration linked the new project folder (its PROJECT registry row makes
             # later runs see it as linked). The project's display name is left unchanged.
             project_rename["reported"] = True
             moved = {"id": project_id, "name": _project_name(conn, project_id),
-                     "old_path": project_rename["old_paths"][0], "new_path": project_path}
+                     "old_path": project_rename["old_paths"][0], "new_path": request_project}
             renamed_projects.append(moved)
             _audit_rename(conn, {**moved, "old_paths": project_rename["old_paths"]}, None,
                           action="FOLDER_PROJECT_FOLDER_RENAMED")
@@ -1210,11 +1388,11 @@ def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[s
             # follow one by one.  Reported once, like a followed project folder rename.
             respace_reported.append(True)
             moved = {"id": project_id, "name": _project_name(conn, project_id),
-                     "old_path": project_old[0], "new_path": project_path}
+                     "old_path": project_old[0], "new_path": request_project}
             renamed_projects.append(moved)
             _audit_rename(conn, {**moved, "old_paths": project_old}, None, action="FOLDER_PROJECT_FOLDER_RENAMED")
         project_targets = {project_id}
-        linked["projects"][_node_key(project_path)] = {project_id}
+        linked["projects"][group.key] = {project_id}
         linked["requests"].add(folded)
         linked["keys"].add(key)
         known.add(identity)
@@ -1227,6 +1405,88 @@ def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[s
         created_requests.append({"id": request_id, "name": outcome["request_name"],
                                  "environment": environment, "project_id": project_id,
                                  "linked": bool(request_target)})
+
+
+# --- administrator exclusions from the rescan result (issue #55) -------------------------------------
+
+def last_reviews() -> list[dict[str, Any]]:
+    """Needs-review items of the last coalescing-memo discovery result (what the screens' last run reported)."""
+    with _state_lock:
+        result = _memo.get("result") or {}
+    return [dict(item) for item in result.get("needs_review") or []]
+
+
+def forget_results(paths: Any = ()) -> None:
+    """Forget the coalesced result and the remembered reviews of ``paths`` (their exclusion changed)."""
+    keys = {_node_key(str(path)) for path in paths}
+    with _state_lock:
+        _memo.clear()
+        for memo in (_review_memo, _retry_memo):
+            for memo_key in [memo_key for memo_key in memo if memo_key[1] in keys]:
+                memo.pop(memo_key, None)
+
+
+def exclude_folders(conn, root, paths: list[str], *, actor: str, listed: dict[str, str]) -> dict[str, Any]:
+    """Exclude request folders from the discovery (``folder_discovery_exclusions``); returns excluded and skipped.
+
+    ``listed``: node key -> needs-review code of the folders the administrator was shown (the last rescan
+    and discovery results): only a listed request-level folder is accepted, so no arbitrary client path is
+    stored. A registered request folder and a whitespace-ambiguous folder (one key, two folders) are refused.
+    """
+    root_key = root_identity(root)
+    request_level = _upper_levels(depth_profiles.get_depth_schema(conn))[1]
+    linked = _linked_state(conn, root_key)
+    excluded: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for raw in paths:
+        def refuse(code: str, message: str) -> None:
+            skipped.append({"relative_path": str(raw), "code": code, "message": message})
+
+        try:
+            path = normal_path(str(raw))
+        except (ValueError, spdm_storage.SpdmStorageError):
+            refuse("PATH_INVALID", "폴더 경로가 올바르지 않습니다.")
+            continue
+        key = _node_key(path)
+        if len([part for part in path.split("/") if part]) != request_level:
+            refuse("NOT_REQUEST_FOLDER", "의뢰 폴더가 아니어서 제외할 수 없습니다.")
+        elif key not in listed:
+            refuse("NOT_LISTED", "최근 확인 결과에 없는 폴더입니다. [저장 폴더 새로고침]을 다시 실행하세요.")
+        elif listed[key] == "FOLDER_NAME_WHITESPACE_DUPLICATE":
+            refuse("AMBIGUOUS_FOLDER", "공백만 다른 폴더가 함께 있어 제외할 수 없습니다. 하나만 남기거나 이름을 정리하세요.")
+        elif key in linked["requests"]:
+            refuse("ALREADY_REGISTERED", "이미 등록된 의뢰 폴더는 제외할 수 없습니다.")
+        else:
+            if key not in linked["table_excluded"]:
+                conn.execute(
+                    "INSERT INTO folder_discovery_exclusions(root_key,path_key,relative_path,excluded_by,excluded_at) "
+                    "VALUES(?,?,?,?,?) ON CONFLICT (root_key, path_key) DO NOTHING",
+                    [root_key, key, path, str(actor), _utc_now()])
+            excluded.append(path)
+    forget_results(excluded)
+    return {"excluded": excluded, "skipped": skipped}
+
+
+def restore_folders(conn, root, paths: list[str]) -> dict[str, Any]:
+    """"다시 포함": remove the rescan exclusion of request folders; they are candidates again."""
+    root_key = root_identity(root)
+    restored: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for raw in paths:
+        try:
+            path = normal_path(str(raw))
+        except (ValueError, spdm_storage.SpdmStorageError):
+            skipped.append({"relative_path": str(raw), "code": "PATH_INVALID", "message": "폴더 경로가 올바르지 않습니다."})
+            continue
+        key = _node_key(path)
+        if conn.execute("SELECT 1 FROM folder_discovery_exclusions WHERE root_key=? AND path_key=?", [root_key, key]).fetchone():
+            conn.execute("DELETE FROM folder_discovery_exclusions WHERE root_key=? AND path_key=?", [root_key, key])
+            restored.append(path)
+        else:
+            skipped.append({"relative_path": str(raw), "code": "NOT_RESTORABLE",
+                            "message": "[저장 폴더 새로고침]에서 제외한 폴더가 아닙니다. 폴더 조사에서 다시 연결하세요."})
+    forget_results(restored)
+    return {"restored": restored, "skipped": skipped}
 
 
 def enabled() -> bool:

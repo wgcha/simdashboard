@@ -87,6 +87,8 @@ def initialize_database() -> None:
                 "folder_link_reservations",
                 "drive_connected_account",
                 "scx_relay_submissions",
+                "folder_project_links",
+                "folder_discovery_exclusions",
             )
             missing = [
                 table_name
@@ -149,6 +151,8 @@ def initialize_database() -> None:
                                           "job_dir_rel", "state", "job_id", "solver", "last_status", "output_path",
                                           "output_rel", "error_code", "error_message", "created_at", "updated_at",
                                           "resolved_at"},
+                "folder_project_links": {"root_key", "relative_path", "path_key", "project_id", "created_by", "created_at"},
+                "folder_discovery_exclusions": {"root_key", "path_key", "relative_path", "excluded_by", "excluded_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }
             incompatible = []
@@ -1285,6 +1289,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_folder_link_reservations_schema(conn)
         ensure_drive_connected_account_schema(conn)
         ensure_scx_relay_schema(conn)
+        ensure_folder_discovery_links_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1654,6 +1659,19 @@ def ensure_scx_relay_schema(conn: duckdb.DuckDBPyConnection) -> None:
         job_id VARCHAR UNIQUE, solver VARCHAR, last_status VARCHAR, output_path VARCHAR, output_rel VARCHAR,
         error_code VARCHAR, error_message VARCHAR, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
         resolved_at TIMESTAMP
+    )""")
+
+
+def ensure_folder_discovery_links_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0045 (project folder links, discovery exclusions)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS folder_project_links (
+        root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, path_key VARCHAR NOT NULL, project_id VARCHAR NOT NULL,
+        created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, PRIMARY KEY (root_key, relative_path)
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS folder_project_links_project ON folder_project_links (project_id)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS folder_discovery_exclusions (
+        root_key VARCHAR NOT NULL, path_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, excluded_by VARCHAR NOT NULL,
+        excluded_at TIMESTAMP NOT NULL, PRIMARY KEY (root_key, path_key)
     )""")
 
 
