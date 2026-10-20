@@ -9,7 +9,7 @@ const FINAL_STRUCTURE: Array<[string, string, string]> = [
   ['L1', 'Final', 'Final 보관 영역 (이름으로 판정, 선택)'],
   ['L2', 'CAE · Report · CAD', 'CAE 해석 파일 · Report 보고서 · CAD (하위는 내용물)'],
   ['L3', '<Case>', '해석 Case'],
-  ['L4', '<finalization_id>', 'Final 버전 (32자리 hex)'],
+  ['L4', '<finalization_id>', 'Final 버전 (32자리 hex, CAE는 없어도 됨)'],
   ['L5~', '…', 'Working의 L3 이후 구조를 그대로 미러'],
 ]
 
