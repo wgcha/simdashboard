@@ -7,6 +7,7 @@ import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, r
 import { clearExclusions, descendants, effectivelyExcluded, excludedPaths, excludeReviewNodes, excludeSubtree, exclusionCount, includeSubtree, reviewNodes } from '../src/shared/api/folderExclusionModel.ts'
 import { timeoutGuard } from '../src/shared/api/requestTimeout.ts'
 import { normalizePhysicsAiLink, physicsAiNavHref, PHYSICSAI_LINK_OFF } from '../src/shared/api/physicsaiLinkModel.ts'
+import { eslNavHref, ESL_LINK_OFF, normalizeEslLink } from '../src/shared/api/eslLinkModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
 const validationMessage = apiErrorMessage(validation, '요청 실패 (422)')
@@ -170,6 +171,16 @@ assert(physicsAiNavHref(PHYSICSAI_LINK_OFF, true) === null, 'flag off must hide 
 assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: false, base_path: '/physicsai/' }), true) === null, 'server flag off must hide the sidebar link')
 assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: true, base_path: '/physicsai/' }), true) === '/physicsai/', 'flag on must show the sidebar link at /physicsai/')
 assert(physicsAiNavHref(normalizePhysicsAiLink({ enabled: true, base_path: '/physicsai/' }), false) === null, 'signed-out sidebar must hide the link')
+
+// ESL "등가정적하중" sidebar link: same rules as PhysicsAI at /esl/.
+assert(normalizeEslLink(null).enabled === false && normalizeEslLink({ enabled: 'true' }).enabled === false, 'unknown ESL payload must be off')
+assert(normalizeEslLink({ enabled: true, base_path: 'https://evil.example/' }).basePath === '/esl/', 'ESL base path must stay same-origin')
+assert(normalizeEslLink({ enabled: true, base_path: '//evil.example/x' }).basePath === '/esl/', 'ESL protocol-relative base path must be rejected')
+assert(normalizeEslLink({ enabled: true, base_path: '/esl' }).basePath === '/esl/', 'ESL base path gets a trailing slash')
+assert(eslNavHref(ESL_LINK_OFF, true) === null, 'ESL flag off must hide the sidebar link')
+assert(eslNavHref(normalizeEslLink({ enabled: false, base_path: '/esl/' }), true) === null, 'ESL server flag off must hide the sidebar link')
+assert(eslNavHref(normalizeEslLink({ enabled: true, base_path: '/esl/' }), true) === '/esl/', 'ESL flag on must show the sidebar link at /esl/')
+assert(eslNavHref(normalizeEslLink({ enabled: true, base_path: '/esl/' }), false) === null, 'signed-out sidebar must hide the ESL link')
 
 // Structure review bulk exclusion (issue #55): "확인 필요" nodes are excluded in one action, a folder together with its subtree.
 const tree = [

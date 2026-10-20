@@ -28,6 +28,10 @@ export function apiProxy(target: string): ProxyOptions {
 // /physicsai/ as VITE_APP_BASE_PATH (WINDOWS_WEB_BASE_PATH).
 export const PHYSICSAI_PROXY_PATH = '^/physicsai(?:[/?#]|$)'
 
+// ESL (등가정적하중 platform: UI + API under /esl/) follows exactly the same rules as PhysicsAI:
+// root path, forwarded unchanged with cookies, forwarding headers stripped.
+export const ESL_PROXY_PATH = '^/esl(?:[/?#]|$)'
+
 export function physicsAiProxy(target: string): ProxyOptions {
   return {
     target,
@@ -39,9 +43,11 @@ export function physicsAiProxy(target: string): ProxyOptions {
   }
 }
 
-/** `VITE_PHYSICSAI_TARGET` as an http(s) origin, or null when unset/invalid (= no /physicsai proxy). */
-export function physicsAiTarget(env: Record<string, string | undefined>): string | null {
-  const value = env.VITE_PHYSICSAI_TARGET?.trim()
+/** Same-origin sibling app proxy (PhysicsAI, ESL): path unchanged, forwarding headers stripped. */
+export const eslProxy = physicsAiProxy
+
+function httpOrigin(raw: string | undefined): string | null {
+  const value = raw?.trim()
   if (!value) return null
   try {
     const url = new URL(value)
@@ -52,7 +58,17 @@ export function physicsAiTarget(env: Record<string, string | undefined>): string
   }
 }
 
-/** Vite dev-server proxy table. `/physicsai` is added only when VITE_PHYSICSAI_TARGET is set. */
+/** `VITE_PHYSICSAI_TARGET` as an http(s) origin, or null when unset/invalid (= no /physicsai proxy). */
+export function physicsAiTarget(env: Record<string, string | undefined>): string | null {
+  return httpOrigin(env.VITE_PHYSICSAI_TARGET)
+}
+
+/** `VITE_ESL_TARGET` as an http(s) origin, or null when unset/invalid (= no /esl proxy). */
+export function eslTarget(env: Record<string, string | undefined>): string | null {
+  return httpOrigin(env.VITE_ESL_TARGET)
+}
+
+/** Vite dev-server proxy table. `/physicsai` and `/esl` are added only when their target is set. */
 export function devServerProxy(env: Record<string, string | undefined>): Record<string, ProxyOptions> {
   const apiTarget = env.VITE_API_TARGET ?? 'http://127.0.0.1:8000'
   const proxy: Record<string, ProxyOptions> = {
@@ -61,6 +77,8 @@ export function devServerProxy(env: Record<string, string | undefined>): Record<
   }
   const physicsAi = physicsAiTarget(env)
   if (physicsAi) proxy[PHYSICSAI_PROXY_PATH] = physicsAiProxy(physicsAi)
+  const esl = eslTarget(env)
+  if (esl) proxy[ESL_PROXY_PATH] = eslProxy(esl)
   return proxy
 }
 
@@ -91,13 +109,22 @@ export function dotenvValue(text: string, key: string): string | undefined {
  * NODE_ENV, BROWSER, secrets or other VITE_* keys in the root .env never reach Vite (unlike
  * Vite's loadEnv, which copies NODE_ENV/BROWSER/BROWSER_ARGS into process.env).
  */
-export function physicsAiTargetSetting(envFilePath: string, processEnv: Record<string, string | undefined>): string | undefined {
-  if (processEnv.VITE_PHYSICSAI_TARGET !== undefined) return processEnv.VITE_PHYSICSAI_TARGET
+export function rootEnvSetting(key: string, envFilePath: string, processEnv: Record<string, string | undefined>): string | undefined {
+  if (processEnv[key] !== undefined) return processEnv[key]
   let text: string
   try {
     text = readFileSync(envFilePath, 'utf8')
   } catch {
     return undefined
   }
-  return dotenvValue(text, 'VITE_PHYSICSAI_TARGET')
+  return dotenvValue(text, key)
+}
+
+export function physicsAiTargetSetting(envFilePath: string, processEnv: Record<string, string | undefined>): string | undefined {
+  return rootEnvSetting('VITE_PHYSICSAI_TARGET', envFilePath, processEnv)
+}
+
+/** VITE_ESL_TARGET for the dev-server proxy, read the same way as VITE_PHYSICSAI_TARGET. */
+export function eslTargetSetting(envFilePath: string, processEnv: Record<string, string | undefined>): string | undefined {
+  return rootEnvSetting('VITE_ESL_TARGET', envFilePath, processEnv)
 }

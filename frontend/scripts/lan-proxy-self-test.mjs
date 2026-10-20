@@ -52,7 +52,7 @@ async function getFreePort() {
   return port
 }
 
-function startVite(frontendPort, backendPort, basePath, physicsAiPort) {
+function startVite(frontendPort, backendPort, basePath, physicsAiPort, eslPort) {
   const viteProcess = spawn(process.execPath, [viteBin, '--host', '0.0.0.0', '--port', String(frontendPort), '--strictPort', '--configLoader', 'runner'], {
     cwd: frontendDir,
     env: {
@@ -61,6 +61,7 @@ function startVite(frontendPort, backendPort, basePath, physicsAiPort) {
       ...(basePath ? { VITE_APP_BASE_PATH: basePath } : { VITE_APP_BASE_PATH: '' }),
       VITE_ALLOWED_HOSTS: 'explicit-lan-test.local',
       VITE_PHYSICSAI_TARGET: physicsAiPort ? `http://127.0.0.1:${physicsAiPort}` : '',
+      VITE_ESL_TARGET: eslPort ? `http://127.0.0.1:${eslPort}` : '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -74,6 +75,12 @@ function startVite(frontendPort, backendPort, basePath, physicsAiPort) {
 function physicsAiRequest(req, res) {
   res.writeHead(200, { 'content-type': 'application/json' })
   res.end(JSON.stringify({ via: 'physicsai-stub', url: req.url, cookie: req.headers.cookie ?? null, forwardedFor: req.headers['x-forwarded-for'] ?? null, realIp: req.headers['x-real-ip'] ?? null }))
+}
+
+// ESL (등가정적하중) stub: same shape as the PhysicsAI stub.
+function eslRequest(req, res) {
+  res.writeHead(200, { 'content-type': 'application/json' })
+  res.end(JSON.stringify({ via: 'esl-stub', url: req.url, cookie: req.headers.cookie ?? null, forwardedFor: req.headers['x-forwarded-for'] ?? null, realIp: req.headers['x-real-ip'] ?? null }))
 }
 
 function request(req, res) {
@@ -113,12 +120,14 @@ async function main() {
 
   const backend = http.createServer(request)
   const physicsAiBackend = http.createServer(physicsAiRequest)
+  const eslBackend = http.createServer(eslRequest)
   const viteProcesses = []
   try {
     const backendPort = await listen(backend, '127.0.0.1')
     const frontendPort = await getFreePort()
     const physicsAiPort = await listen(physicsAiBackend, '127.0.0.1')
-    const baseVite = startVite(frontendPort, backendPort, '/home/', physicsAiPort)
+    const eslPort = await listen(eslBackend, '127.0.0.1')
+    const baseVite = startVite(frontendPort, backendPort, '/home/', physicsAiPort, eslPort)
     viteProcesses.push(baseVite.process)
 
     const origin = `http://${lanAddress}:${frontendPort}`
@@ -161,6 +170,15 @@ async function main() {
       if (body.realIp !== null || (body.forwardedFor ?? '').includes('6.6.6.6')) throw new Error('LAN /physicsai proxy forwarded client-supplied forwarding headers')
     }
 
+    // /esl follows the same rules as /physicsai.
+    for (const path of ['/esl', '/esl/', '/esl/api/health?x=1']) {
+      const response = await fetch(`${origin}${path}`, { headers: { cookie: 'analysis_canvas_session=lan-test', 'x-forwarded-for': '6.6.6.6', 'x-real-ip': '6.6.6.6' } })
+      const body = response.ok ? await response.json() : null
+      if (body?.via !== 'esl-stub' || body.url !== path) throw new Error(`LAN /esl proxy did not forward ${path} unchanged`)
+      if (body.cookie !== 'analysis_canvas_session=lan-test') throw new Error('LAN /esl proxy did not forward the session cookie')
+      if (body.realIp !== null || (body.forwardedFor ?? '').includes('6.6.6.6')) throw new Error('LAN /esl proxy forwarded client-supplied forwarding headers')
+    }
+
     const defaultFrontendPort = await getFreePort()
     const defaultVite = startVite(defaultFrontendPort, backendPort)
     viteProcesses.push(defaultVite.process)
@@ -171,13 +189,16 @@ async function main() {
     if (!defaultNestedPage.ok || !(await defaultNestedPage.text()).includes('<title>')) throw new Error('LAN default nested route did not return the Vite page')
     const unproxied = await fetch(`${defaultOrigin}/physicsai/`)
     if ((await unproxied.text()).includes('physicsai-stub')) throw new Error('LAN /physicsai proxy must be absent without VITE_PHYSICSAI_TARGET')
+    const unproxiedEsl = await fetch(`${defaultOrigin}/esl/`)
+    if ((await unproxiedEsl.text()).includes('esl-stub')) throw new Error('LAN /esl proxy must be absent without VITE_ESL_TARGET')
 
-    console.log(`LAN proxy self-test passed via ${lanAddress}:${frontendPort} (base /home/ and default /; backend loopback 127.0.0.1:${backendPort}; /physicsai stub)`)
+    console.log(`LAN proxy self-test passed via ${lanAddress}:${frontendPort} (base /home/ and default /; backend loopback 127.0.0.1:${backendPort}; /physicsai and /esl stubs)`)
     for (const vite of [baseVite, defaultVite]) if (vite.output.includes('error')) console.warn(vite.output)
   } finally {
     for (const viteProcess of viteProcesses) if (!viteProcess.killed) viteProcess.kill()
     await new Promise((resolvePromise) => backend.close(() => resolvePromise()))
     await new Promise((resolvePromise) => physicsAiBackend.close(() => resolvePromise()))
+    await new Promise((resolvePromise) => eslBackend.close(() => resolvePromise()))
   }
 }
 

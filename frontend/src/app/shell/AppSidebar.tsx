@@ -23,10 +23,13 @@ import {
   Users,
   MessageSquare,
   BrainCircuit,
+  Weight,
 } from 'lucide-react'
 import { ChangePasswordDialog } from '../../features/auth/ChangePasswordDialog'
 import { physicsAiNavHref } from '../../shared/api/physicsaiLinkModel'
 import { usePhysicsAiLink } from '../../shared/hooks/usePhysicsAiLink'
+import { eslNavHref } from '../../shared/api/eslLinkModel'
+import { useEslLink } from '../../shared/hooks/useEslLink'
 
 const MENU_ICONS = {
   local_pc: Monitor,
@@ -170,6 +173,8 @@ export function AppSidebar({
   const helpMenu = menus.find((menu) => menu.id === 'help')
   // External "AI 예측" link (PhysicsAI at same-origin /physicsai/), shown only when SIMDASH_PHYSICSAI_ENABLED is on.
   const physicsAiHref = physicsAiNavHref(usePhysicsAiLink(signedIn), signedIn)
+  // External "등가정적하중" link (ESL platform at same-origin /esl/), shown only when SIMDASH_ESL_ENABLED is on.
+  const eslHref = eslNavHref(useEslLink(signedIn), signedIn)
   const renderMenuLink = (menu: AppSidebarMenu, extraClass = '') => {
     const Icon = MENU_ICONS[menu.id]
     const label = USER_MENU_LABELS[menu.id] ?? menu.label
@@ -200,6 +205,7 @@ export function AppSidebar({
         </div>
       </details></div>)}
       {physicsAiHref ? <a className="nav-link nav-link-standalone" href={physicsAiHref} target="_blank" rel="noopener noreferrer" aria-label="AI 예측 (새 창)" title="AI 예측 (PhysicsAI, 새 창)"><BrainCircuit /><span>AI 예측</span></a> : null}
+      {eslHref ? <a className="nav-link nav-link-standalone" href={eslHref} target="_blank" rel="noopener noreferrer" aria-label="등가정적하중 (새 창)" title="등가정적하중 (ESL, 새 창)"><Weight /><span>등가정적하중</span></a> : null}
       {helpMenu && renderMenuLink(helpMenu, 'nav-link-standalone nav-link-help')}
       {menus.find((menu) => menu.id === 'voc') && renderMenuLink(menus.find((menu) => menu.id === 'voc')!, 'nav-link-standalone nav-link-help')}
     </nav>

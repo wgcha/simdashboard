@@ -167,6 +167,25 @@ PhysicsAI 워커 ── DATASET_CREATE input_path = 위 폴더/h3d ─▶ <ai_ro
 | R8 | scx 모드 Final은 sha256이 없음 | 출처 해시 약화 | `source_hash.alg="sha1"` + 복사 시 sha256 계산, manifest에 `storage_mode` |
 | R9 | A 1차 구현 진행 중(계약 변경 메모 B1–B26 미반영분) | 연결 계약 흔들림 | P3 착수 전 A `openapi.json` 버전 고정, 대시보드는 GET 필드만 의존 |
 
+## 7A. ESL(등가정적하중) 플랫폼 링크 — PhysicsAI 링크와 같은 방식(2026-10-20 구현)
+
+PhysicsAI 사이드바 링크(로그 2026-10-15)를 그대로 본떠 별도 앱 ESL을 같은 주소의 루트 경로에 붙인다. 데이터 인계·딥링크·Caddy 반영은 없다(PhysicsAI와 마찬가지로 보류).
+
+| 항목 | PhysicsAI | ESL |
+|---|---|---|
+| 경로 | `/physicsai/`(API `/physicsai/api`) | `/esl/`(API `/esl/api`) |
+| 기본 포트(예) | `127.0.0.1:8100` | `127.0.0.1:8110` |
+| 링크 표시 플래그(백엔드, 기본 off) | `SIMDASH_PHYSICSAI_ENABLED` | `SIMDASH_ESL_ENABLED` |
+| 상태 API(`PROJECT_DATA_VIEW`, 비로그인 401) | `GET /api/integrations/physicsai` → `{enabled, base_path:"/physicsai/"}` | `GET /api/integrations/esl` → `{enabled, base_path:"/esl/"}` |
+| Vite 개발 프록시(루트 `.env`, 프로세스 값 우선) | `VITE_PHYSICSAI_TARGET` → `^/physicsai(?:[/?#]\|$)` | `VITE_ESL_TARGET` → `^/esl(?:[/?#]\|$)` |
+| 사이드바 | "AI 예측", 새 창(`target=_blank`, `noopener noreferrer`) | "등가정적하중", "AI 예측" 바로 아래, 같은 스타일·새 창 |
+
+- 프록시 규칙은 같다: 경로 그대로(재작성·Host 변경 없음), 쿠키(대시보드 세션) 유지, 클라이언트가 보낸 `X-Forwarded-*`·`Forwarded`·`X-Real-IP`·`X-Simdash-Proxy-Peer` 제거. `/esl`은 `WINDOWS_WEB_BASE_PATH`와 무관한 루트 경로다. 두 앱은 서로 독립적으로 켜고 끈다.
+- 운영 적용: 서버 `.env`에 `VITE_ESL_TARGET=http://127.0.0.1:8110`, `SIMDASH_ESL_ENABLED=true`를 넣고 대시보드를 중지·시작한다(`stop.bat` → `start.bat`). 값을 비우면 프록시·링크가 모두 꺼진다.
+- 코드: 백엔드 `adapters/http/routers/esl_link.py`, `config.esl_link_enabled`, `schemas/api.EslLinkResponse`; 프런트 `shared/api/eslLink*.ts`, `shared/hooks/useEslLink.ts`, `app/shell/AppSidebar.tsx`, `vite.proxy.ts`.
+- 시험: `backend/tests/test_esl_link_contract.py`, `test:vite-proxy`·`test:lan-proxy`·`test:api`의 ESL 항목, e2e `integration-links.spec.ts`(켜짐·꺼짐·독립 표시).
+- Caddy 템플릿·오프라인 설치기에는 PhysicsAI 항목이 없으므로 ESL도 추가하지 않았다(배포 계약 변경 없음).
+
 ## 8. 관련 문서
 
 - PhysicsAI: `docs/contracts/platform.md` §1·§4·§5·§15·§17·§19·§20, `docs/decisions.md`(2026-10-08 별도 플랫폼 확정)

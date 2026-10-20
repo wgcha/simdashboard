@@ -8528,6 +8528,25 @@
         }
       }
     },
+    "/api/integrations/esl": {
+      "get": {
+        "summary": "Get Esl Link",
+        "description": "ESL(등가정적하중) 링크 표시 상태(``SIMDASH_ESL_ENABLED``, 기본 off).",
+        "operationId": "get_esl_link_api_integrations_esl_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EslLinkResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/import-schemas": {
       "get": {
         "summary": "List Import Schemas",
@@ -19735,6 +19754,25 @@
           "unit"
         ],
         "title": "DropVideoSubsystemSummary"
+      },
+      "EslLinkResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "base_path": {
+            "type": "string",
+            "title": "Base Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "base_path"
+        ],
+        "title": "EslLinkResponse",
+        "description": "ESL(등가정적하중) 플랫폼 링크 표시 상태(사이드바 \"등가정적하중\")."
       },
       "Exclusions": {
         "properties": {

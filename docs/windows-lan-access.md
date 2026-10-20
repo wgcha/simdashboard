@@ -49,6 +49,8 @@ http://localhost/home
 PhysicsAI 연결(선택, 기본 꺼짐): 서버 `.env`에 `VITE_PHYSICSAI_TARGET=http://127.0.0.1:8100`(PhysicsAI 수신 주소)과 `SIMDASH_PHYSICSAI_ENABLED=true`를 지정하고 대시보드를 중지·시작하면 `http://서버/physicsai/`로 PhysicsAI가 열리고 사이드바에 "AI 예측" 링크가 표시된다.
 `/physicsai`는 `WINDOWS_WEB_BASE_PATH`와 무관한 루트 경로이며 경로·쿠키를 그대로 PhysicsAI에 전달한다(대시보드 로그인 공유). 값을 비우면 프록시와 링크가 모두 꺼진다.
 
+ESL(등가정적하중) 연결(선택, 기본 꺼짐): 같은 방식으로 `.env`에 `VITE_ESL_TARGET=http://127.0.0.1:8110`과 `SIMDASH_ESL_ENABLED=true`를 지정하고 재시작하면 `http://서버/esl/`(API `/esl/api`)로 ESL 플랫폼이 열리고 사이드바 "AI 예측" 아래에 "등가정적하중" 링크가 표시된다. PhysicsAI와 독립적으로 켜고 끈다.
+
 ## 연결 실패 점검
 
 먼저 서버 PC에서 위 사내 IP 주소를 연다. 서버에서는 열리지만 다른 PC에서는 안 열리면 클라이언트 PowerShell에서 확인한다.
