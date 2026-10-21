@@ -75,12 +75,23 @@ export type FolderExclusionResult = { excluded?: string[]; restored?: string[]; 
 export type StorageRescanFailure = { project_id: string; project_name: string; request_id: string; request_name: string; environment: string; code: string; message: string }
 /** [저장 폴더 새로고침] full rescan (POST/GET /api/folder-discovery/environments/rescan, 2026-10-17). */
 export type StorageRescanState = {
-  status: 'IDLE' | 'RUNNING' | 'DONE' | 'FAILED'
+  status: 'IDLE' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED'
   started_at: string | null
   finished_at: string | null
   started_by: string | null
   phase: 'DISCOVER' | 'REINTERPRET' | 'SYNC' | null
-  progress: { done: number; total: number }
+  /** Live progress (issue #55): requests done/total of REINTERPRET/SYNC; DISCOVER step, current folder and projects. */
+  progress: {
+    done: number; total: number
+    step?: string | null; current_path?: string | null
+    projects_done?: number; projects_total?: number; pass_number?: number
+  }
+  /** Drive calls of this rescan (SCX drive mode): listings, errors after retries, DRIVE_BUSY retries, last error. */
+  drive?: { calls: number; listings: number; errors: number; retries: number; last_error: { code: string; operation?: string | null; relative_path?: string | null; at?: string } | null }
+  elapsed_seconds?: number
+  cancel_requested?: boolean
+  /** Requests the SYNC phase left for the next rescan (phase time limit). */
+  sync_deferred?: number
   created_projects: Array<{ id: string; name: string }>
   created_requests: Array<{ id: string; name: string; environment: FolderEnvironment; project_id: string }>
   needs_review: FolderDiscoveryReview[]
@@ -98,6 +109,8 @@ export type StorageRescanState = {
   error: string | null
   /** POST only: false when a rescan was already running. */
   started?: boolean
+  /** POST .../rescan/cancel only: false when no rescan was running. */
+  requested?: boolean
 }
 
 // ---- Depth schema (contract docs/contracts/depth-schema.md §4, §6) ----
@@ -184,6 +197,8 @@ export const folderEnvironmentApi = {
   },
   rescanStart: async (): Promise<StorageRescanState> => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/rescan', {})) as StorageRescanState,
   rescanStatus: async (signal?: AbortSignal): Promise<StorageRescanState> => unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments/rescan', { signal })) as StorageRescanState,
+  /** [중지]: the running rescan stops at its next check point and ends CANCELLED (issue #55). */
+  rescanCancel: () => requestJson<StorageRescanState>(apiUrl('/api/folder-discovery/environments/rescan/cancel' as never), jsonBody('POST', {})),
   /** [제외] / [모두 제외] in the rescan result: request folders the discovery never registers (issue #55). */
   excludeFolders: (relativePaths: string[]) => requestJson<FolderExclusionResult>(apiUrl('/api/folder-discovery/environments/exclusions' as never), jsonBody('POST', { relative_paths: relativePaths })),
   /** [다시 포함]: undo an exclusion made from the rescan result. */

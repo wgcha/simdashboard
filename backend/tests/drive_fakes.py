@@ -16,6 +16,8 @@ calling thread holds no database connection.
 
 Issue #51 (scan limits): ``call_delay_s`` adds a per-call latency per operation
 (e.g. ``{"list_dir": 0.05}``) so a slow remote drive can exceed scan time limits.
+Issue #55 (2026-10-21): ``unsafe_local`` (paths listed/stat'ed with ``local_safe=False``, like names
+the real adapter cannot write on Windows) and OVERLOADED via ``fail_path`` for a busy worker queue.
 
 Stage D3 additions (write path): ``copy_unsupported`` (``copy_within`` answers
 INTERNAL like a drive without server-side copy, contract C7 unknown),
@@ -244,6 +246,7 @@ class MemoryDrive:
     unknown_op: bool = False
     auth_calls: list[tuple[str, str]] = field(default_factory=list)
     call_delay_s: dict[str, float] = field(default_factory=dict)
+    unsafe_local: set[str] = field(default_factory=set)
     # 2026-10-14 device-code login (spec §7): who approves, how many PENDING answers first, the outcome.
     device_account: str | None = "spdm-shared"
     device_pending_polls: int = 1
@@ -316,7 +319,7 @@ class MemoryDrive:
         token = f"sha1:{sha1}:{size}" if sha1 else f"t:{size if size is not None else '?'}:{int(node.modified_at.timestamp() * 1e6)}"
         return DriveEntry(name=rel.rsplit("/", 1)[-1] if rel else "~", rel_path=rel, kind=node.kind, size=size,
                           modified_at=node.modified_at, created_at=node.created_at, item_id=node.item_id, sha1=sha1,
-                          version_token=token, local_safe=True)
+                          version_token=token, local_safe=rel not in self.unsafe_local)
 
     def children(self, rel: str) -> list[str]:
         prefix = f"{rel}/" if rel else ""

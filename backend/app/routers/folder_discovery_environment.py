@@ -169,6 +169,21 @@ def rescan_status(request: Request):
     with connect() as conn:
         admin(request, conn)
     return storage_rescan.state()
+@router.post("/rescan/cancel")
+def rescan_cancel(request: Request):
+    """[중지]: stop the running full rescan at its next check point (global administrators only, issue #55).
+
+    The run ends ``CANCELLED`` and keeps what it found so far. ``requested`` is false when no rescan runs.
+    """
+    with connect() as conn:
+        admin(request, conn)
+    principal = request.state.principal
+    current, requested = storage_rescan.cancel(str(getattr(principal, "username", "") or principal.user_id))
+    if requested:
+        with connect() as conn:
+            write_audit_event(request=request, principal=principal, status_code=200,
+                              action="STORAGE_RESCAN_CANCELLED", detail={}, connection=conn)
+    return {**current, "requested": requested}
 class Exclusions(BaseModel):
     relative_paths: list[str] = Field(min_length=1, max_length=1000)
 

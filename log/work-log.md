@@ -2,6 +2,16 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-21 — 저장 폴더 새로고침이 DISCOVER에서 14분+ 멈춤·드라이브 파일 이름으로 의뢰 확인 전체 실패 (이슈 #55)
+
+- 실서버 증상(SCX 드라이브, 729c806): `GET …/rescan`이 14분 뒤에도 `RUNNING, phase DISCOVER, rounds 0, progress 0/0`; 같은 시각 `SCX drive read list_dir failed: rel=PROJ-000002_testProject/CAD code=DRIVE_BUSY message=queue wait timeout`. 별도로 `Folder sync FAILED … code=SPDM_INVALID_PATH "이 서버에서 쓸 수 없는 이름입니다(Windows 금지 문자·대소문자 중복)"`.
+- 원인(멈춤): 첫 탐색 회차의 `drive.reads.run` 읽기 회차(최대 23)와 미리 읽기 — 루트 목록 미스의 `_prefetch_tree`(루트 아래 4단계, 최대 600 목록, 시간 한도 없음; `PROJ-…/CAD`가 여기서 읽힘)와 `require_listings`(모든 미연결 의뢰 폴더) — 에 시간 한도가 없었다. 탐색의 300초 한도는 `_discover_project`/`_register_request`의 등록 단계 사이에서만 확인됐다. 작업자(`SIMDASH_SCX_MAX_CONCURRENCY` 기본 1)가 화면 `/sync`·자동 반영과 겹치면 목록마다 어댑터 큐 대기 시간 초과까지 기다렸고, 실패한 추측 목록은 기록되지 않아 다음 회차에 다시 읽었다. `rounds`/`progress`는 탐색 한 번이 끝나야 갱신됐다.
+- 수정: `drive.reads.bounded(deadline, cancel, observer)`(한도 후 드라이브 호출 없음·미리 읽기 중단·다음 읽기 회차가 마지막), `DRIVE_BUSY` 재시도(백그라운드 2·5·10초 3회, 화면 1초 1회) 뒤 보고, 추측 목록 60초·바쁘면 중단. 탐색 한 번은 예산 + 30초로 드라이브 읽기 종료, 잠금 대기는 1초 단위로 중지 확인. 새로고침: 단계별 한도(DISCOVER 900·REINTERPRET 1800·SYNC 1800·의뢰 하나 300초), 실행 중 화면 탐색은 드라이브 없이 `RUNNING`, 자동 반영은 회차 건너뜀. 진행 상태 `progress`(단계·현재 경로·프로젝트 n/m)·`drive`(호출·목록·오류·재시도·최근 오류)·`elapsed_seconds`, 30초마다 `WARNING Storage rescan progress: …`. `POST …/rescan/cancel`(관리자, 감사 `STORAGE_RESCAN_CANCELLED`) → `CANCELLED`; 화면에 진행 문구와 [중지].
+- 원인·수정(이름): `DriveStorageProvider._file_version`의 `local_safe` 검사가 파일을 서버에 두지 않는 `content_token`(내용 지문)에도 걸렸다. 이제 내려받을 때만 적용: 대소문자 쌍둥이는 다운로드마다 새 폴더라 읽고, Windows 금지 이름은 내려받지 않음(메시지에 경로). Case 수집은 그런 이름을 `NAME_NOT_LOCAL_SAFE` 미처리 항목으로, 폴더 조사는 `:`·`\` 이름을 `skipped_entries`(`NAME_NOT_SUPPORTED`)로 남기고 의뢰 확인은 계속한다.
+- 문서: folder-schema-refresh.md("이슈 #55 보완 2026-10-21"), scx-drive.md §8.2·§8.8.
+- 검증: 신규 `tests/test_storage_rescan_bounds.py` 8건(느리고 바쁜 가짜 드라이브에서 단계 한도 안 종료·진행 로그, 바쁨 재시도 후 보고, 실행 중 중지, 화면 탐색·자동 반영 비켜감, 잠금 대기 한도·중지, 한도 후 드라이브 호출 없음, 금지 이름 파일이 미처리 항목·쌍둥이 다운로드, `content_token`); 관련 기존 테스트(드라이브 읽기·탐색·의뢰 동기화·자동 탐색·자동 반영) 통과; 프런트 `tsc -p tsconfig.app.json`, `test:api` 자체 시험 통과.
+- 서버에서 확인할 것: `SIMDASH_SCX_MAX_CONCURRENCY`(기본 1). 어댑터 큐 대기 시간 초과가 잦으면 2–4로 올리는 것을 검토(드라이브 서버 부하와 함께). 새 진행 줄로 `uvicorn-error.log`에서 멈춘 위치를 본다.
+
 ## 2026-10-20 — 의뢰 동기화 읽기 회차 소진(SCAN_INCOMPLETE)과 Final 버전 ID 선택화 (이슈 #55)
 
 - 실서버 증상: 저장 폴더 새로고침의 의뢰 확인이 `FOLDER_SCHEMA_SCAN_INCOMPLETE "현재 의뢰 폴더를 안전하게 모두 조사할 수 없습니다."`(WR-00000800/801/804/805). 2658815는 자동 탐색만 고쳤고, 의뢰 하나의 확인(`sync_drive`/`sync_scope`→`refresh_scope`→스캔, 수동 새로고침, 재해석)은 읽기 세션 8회차 안에서 트리를 미스마다 4단계씩 받았다. Final 버전·Drop이 여럿이면 폴더 하나당 2회차를 써서 회차가 먼저 바닥났다(가짜 드라이브 재현: Final 버전 6개 → 7회 미스 후 INCOMPLETE).

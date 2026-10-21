@@ -7,6 +7,9 @@ values below 60 are raised to 60) one background thread:
 2. checks every request with a live folder registration and environment
    (``folder_auto_sync.sync_scope``), the same quick-then-full check the screens use.
 
+A pass is skipped while the administrator's full rescan (``storage_rescan``) runs: it does both
+steps itself, and a parallel pass only competes with it for the drive worker (issue #55).
+
 New Cases/Scenes become one ``NEW_RESULTS`` notification per request (folder sync), sent to every
 active user who may view the project.  The thread never holds a DB connection while it reads the
 drive (``sync_scope`` delegates to ``sync_drive`` in scx mode), runs the scopes one after another
@@ -53,9 +56,14 @@ def run_once(stop_event: threading.Event | None = None) -> dict[str, Any]:
     """One pass over all registered request scopes; returns counts (never raises).
 
     ``stop_event`` (the background thread's) ends the pass early at shutdown."""
-    from . import folder_auto_discovery, folder_auto_sync
+    from . import folder_auto_discovery, folder_auto_sync, storage_rescan
 
     summary = {"scopes": 0, "refreshed": 0, "failed": 0, "discovered": 0}
+    if storage_rescan.running():
+        # Issue #55 (2026-10-21): the administrator's rescan discovers and checks every request itself;
+        # a parallel pass only competes with it for the drive worker (DRIVE_BUSY queue wait timeouts).
+        summary["skipped"] = "STORAGE_RESCAN_RUNNING"
+        return summary
     try:
         discovered = folder_auto_discovery.discover()
         summary["discovered"] = len(discovered.get("created_requests") or []) + len(discovered.get("created_projects") or [])

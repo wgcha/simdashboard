@@ -98,6 +98,15 @@ ORPHAN_SECONDS = 24 * 3600
 NOT_PREPARED = "DRIVE_READ_NOT_PREPARED"
 SOURCE_CHANGED = "DRIVE_SOURCE_CHANGED"
 STAGING_FULL = "DRIVE_STAGING_FULL"
+# Issue #55 (2026-10-21, rescan stuck in DISCOVER): bounds of a long background operation (see :func:`bounded`).
+READ_DEADLINE = "DRIVE_READ_DEADLINE"
+READ_CANCELLED = "DRIVE_READ_CANCELLED"
+# Speculative listing of one list miss (``_prefetch_tree``) stops after this long (the missed folder is listed first).
+LIST_PREFETCH_MAX_SECONDS = 60.0
+# DRIVE_BUSY (adapter OVERLOADED / RATE_LIMITED, e.g. "queue wait timeout"): retried with backoff, then reported.
+BUSY_CODE = "DRIVE_BUSY"
+BUSY_BACKOFF_SECONDS = (2.0, 5.0, 10.0)            # background sessions and bounded operations
+INTERACTIVE_BUSY_BACKOFF_SECONDS = (1.0,)          # a screen request waits at most one short retry
 
 
 class DriveReadMiss(BaseException):
@@ -287,6 +296,88 @@ def current_session() -> DriveReadSession | None:
     return _session_var.get()
 
 
+# --- bounds of a long background operation (issue #55, 2026-10-21) ------------------------------
+#
+# The administrator's full rescan sat in its first discovery round for 14+ minutes: the read rounds of
+# ``run`` and their prefetches (``_prefetch_tree``: up to LIST_PREFETCH_MAX listings, ``require_listings``:
+# every unlisted request folder) had no time bound, every listing could wait the adapter's queue timeout
+# (``DRIVE_BUSY queue wait timeout``), and the discovery deadline was only checked between registrations.
+# ``bounded`` sets a deadline / cancel event / observer for everything the current thread reads from the
+# drive inside it (also in sessions opened by nested ``run`` calls): no live call starts after the deadline
+# or a cancel, prefetch loops stop, and the next read round of ``run`` is its last (the body finishes with
+# what the session holds; a read it lacks is ``DRIVE_READ_NOT_PREPARED`` as in any last round).
+
+@dataclass(frozen=True)
+class ReadBounds:
+    deadline: float | None = None                       # time.monotonic()
+    cancel: threading.Event | None = None
+    observer: Callable[[dict[str, Any]], None] | None = None
+
+
+_bounds_var: contextvars.ContextVar[ReadBounds | None] = contextvars.ContextVar("drive_read_bounds", default=None)
+
+
+@contextmanager
+def bounded(*, deadline: float | None = None, cancel: threading.Event | None = None,
+            observer: Callable[[dict[str, Any]], None] | None = None) -> Iterator[ReadBounds]:
+    """Bound every drive read of this thread inside the block (nested blocks: the earlier deadline wins)."""
+    outer = _bounds_var.get()
+    if outer is not None:
+        if outer.deadline is not None:
+            deadline = outer.deadline if deadline is None else min(deadline, outer.deadline)
+        cancel = cancel or outer.cancel
+        observer = observer or outer.observer
+    bounds = ReadBounds(deadline=deadline, cancel=cancel, observer=observer)
+    token = _bounds_var.set(bounds)
+    try:
+        yield bounds
+    finally:
+        try:
+            _bounds_var.reset(token)
+        except (ValueError, RuntimeError):
+            _bounds_var.set(outer)
+
+
+def stop_reason() -> str | None:
+    """``DRIVE_READ_CANCELLED`` / ``DRIVE_READ_DEADLINE`` when the current bounds ended, else None."""
+    bounds = _bounds_var.get()
+    if bounds is None:
+        return None
+    if bounds.cancel is not None and bounds.cancel.is_set():
+        return READ_CANCELLED
+    if bounds.deadline is not None and time.monotonic() > bounds.deadline:
+        return READ_DEADLINE
+    return None
+
+
+def _stop_error(reason: str) -> SpdmStorageError:
+    if reason == READ_CANCELLED:
+        return SpdmStorageError(READ_CANCELLED, "관리자가 작업을 중지해 드라이브를 더 읽지 않았습니다.")
+    return SpdmStorageError(READ_DEADLINE, "작업 시간 한도가 지나 드라이브를 더 읽지 않았습니다. 다음 확인에서 다시 읽습니다.")
+
+
+def _observe_call(op: str, rel: str, code: str | None, retries: int = 0) -> None:
+    bounds = _bounds_var.get()
+    if bounds is None or bounds.observer is None:
+        return
+    try:
+        bounds.observer({"op": op, "rel": rel, "code": code, "retries": retries})
+    except Exception:  # noqa: BLE001 - progress reporting never fails a drive read
+        logger.debug("drive read observer failed", exc_info=True)
+
+
+def _wait(seconds: float) -> bool:
+    """Sleep ``seconds`` unless the bounds end first (then False, without the full wait)."""
+    bounds = _bounds_var.get()
+    end = time.monotonic() + seconds
+    if bounds is not None and bounds.deadline is not None and bounds.deadline < end:
+        return False
+    if bounds is not None and bounds.cancel is not None:
+        return not bounds.cancel.wait(seconds)
+    time.sleep(seconds)
+    return stop_reason() is None
+
+
 def active() -> bool:
     """scx mode with an SPDM root on the drive (reads go through this module)."""
     try:
@@ -407,14 +498,16 @@ def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | 
         attempts = max(1, int(rounds))
         for attempt in range(attempts):
             session.rounds = attempt + 1
-            session.final_round = attempt == attempts - 1
+            # Bounds ended (deadline / cancel, see ``bounded``): this round is the last one.
+            session.final_round = attempt == attempts - 1 or stop_reason() is not None
             try:
                 result = body()
             except DriveReadMiss as miss:
                 if connection_held():
                     raise RuntimeError("drive read miss escaped while a database connection was still open") from None
-                _fulfil(session, miss)
-                _load_listed_registered(session)
+                if stop_reason() is None:
+                    _fulfil(session, miss)
+                    _load_listed_registered(session)
                 continue
             _record_downloads(session)
             return result
@@ -501,17 +594,58 @@ def _log_call_failure(op: str, rel: str, code: str, message: str) -> None:
     logger.log(level, "SCX drive read %s failed: rel=%s code=%s message=%s", op, rel, code, message)
 
 
+def _busy_backoff() -> tuple[float, ...]:
+    """Backoff of DRIVE_BUSY retries: longer for background sessions and bounded operations."""
+    session = current_session()
+    if _bounds_var.get() is not None or (session is not None and session.priority == "BACKGROUND"):
+        return BUSY_BACKOFF_SECONDS
+    return INTERACTIVE_BUSY_BACKOFF_SECONDS
+
+
 def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
+    """One drive call; ``DRIVE_BUSY`` is retried with backoff a bounded number of times, then raised.
+
+    Never starts after the current bounds ended (``bounded``: deadline or cancel).
+    """
     if connection_held():
         raise RuntimeError("drive call while the thread holds a database connection")
+    backoff = _busy_backoff()
+    retries = 0
+    while True:
+        reason = stop_reason()
+        if reason is not None:
+            raise _stop_error(reason)
+        try:
+            result = _call_once(fn, op, rel, retries=retries, final=retries >= len(backoff))
+        except SpdmStorageError as error:
+            if error.code == BUSY_CODE and retries < len(backoff) and _wait(backoff[retries]):
+                retries += 1
+                continue
+            if error.code == BUSY_CODE and retries < len(backoff):
+                # The bounds ended during the backoff: report the busy drive once.
+                _log_call_failure(op, rel, BUSY_CODE, f"{error} (retries={retries}, stopped: {stop_reason()})")
+            _observe_call(op, rel, str(error.code), retries)
+            raise
+        _observe_call(op, rel, None, retries)
+        return result
+
+
+def _call_once(fn: Callable[[Any], T], op: str, rel: str, *, retries: int = 0, final: bool = True) -> T:
+    """``_call`` without the retry; a DRIVE_BUSY that will be retried (``final`` False) is not logged."""
+    def log(code: str, message: str) -> None:
+        if code != BUSY_CODE:
+            _log_call_failure(op, rel, code, message)
+        elif final:
+            _log_call_failure(op, rel, code, f"{message} (after {retries} retries)" if retries else message)
+
     if not drive_auth.wait_account_switch():
         # Issue #50: a manual re-login is still checking the account the worker now holds.
-        _log_call_failure(op, rel, "DRIVE_BUSY", "account switch pending")
+        log("DRIVE_BUSY", "account switch pending")
         raise SpdmStorageError("DRIVE_BUSY", "드라이브 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.")
     try:
         gateway = drive_gateway.get_drive_gateway()
     except drive_gateway.DriveStartupError as exc:
-        _log_call_failure(op, rel, "DRIVE_UNAVAILABLE", drive_gateway.safe_error_message(exc))
+        log("DRIVE_UNAVAILABLE", drive_gateway.safe_error_message(exc))
         raise SpdmStorageError("DRIVE_UNAVAILABLE", str(exc)[:200]) from None
     if gateway is None:
         raise SpdmStorageError("DRIVE_MODE_DISABLED", "SCX 드라이브 모드가 아닙니다.")
@@ -524,14 +658,14 @@ def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
                 raise
             return fn(drive_gateway.get_drive_gateway() or gateway)
     except SpdmStorageError as error:
-        _log_call_failure(op, rel, str(error.code), drive_gateway.safe_error_message(error))
+        log(str(error.code), drive_gateway.safe_error_message(error))
         raise
     except Exception as error:  # adapter DriveError carries a code; anything else is a bug
         if drive_gateway.drive_error_code(error) is None:
             logger.warning("SCX drive read %s raised %s: rel=%s", op, type(error).__name__, rel, exc_info=True)
             raise
         mapped = drive_gateway.to_storage_error(error)
-        _log_call_failure(op, rel, str(mapped.code), str(mapped))
+        log(str(mapped.code), str(mapped))
         raise mapped from None
 
 
@@ -1043,11 +1177,15 @@ def _fulfil(session: DriveReadSession, miss: DriveReadMiss) -> None:
         _prefetch_subtree_miss(session, miss.rel, miss.token)
     elif miss.kind == "listings":
         for folder in miss.rel.split("\n"):
+            if stop_reason() is not None:
+                break   # bounds ended: the body's last round reports the folders left unlisted
             if folder in session.listings or ("list", folder) in session.errors:
                 continue
             try:
                 session.listings[folder] = _live_list(session, session.spdm_root, folder)
             except SpdmStorageError as error:
+                if error.code in {READ_DEADLINE, READ_CANCELLED}:
+                    break
                 session.errors[("list", folder)] = error
     else:  # pragma: no cover - programming error
         raise RuntimeError(f"unknown drive read miss {miss.kind}")
@@ -1064,16 +1202,24 @@ def _prefetch_tree(session: DriveReadSession, rel: str) -> None:
     if parent is not None:
         queue.append((parent, 0))
     listed = 0
+    started = time.monotonic()
     while queue and listed < LIST_PREFETCH_MAX:
         current, depth = queue.pop(0)
+        if current != rel and (stop_reason() is not None
+                               or time.monotonic() - started > LIST_PREFETCH_MAX_SECONDS):
+            break   # issue #55: speculative listings are bounded in time too (the missed folder is first)
         if current in session.listings:
             entries = session.listings[current]
         else:
             try:
                 entries = _live_list(session, session.spdm_root, current)
             except SpdmStorageError as error:
+                if error.code in {READ_DEADLINE, READ_CANCELLED}:
+                    break
                 if current == rel:
                     session.errors[("list", current)] = error
+                elif error.code == BUSY_CODE:
+                    break   # a busy drive (after the retries) gets no more speculative listings
                 continue
             session.listings[current] = entries
             listed += 1
@@ -1115,7 +1261,7 @@ def prefetch_subtree(session: DriveReadSession, rel: str, *, max_listings: int, 
     listed = 0
     complete = True
     while stack:
-        if listed >= max_listings or time.monotonic() - started > max_seconds:
+        if listed >= max_listings or time.monotonic() - started > max_seconds or stop_reason() is not None:
             complete = False
             break
         current = stack.pop()
@@ -1129,6 +1275,9 @@ def prefetch_subtree(session: DriveReadSession, rel: str, *, max_listings: int, 
             try:
                 entries = _live_list(session, session.spdm_root, current)
             except SpdmStorageError as error:
+                if error.code in {READ_DEADLINE, READ_CANCELLED}:
+                    complete = False
+                    break
                 session.errors[("list", current)] = error
                 continue
             session.listings[current] = entries
@@ -1175,6 +1324,17 @@ def _cached_files_below(session: DriveReadSession, base: str) -> Iterator[tuple[
                 yield child, entry
 
 
+def _stageable(path: str, entry: Any) -> bool:
+    """False for a file whose name this (Windows) server cannot hold: the adapter says ``local_safe=False``
+    and the name breaks the Windows rules. A name that is only a case twin of a sibling is stageable: every
+    download goes to its own fresh staging folder (issue #55, 2026-10-21; ``DriveStorageProvider._file_version``)."""
+    if getattr(entry, "local_safe", True) is not False:
+        return True
+    from .. import spdm_storage
+
+    return spdm_storage._valid_windows_name(PurePosixPath(path).name)
+
+
 def _prefetch_content(session: DriveReadSession, rel: str) -> None:
     """Download ``rel`` and, speculatively, the other readable files of the session scope (bounded)."""
     parent, _ = _split(rel)
@@ -1210,7 +1370,7 @@ def _prefetch_content(session: DriveReadSession, rel: str) -> None:
     budget_bytes = CONTENT_PREFETCH_MAX_BYTES
     budget_files = CONTENT_PREFETCH_MAX_FILES
     for path, candidate in _cached_files_below(session, base):
-        if budget_files <= 0 or budget_bytes <= 0:
+        if budget_files <= 0 or budget_bytes <= 0 or stop_reason() is not None:
             break
         if PurePosixPath(path).suffix.casefold() not in wanted:
             continue
@@ -1220,6 +1380,8 @@ def _prefetch_content(session: DriveReadSession, rel: str) -> None:
         size = candidate_version.size or 0
         if masked or size > file_limit or (path, candidate_version.token) in session.files:
             continue
+        if not _stageable(path, candidate):
+            continue   # its own read reports it (one unprocessed file)
         if ("content", path) in session.errors:
             continue
         if not _staging_room(session, size):
@@ -1250,10 +1412,14 @@ def prefetch_content(session: DriveReadSession, scope: str, *, max_bytes: int = 
     stack = [scope]
     listed = 0
     while stack and listed < 5000:
+        if stop_reason() is not None:
+            return
         folder = stack.pop()
         try:
             entries = listing(session.spdm_root, folder)
         except SpdmStorageError as error:
+            if error.code in {READ_DEADLINE, READ_CANCELLED}:
+                return
             session.errors[("list", folder)] = error
             continue
         listed += 1
@@ -1270,8 +1436,10 @@ def prefetch_content(session: DriveReadSession, scope: str, *, max_bytes: int = 
         version, masked = effective_version(path, entry)
         if (version.size or 0) > BLOB_THRESHOLD_BYTES or (path, version.token) in session.files:
             continue
+        if not masked and not _stageable(path, entry):
+            continue   # never staged; the capture reports it as one unprocessed file
         budget -= version.size or 0
-        if budget < 0 or not _staging_room(session, version.size or 0):
+        if budget < 0 or not _staging_room(session, version.size or 0) or stop_reason() is not None:
             break
         try:
             if masked:
@@ -1279,6 +1447,8 @@ def prefetch_content(session: DriveReadSession, scope: str, *, max_bytes: int = 
             else:
                 _download(session, session.spdm_root, path, version, MAX_FILE_BYTES)
         except SpdmStorageError as error:
+            if error.code in {READ_DEADLINE, READ_CANCELLED}:
+                break
             session.errors[("content", path)] = error
 
 

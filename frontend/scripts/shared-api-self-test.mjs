@@ -8,6 +8,7 @@ import { clearExclusions, descendants, effectivelyExcluded, excludedPaths, exclu
 import { timeoutGuard } from '../src/shared/api/requestTimeout.ts'
 import { normalizePhysicsAiLink, physicsAiNavHref, PHYSICSAI_LINK_OFF } from '../src/shared/api/physicsaiLinkModel.ts'
 import { eslNavHref, ESL_LINK_OFF, normalizeEslLink } from '../src/shared/api/eslLinkModel.ts'
+import { elapsedText, rescanProgressDetail } from '../src/shared/api/storageRescanModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
 const validationMessage = apiErrorMessage(validation, '요청 실패 (422)')
@@ -230,5 +231,19 @@ assert(rescanLine({ status: 'RUNNING', phase: 'DISCOVER', created_requests: [1, 
 assert(rescanLine({ status: 'RUNNING', phase: 'REINTERPRET', progress: { done: 1, total: 4 } }) === '저장 폴더 확인 중 · 새 깊이 스키마 적용 1/4', 'reinterpret progress line')
 assert(rescanLine({ status: 'DONE', progress: { done: 9, total: 9 }, refreshed: 7, needs_review: [], failed: [], partial: true }).includes('한 번 더'), 'partial result asks for another run')
 assert(rescanLine({ status: 'FAILED', error: '실패' }) === '실패' && rescanLine(null) === '' && rescanLine({ status: 'IDLE' }) === '', 'failed / idle lines')
+
+assert(rescanLine({ status: 'CANCELLED' }).includes('중지'), 'cancelled rescan line')
+// Issue #55: live progress of a rescan stuck in DISCOVER (where, drive work, last drive error, elapsed, cancel).
+const stuck = { status: 'RUNNING', phase: 'DISCOVER', rounds: 0, elapsed_seconds: 845,
+  progress: { done: 0, total: 0, projects_done: 3, projects_total: 40, current_path: 'PROJ-000002_testProject' },
+  drive: { calls: 130, listings: 120, errors: 5, retries: 7, last_error: { code: 'DRIVE_BUSY', operation: 'list_dir', relative_path: 'PROJ-000002_testProject/CAD' } } }
+const stuckLine = rescanProgressDetail(stuck)
+for (const part of ['프로젝트 3/40', 'PROJ-000002_testProject', '드라이브 목록 120건', '재시도 7회', 'DRIVE_BUSY (PROJ-000002_testProject/CAD)', '경과 14분 5초']) {
+  assert(stuckLine.includes(part), `rescan progress detail lacks ${part}: ${stuckLine}`)
+}
+assert(rescanProgressDetail({ status: 'RUNNING', phase: 'DISCOVER', progress: { done: 0, total: 0 } }) === '폴더 목록 읽는 중', 'discover before the project list')
+assert(rescanProgressDetail({ ...stuck, cancel_requested: true }).includes('중지 요청됨'), 'cancel requested is shown')
+assert(rescanProgressDetail({ status: 'DONE' }) === '' && rescanProgressDetail(null) === '', 'no detail when not running')
+assert(elapsedText(59) === '59초' && elapsedText(0) === '', 'elapsed text')
 
 console.log('Shared API self-test passed.')

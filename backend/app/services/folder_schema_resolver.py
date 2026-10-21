@@ -112,7 +112,9 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
                 try:
                     digest = "drive:" + str(content_token(file_path))
                 except spdm_storage.SpdmStorageError as exc:
-                    raise FolderSchemaError(exc.code, str(exc), 409 if exc.code == "SPDM_FILE_BUSY" else 422) from exc
+                    # The failure names the file (issue #55: the log said only which request failed).
+                    message = str(exc) if file_path in str(exc) else f"{exc} ({file_path})"
+                    raise FolderSchemaError(exc.code, message, 409 if exc.code == "SPDM_FILE_BUSY" else 422) from exc
                 content.append((_fold(relative_path), size, modified_ns, digest))
                 continue
             try:

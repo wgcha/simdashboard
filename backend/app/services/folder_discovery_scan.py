@@ -152,9 +152,13 @@ def browse(root: Path, relative: str) -> list[dict[str, Any]]:
 
 
 def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | None], bool] | None = None) -> dict[str, Any]:
+    from .storage.drive import DriveStorageProvider
+
     fs = provider_for_root(root)
     limits = limits_for(fs)
+    drive_mode = isinstance(fs, DriveStorageProvider)
     nodes, issues = [], []
+    skipped_entries: list[dict[str, Any]] = []   # entries left out without making the scan incomplete
     file_state: list[dict[str, Any]] = []
     files = total_entries = 0
     started = time.monotonic()
@@ -186,7 +190,18 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
                         break
                     child = fs.join(path, entry.name)
                     child_rel = child
-                    if fs.is_link(child):
+                    try:
+                        linked = fs.is_link(child)
+                    except spdm_storage.SpdmStorageError as error:
+                        if not drive_mode:
+                            raise
+                        # Issue #55 (SCX drive): one child whose name the dashboard cannot address (':' or
+                        # '\\') is left out and reported; it never makes the whole folder unavailable.
+                        skipped_entries.append({"relative_path": child_rel, "code": "NAME_NOT_SUPPORTED",
+                                        "kind": entry.kind, "message": str(error)[:200]})
+                        _log_skipped(child_rel, error)
+                        continue
+                    if linked:
                         issues.append({"relative_path": child_rel, "code": "REPARSE", "message": "연결 폴더·심볼릭 링크는 조사할 수 없습니다."})
                     elif entry.kind == "dir":
                         if depth >= MAX_DEPTH or len(child_rel) > 1024:
@@ -218,7 +233,25 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
         stack.extend(sorted(children, key=lambda child: child[1].casefold(), reverse=True))
     file_state.sort(key=lambda item: str(item["relative_path"]).casefold())
     return {"status": "INCOMPLETE" if issues else "COMPLETE", "folder_count": len(nodes),
-            "file_count": files, "nodes": nodes, "file_state": file_state, "issues": issues}
+            "file_count": files, "nodes": nodes, "file_state": file_state, "issues": issues,
+            "skipped_entries": skipped_entries}
+
+
+_SKIPPED_LOG_SECONDS = 3600.0
+_skipped_logged: dict[str, float] = {}
+
+
+def _log_skipped(relative_path: str, error: BaseException) -> None:
+    """One WARNING per skipped drive entry per hour (the screens re-scan every minute)."""
+    now = time.monotonic()
+    last = _skipped_logged.get(relative_path)
+    if last is not None and now - last < _SKIPPED_LOG_SECONDS:
+        return
+    if len(_skipped_logged) > 4096:
+        _skipped_logged.clear()
+    _skipped_logged[relative_path] = now
+    logger.warning("Folder scan skipped a drive entry whose name cannot be used on this server: %s (%s)",
+                   relative_path[:512], getattr(error, "code", type(error).__name__))
 
 
 # Files the Case results, materials and finalization actually read. Other files

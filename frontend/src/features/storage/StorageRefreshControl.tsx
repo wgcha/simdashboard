@@ -1,7 +1,8 @@
-import { RefreshCw, X } from 'lucide-react'
+import { RefreshCw, Square, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { fetchStorageConfig, saveStorageConfig } from '../../shared/api/storage'
 import { folderEnvironmentApi, type FolderDiscoveryReview, type StorageRescanReinterpret, type StorageRescanState } from '../../shared/api/folderEnvironment'
+import { rescanProgressDetail } from '../../shared/api/storageRescanModel'
 import { DriveSettingsEntry } from './DriveAdminPanel'
 
 const POLL_MS = 2000
@@ -35,11 +36,14 @@ function summary(state: StorageRescanState): string {
   ]
   if (state.reinterpreted.length || state.reinterpret_blocked.length) parts.push(`새 스키마 적용 ${state.reinterpreted.length}`, `적용 못함 ${state.reinterpret_blocked.length}`)
   if (excluded) parts.push(`제외 ${excluded}`)
+  if (state.sync_deferred) parts.push(`시간 제한으로 미확인 ${state.sync_deferred}`)
+  if (state.status === 'CANCELLED') return `저장 폴더 확인을 중지했습니다. 그때까지의 결과만 반영했습니다 (${parts.join(' · ')}).`
   return `저장 폴더를 다시 확인했습니다 (${parts.join(' · ')})${state.partial ? '. 남은 폴더가 있어 한 번 더 실행하세요' : ''}.`
 }
 
 function hasReport(state: StorageRescanState): boolean {
-  return state.status === 'FAILED' || state.needs_review.length > 0 || state.failed.length > 0
+  return state.status === 'FAILED' || state.status === 'CANCELLED' || (state.sync_deferred ?? 0) > 0
+    || state.needs_review.length > 0 || state.failed.length > 0
     || state.reinterpreted.length > 0 || state.reinterpret_blocked.length > 0
 }
 
@@ -62,6 +66,7 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
   const [rescan, setRescan] = useState<StorageRescanState | null>(null)
   const [busy, setBusy] = useState(false)
   const [report, setReport] = useState<StorageRescanState | null>(null)
+  const [cancelling, setCancelling] = useState(false)
   const polling = useRef(false)
   const mounted = useRef(true)
   const callbacks = useRef({ onChanged, onMessage, onError })
@@ -118,12 +123,23 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
         if (!mounted.current) return
         state = await folderEnvironmentApi.rescanStatus()
       }
-      if (mounted.current && (state.status === 'DONE' || state.status === 'FAILED')) await finish(state)
+      if (mounted.current && (state.status === 'DONE' || state.status === 'FAILED' || state.status === 'CANCELLED')) await finish(state)
     } catch (reason) {
       if (mounted.current) callbacks.current.onError(reason instanceof Error ? reason.message : '저장 폴더 확인 상태를 불러오지 못했습니다.')
     } finally {
       polling.current = false
-      if (mounted.current) { setBusy(false); setRescan(null) }
+      if (mounted.current) { setBusy(false); setRescan(null); setCancelling(false) }
+    }
+  }
+  /** [중지]: the server stops the rescan at its next check point; the polling shows the CANCELLED result. */
+  const cancel = async () => {
+    if (cancelling) return
+    setCancelling(true)
+    try {
+      const state = await folderEnvironmentApi.rescanCancel()
+      if (mounted.current && state.status === 'RUNNING') setRescan(state)
+    } catch (reason) {
+      if (mounted.current) { setCancelling(false); callbacks.current.onError(reason instanceof Error ? reason.message : '저장 폴더 확인을 중지하지 못했습니다.') }
     }
   }
   const run = async () => {
@@ -157,9 +173,15 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
   return <div className="storage-global-actions">
     <details className="storage-global-settings" onToggle={(event) => { if (event.currentTarget.open) void loadRoot() }}><summary aria-label="고정 결과 원본 폴더 설정">저장소 설정</summary><div><label><span>고정 결과 원본 폴더</span><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="서버 결과 원본 root 경로" disabled={rootBusy || rootLocked} /></label><button type="button" onClick={() => void saveRoot()} disabled={rootBusy || rootLocked || !rootPath.trim()}>저장</button>{rootLocked ? <small role="status">환경 설정이 사용하는 경로라 여기서 바꿀 수 없습니다.</small> : rootMessage ? <small role="status">{rootMessage}</small> : null}<DriveSettingsEntry /></div></details>
     <button type="button" className="ghost-button" data-testid="storage-global-refresh" disabled={busy} title="현재 깊이 스키마로 저장소 전체를 다시 확인해 새 프로젝트·의뢰를 등록하고 등록된 의뢰를 갱신합니다." onClick={() => void run()}><RefreshCw className={busy ? 'storage-spin' : undefined} /> {busy ? progressLabel(rescan) : '저장 폴더 새로고침'}</button>
+    {busy && rescan?.status === 'RUNNING' && <>
+      <small className="storage-rescan-progress" role="status" data-testid="storage-rescan-progress" title={rescanProgressDetail(rescan)}>{rescanProgressDetail(rescan)}</small>
+      <button type="button" className="ghost-button" data-testid="storage-rescan-cancel" disabled={cancelling || rescan.cancel_requested} title="진행 중인 저장 폴더 확인을 다음 확인 지점에서 멈춥니다. 그때까지 확인한 결과는 남습니다." onClick={() => void cancel()}><Square /> {cancelling || rescan.cancel_requested ? '중지 중' : '중지'}</button>
+    </>}
     {report && <section className="storage-rescan-report" aria-label="저장 폴더 확인 결과" data-testid="storage-rescan-report">
       <header><strong>저장 폴더 확인 결과</strong><button type="button" className="storage-rescan-close" aria-label="닫기" onClick={() => setReport(null)}><X /></button></header>
       {report.status === 'FAILED' && <p className="storage-rescan-error" role="alert">{report.error || '저장 폴더를 확인하지 못했습니다.'}</p>}
+      {report.status === 'CANCELLED' && <p className="storage-rescan-error" role="status">관리자가 중지했습니다. 아래는 중지 전까지 확인한 결과입니다.</p>}
+      {(report.sync_deferred ?? 0) > 0 && <p className="storage-rescan-error" role="status">시간 제한으로 {report.sync_deferred}개 의뢰는 확인하지 못했습니다. 한 번 더 실행하세요.</p>}
       {report.reinterpret_blocked.length > 0 && <><h3>새 깊이 스키마를 적용하지 못한 의뢰 {report.reinterpret_blocked.length}개</h3><ul data-testid="storage-rescan-blocked">{report.reinterpret_blocked.map((item) => <ReinterpretItem key={`${item.request_id}|${item.environment}`} item={item} blocked />)}</ul></>}
       {report.reinterpreted.length > 0 && <details data-testid="storage-rescan-reinterpreted"><summary>새 깊이 스키마를 적용한 의뢰 {report.reinterpreted.length}개</summary><ul>{report.reinterpreted.map((item) => <ReinterpretItem key={`${item.request_id}|${item.environment}`} item={item} blocked={false} />)}</ul></details>}
       {report.reinterpret_deferred > 0 && <p className="storage-rescan-error" role="status">시간 제한으로 {report.reinterpret_deferred}개 의뢰는 새 스키마를 적용하지 못했습니다. 한 번 더 실행하세요.</p>}

@@ -26,6 +26,8 @@ from typing import Any, Iterable, Iterator, Literal
 from .provider import Entry, SpdmStorageError
 
 WRITE_DISABLED = "DRIVE_WRITE_DISABLED"
+# A drive file whose name Windows cannot hold (adapter ``local_safe=False`` + forbidden name): never staged.
+UNSAFE_LOCAL_NAME = "SPDM_INVALID_PATH"
 WRITE_DISABLED_MESSAGE = ("드라이브 모드에서는 아직 드라이브에 쓸 수 없습니다(읽기 전용). "
                           "업로드·Final 지정은 드라이브 쓰기 단계(D3) 이후 사용할 수 있습니다.")
 
@@ -252,8 +254,19 @@ class DriveStorageProvider:
             for name in [*dirnames, *filenames]:
                 yield self.join(directory, name)
 
-    def _file_version(self, rel: str):
+    def _file_version(self, rel: str, *, local: bool = True):
+        """(effective version, masked) of file ``rel``.
+
+        ``local``: the caller stages the file on the server (download). The adapter marks names it
+        cannot write on Windows ``local_safe=False`` (forbidden characters, or a sibling that differs
+        only by case). A drive name is not a Windows path, so only a local copy is affected (issue #55,
+        2026-10-21: the content fingerprint, which needs no local file, refused such a file and failed
+        the whole request sync): every download goes to its own fresh staging folder, so a case twin
+        cannot collide there and is read; a name Windows cannot hold at all is refused for this file
+        only (``SPDM_INVALID_PATH`` naming it; callers report it as an unprocessed item).
+        """
         from ..drive import reads
+        from .. import spdm_storage
 
         raw = reads.raw_entry(self.root.spdm_root, rel)
         if raw is None:
@@ -263,8 +276,11 @@ class DriveStorageProvider:
             raise SpdmStorageError("SPDM_FILE_UNAVAILABLE", "원본 파일을 읽을 수 없습니다.")
         if raw.kind != "file":
             raise SpdmStorageError("SPDM_FILE_UNAVAILABLE", "원본 파일을 읽을 수 없습니다.")
-        if getattr(raw, "local_safe", True) is False:
-            raise SpdmStorageError("SPDM_INVALID_PATH", "이 서버에서 쓸 수 없는 이름입니다(Windows 금지 문자·대소문자 중복).")
+        name = PurePosixPath(rel).name
+        if local and getattr(raw, "local_safe", True) is False and not spdm_storage._valid_windows_name(name):
+            raise SpdmStorageError(
+                UNSAFE_LOCAL_NAME,
+                f"이 서버(Windows)에 내려받을 수 없는 파일 이름입니다(금지 문자 <>:\"\\|?*·끝의 공백/마침표·예약 이름): {rel}")
         return reads.effective_version(rel, raw)
 
     def read_stable(self, rel_path: str, *, max_bytes: int = 512 * 1024 * 1024) -> bytes:
@@ -312,7 +328,7 @@ class DriveStorageProvider:
     def content_token(self, rel_path: str) -> str | None:
         """Effective ``version_token`` (content fingerprints use it instead of reading the file)."""
         rel = self._rel(rel_path)
-        version, _masked = self._file_version(rel)
+        version, _masked = self._file_version(rel, local=False)   # nothing is staged locally
         return version.token
 
     def hash_stable(self, rel_path: str, *, chunk_size: int | None = None, on_progress=None) -> tuple[int, str]:

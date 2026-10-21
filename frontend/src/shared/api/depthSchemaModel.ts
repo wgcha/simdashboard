@@ -114,6 +114,7 @@ export function rescanLine(state: RescanLine | null): string {
     return state.phase === 'SYNC' ? `저장 폴더 확인 중 · 의뢰 ${progress.done}/${progress.total}` : `저장 폴더 확인 중 · 새 폴더 ${state.created_requests?.length ?? 0}개`
   }
   if (state.status === 'FAILED') return state.error || '저장 폴더를 확인하지 못했습니다.'
+  if (state.status === 'CANCELLED') return '저장 폴더 새로고침을 중지했습니다. 그때까지 확인한 결과만 반영됐습니다.'
   if (state.status !== 'DONE') return ''
   const parts = [`확인한 의뢰 ${state.progress?.done ?? 0}`, `갱신 ${state.refreshed ?? 0}`, `확인 필요 ${state.needs_review?.length ?? 0}`, `실패 ${state.failed?.length ?? 0}`]
   return `저장 폴더 새로고침을 마쳤습니다 (${parts.join(' · ')})${state.partial ? '. 남은 폴더가 있어 상단 [저장 폴더 새로고침]을 한 번 더 누르세요' : ''}.`

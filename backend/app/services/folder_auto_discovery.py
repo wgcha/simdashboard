@@ -75,6 +75,11 @@ Scope and safety:
   background run instead of returning ``RUNNING``) and a longer
   ``budget_seconds``, after :func:`clear_review_memos`, so every unregistered
   folder is examined again and reported with its reason.
+* Issue #55 (2026-10-21): every run's drive reads end at its budget + ``DRIVE_READ_SLACK_SECONDS``
+  (``drive_reads.bounded``; the budget itself is checked between steps), so the run lock is never held
+  longer; the rescan's lock wait can be cancelled; while the rescan runs, other callers get the last
+  result as ``RUNNING`` without reading the drive; ``progress`` reports the step, the current
+  project/request folder and the projects done/total to the rescan.
 """
 from __future__ import annotations
 
@@ -110,6 +115,9 @@ MAX_LISTED_ENTRIES = 20000
 MAX_NEW_REQUESTS_PER_RUN = 5
 RUN_TIME_BUDGET_SECONDS = 45.0
 RETRY_BACKOFF_SECONDS = (120.0, 300.0, 600.0)
+# Drive reads of a run end this long after its time budget (issue #55): the budget is checked between
+# steps, the reads inside a step (prefetch rounds) stop at budget + slack.
+DRIVE_READ_SLACK_SECONDS = 30.0
 # SCX drive read rounds of one run (issue #51): upper levels + per new request one round for its folder
 # tree (``drive_reads.require_subtree``) and one for its capture files (``require_content``), with slack.
 DISCOVERY_READ_ROUNDS = drive_reads.MAX_ROUNDS + 3 * MAX_NEW_REQUESTS_PER_RUN
@@ -353,6 +361,22 @@ class _Lister:
         except (OSError, ValueError, spdm_storage.SpdmStorageError):
             return None
         return info.modified_ns if info is not None else None
+
+
+def _over(deadline: float) -> bool:
+    """The run's time budget is used up, or its drive read bounds ended (rescan deadline / cancel)."""
+    return time.monotonic() > deadline or drive_reads.stop_reason() is not None
+
+
+def _report(carry: dict[str, Any], **fields: Any) -> None:
+    """Progress of the run for the caller's ``progress`` callback (the administrator's rescan)."""
+    callback = carry.get("progress")
+    if callback is None:
+        return
+    try:
+        callback(fields)
+    except Exception:  # noqa: BLE001 - progress reporting never fails the run
+        _logger.debug("discovery progress callback failed", exc_info=True)
 
 
 def _error_code(error: BaseException) -> str:
@@ -637,7 +661,7 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
     roles from the schema but is never a capture source (handled by the core).
     """
     request_name = request_path.rsplit("/", 1)[-1]
-    if time.monotonic() > deadline:
+    if _over(deadline):
         return {"deferred": True}
     # SCX drive (issue #51): list the scanned tree (project folder without the sibling request folders)
     # in one read round before the scan; level-by-level misses used up the session's rounds on deep
@@ -657,7 +681,7 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
                                              for item in scanned["issues"]):
             return {"deferred": True, "code": "DRIVE_READ_LIMIT"}
         return {"review": _scan_issue_review(request_path, scanned["issues"], environment)}
-    if time.monotonic() > deadline:
+    if _over(deadline):
         return {"deferred": True}
     by_path = {_node_key(node["relative_path"]): node for node in scanned["nodes"]}
     project_node = by_path.get(_node_key(project_path))
@@ -703,7 +727,7 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
                                   str(built.get("message") or
                                       f"역할을 확인할 수 없는 폴더 {built['unresolved_count']}개가 있습니다. 깊이 스키마를 확인하세요."),
                                   environment)}
-    if time.monotonic() > deadline:
+    if _over(deadline):
         return {"deferred": True}
     project_row = next((row for row in built["rows"] if row.get("role_kind") == "PROJECT"), None)
     project_existed = bool(project_row and project_row.get("target_id") and conn.execute(
@@ -1081,7 +1105,10 @@ def _discover(conn, root, budget_seconds: float | None = None, carry: dict[str, 
     listings: dict[str, set[str] | None] = {}
     # Project-level folders with the same name key are ONE project (issue #55): no whitespace-twin ambiguity there.
     lister.merge_depth = _upper_levels(schema)[0]
+    carry["passes"] = int(carry.get("passes") or 0) + 1
+    _report(carry, step="LIST_PROJECTS", current_path="", pass_number=carry["passes"])
     projects = _project_groups(_project_candidates(lister, linked, schema, needs_review, listings))
+    _report(carry, step="LIST_REQUESTS", projects_total=len(projects), projects_done=0)
     paths_of = _project_paths_by_id(linked)
     request_lists: dict[str, list[tuple[str, str]]] = {}
     project_renames = _project_renames(conn, lister, root_key, linked, schema, projects, paths_of, listings,
@@ -1094,10 +1121,11 @@ def _discover(conn, root, budget_seconds: float | None = None, carry: dict[str, 
     drive_reads.require_listings([path for items in request_lists.values() for _name, path in items
                                   if _node_key(path) not in linked["requests"]])
     # Registrations of earlier rounds of this run count against MAX_NEW_REQUESTS_PER_RUN.
-    state = {"attempts": len(created_requests) + len(renamed_requests), "stopped": False}
-    for group in projects:
+    state = {"attempts": len(created_requests) + len(renamed_requests), "stopped": False, "carry": carry}
+    for index, group in enumerate(projects):
         if state["stopped"]:
             break
+        _report(carry, step="PROJECT", current_path=group.path, projects_done=index, projects_total=len(projects))
         try:
             _discover_project(conn, root, root_key, lister, linked, schema_set_id, schema, group,
                               project_renames, request_lists, paths_of, listings, deadline, state, deferred,
@@ -1110,6 +1138,8 @@ def _discover(conn, root, budget_seconds: float | None = None, carry: dict[str, 
                                            f"이 프로젝트 폴더를 확인하지 못했습니다({_error_code(exc)}): {str(exc)[:120]} "
                                            "다음 확인에서 다시 시도합니다."), "error_code": _error_code(exc)})
     attempts, stopped = state["attempts"], state["stopped"]
+    if not stopped:
+        _report(carry, step="PASS_DONE", current_path="", projects_done=len(projects), projects_total=len(projects))
     for path in sorted(lister.duplicates):
         if depth_profiles.is_ignored_name(path.rsplit("/", 1)[-1]):
             continue
@@ -1247,7 +1277,7 @@ def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[s
         # Issue #55: every project-level folder has a project (also without a registrable request) and every
         # spelling of it is linked to the same project id. A followed project folder rename is linked by its
         # first registration (reported as renamed_projects).
-        if not project_targets and time.monotonic() > deadline:
+        if not project_targets and _over(deadline):
             deferred.append(project_path)
             state["stopped"] = True
             return
@@ -1328,12 +1358,13 @@ def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[s
         if remembered and remembered["stamp"] == stamp and now - remembered["at"] < NEEDS_REVIEW_RETRY_SECONDS:
             needs_review.append(remembered["review"])
             continue
-        if state["attempts"] >= MAX_NEW_REQUESTS_PER_RUN or now > deadline:
-            if now > deadline:
+        if state["attempts"] >= MAX_NEW_REQUESTS_PER_RUN or _over(deadline):
+            if _over(deadline):
                 deferred.append(request_path)
             state["stopped"] = True
             break
         state["attempts"] += 1
+        _report(state.get("carry") or {}, step="REQUEST", current_path=request_path)
         request_project = "/".join(request_path.split("/")[:project_level])   # the spelling that holds this request
         siblings = [path for path in all_paths if _node_key(path) != folded
                     and _cf(path).startswith(_cf(request_project) + "/")]
@@ -1503,19 +1534,49 @@ def _empty(status: str) -> dict[str, Any]:
             "needs_review": [], "checked_at": _now_iso(), "coalesced": True, "status": status}
 
 
+def _rescan_running() -> bool:
+    from . import storage_rescan
+
+    return storage_rescan.running()
+
+
+def _acquire_run_lock(wait_seconds: float) -> bool:
+    """Take the run lock, waiting at most ``wait_seconds`` (in short slices: a rescan cancel ends the wait)."""
+    if not wait_seconds or wait_seconds <= 0:
+        return _run_lock.acquire(blocking=False)
+    end = time.monotonic() + float(wait_seconds)
+    while True:
+        remaining = end - time.monotonic()
+        if remaining <= 0 or drive_reads.stop_reason() is not None:
+            return _run_lock.acquire(blocking=False)
+        if _run_lock.acquire(timeout=min(1.0, remaining)):
+            return True
+
+
 def discover(*, force: bool = False, connection_factory=None, fresh: bool = False,
-             wait_seconds: float = 0.0, budget_seconds: float | None = None) -> dict[str, Any]:
+             wait_seconds: float = 0.0, budget_seconds: float | None = None,
+             progress=None) -> dict[str, Any]:
     """Register new SPDM project/request folders under the configured storage root.
 
     Never blocks on another run and opens a DB connection only for an actual run.
     The manual rescan passes ``fresh`` (skip the memo), ``wait_seconds`` (wait up
-    to that long for a run in progress instead of returning ``RUNNING``) and
-    ``budget_seconds`` (instead of ``RUN_TIME_BUDGET_SECONDS``); the defaults keep
+    to that long for a run in progress instead of returning ``RUNNING``),
+    ``budget_seconds`` (instead of ``RUN_TIME_BUDGET_SECONDS``) and ``progress``
+    (called with the run's step, current folder and project counts); the defaults keep
     the screens' behaviour.
+
+    Issue #55 (2026-10-21): while the administrator's rescan runs, every other call (the screens'
+    polling, the server auto-sync) returns the last result with ``status: RUNNING`` without reading
+    the drive. Every run's drive reads are bounded (``drive_reads.bounded``) by its budget plus
+    ``DRIVE_READ_SLACK_SECONDS``, so a run never holds the run lock longer than that.
     """
     if not enabled():
         return _empty("DISABLED")
     interval = FORCE_MIN_INTERVAL_SECONDS if force else MIN_INTERVAL_SECONDS
+    if not fresh and _rescan_running():
+        with _state_lock:
+            last = _memo.get("result")
+        return {**last, "coalesced": True, "status": "RUNNING"} if last else _empty("RUNNING")
 
     def remembered() -> dict[str, Any] | None:
         if fresh:
@@ -1529,8 +1590,7 @@ def discover(*, force: bool = False, connection_factory=None, fresh: bool = Fals
     cached = remembered()
     if cached:
         return cached
-    acquired = (_run_lock.acquire(timeout=float(wait_seconds)) if wait_seconds and wait_seconds > 0
-                else _run_lock.acquire(blocking=False))
+    acquired = _acquire_run_lock(wait_seconds)
     if not acquired:
         with _state_lock:
             last = _memo.get("result")
@@ -1539,7 +1599,8 @@ def discover(*, force: bool = False, connection_factory=None, fresh: bool = Fals
         cached = remembered()
         if cached:
             return cached
-        carry: dict[str, Any] = {}
+        carry: dict[str, Any] = {"progress": progress} if progress is not None else {}
+        budget = RUN_TIME_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)
 
         def run_once() -> dict[str, Any]:
             with (connection_factory or connect)() as conn:
@@ -1565,7 +1626,8 @@ def discover(*, force: bool = False, connection_factory=None, fresh: bool = Fals
         # connection; a round repeats only reads and idempotent steps (local mode: one plain call).
         # Issue #51: a run needs about one round per new request for its tree and one for its capture
         # files, plus a few for the upper levels (DISCOVERY_READ_ROUNDS).
-        result = drive_reads.run(run_once, priority="BACKGROUND", rounds=DISCOVERY_READ_ROUNDS)
+        with drive_reads.bounded(deadline=time.monotonic() + budget + DRIVE_READ_SLACK_SECONDS):
+            result = drive_reads.run(run_once, priority="BACKGROUND", rounds=DISCOVERY_READ_ROUNDS)
         if result.get("status") != "CHECKED":
             return result
         with _state_lock:

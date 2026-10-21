@@ -628,7 +628,8 @@ def test_rescan_registers_every_new_request_beyond_one_run_limit(admin_client, i
     assert sorted(item["name"] for item in result["created_requests"]) == ["[WR-0002]_[유통_환경]", "[WR-0006]_[사용_환경]"]
     assert [item["name"] for item in result["created_projects"]] == ["75R9J_PV"]
     assert result["rounds"] >= 2 and result["partial"] is False and result["needs_review"] == []
-    assert result["phase"] == "SYNC" and result["progress"] == {"done": result["scopes"], "total": result["scopes"]}
+    assert result["phase"] == "SYNC" and (result["progress"]["done"], result["progress"]["total"]) == (
+        result["scopes"], result["scopes"])
     assert result["scopes"] >= 2 and result["failed"] == []
     assert result["started_by"] and result["finished_at"]
     assert _count("SELECT count(*) FROM audit_events WHERE action='STORAGE_RESCAN_STARTED'") >= 1

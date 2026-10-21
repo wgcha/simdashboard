@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import re
 from collections import deque
@@ -17,6 +18,7 @@ from .storage import get_storage_provider, provider_for_root
 from .storage.local import LocalFsProvider
 
 
+_logger = logging.getLogger(__name__)
 MAX_ASSET_BYTES = 32 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
 _USAGE_DIRS = {"settle", "wobble", "horizontal_force_angle", "slope_angle", "slope_angle_360"}
@@ -203,6 +205,7 @@ def _walk(
     allowed = {".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm"}
     items, stack = [], [(base, 0)]
     visited = 0
+    drive_mode = drive_reads.active()
 
     def signature_of(item: str) -> tuple[int, int, str]:
         info = fs.stat(item, follow_links=True, missing_ok=False)
@@ -223,6 +226,16 @@ def _walk(
                 if entry.name.casefold() in excluded:
                     if issues is not None:
                         issues.append(_unprocessed_issue(root, fs.path(child), "EXCLUDED_DIRECTORY"))
+                    continue
+                if drive_mode and not spdm_storage._valid_windows_name(entry.name):
+                    # Issue #55 (SCX drive): a drive name this Windows server cannot hold (and the
+                    # dashboard path rules refuse) is one unprocessed item, never a failed capture.
+                    _logger.warning("Capture skipped a drive %s whose name cannot be stored on this server: %s",
+                                    "folder" if entry.kind == "dir" else "file", _safe_issue_relative(child))
+                    if issues is None:
+                        raise DashboardCaptureError("DASHBOARD_PATH_INVALID",
+                                                    f"이 서버에서 쓸 수 없는 이름입니다: {_safe_issue_relative(child)}")
+                    issues.append(f"UNPROCESSED_FILE:{_safe_issue_relative(child)}:NAME_NOT_LOCAL_SAFE")
                     continue
                 fs.assert_safe(child)
                 if entry.kind == "dir":
@@ -248,7 +261,17 @@ def _walk(
                     raise DashboardCaptureError("DASHBOARD_ASSET_TOO_LARGE", "원본 자산은 32 MiB 이하여야 합니다.")
                 issues.append(_unprocessed_issue(root, fs.path(item), "ASSET_TOO_LARGE"))
                 continue
-            data = fs.read_stable(item, max_bytes=min(MAX_ASSET_BYTES, MAX_TOTAL_BYTES - total))
+            try:
+                data = fs.read_stable(item, max_bytes=min(MAX_ASSET_BYTES, MAX_TOTAL_BYTES - total))
+            except spdm_storage.SpdmStorageError as exc:
+                # Issue #55 (SCX drive): a file whose name this Windows server cannot hold is one
+                # unprocessed item of the Case (path + reason), never a failed capture / request sync.
+                if exc.code != "SPDM_INVALID_PATH" or issues is None or not drive_reads.active():
+                    raise
+                _logger.warning("Capture skipped a drive file whose name cannot be stored on this server: %s",
+                                _safe_issue_relative(item))
+                issues.append(_unprocessed_issue(root, fs.path(item), "NAME_NOT_LOCAL_SAFE"))
+                continue
             fs.assert_safe(item)
             signature = signature_of(item)
             signatures.append((item, *signature))
