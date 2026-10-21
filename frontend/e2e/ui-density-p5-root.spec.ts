@@ -9,7 +9,7 @@ const routeHeadings: Record<string, string> = {
   project_result_profiles: '프로젝트 결과 구성', schemas: '폴더 연결·규칙', variables: '변수 카탈로그',
   templates: '모델링 템플릿', access_admin: '사용자·프로젝트 권한', menu_policy_admin: '권한 및 좌측 메뉴 정책',
   audit_admin: '감사로그', examples: '기능 예제 갤러리', help: 'VD simulation workbench 사용 도움말', voc: 'VOC 게시판',
-  notifications: '알림',
+  notifications: '알림', releases: '버전 게시판',
 }
 
 async function setFont(page: Page, _from: number, to: number) {

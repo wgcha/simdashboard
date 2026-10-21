@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Analysis Canvas API",
-    "version": "0.1.0"
+    "version": "0.3.0"
   },
   "paths": {
     "/api/auth/status": {
@@ -8567,6 +8567,25 @@
         }
       }
     },
+    "/api/releases": {
+      "get": {
+        "summary": "Get Releases",
+        "description": "버전 게시판: 실행 중 서버 버전·빌드 정보와 ``RELEASES.md`` 목록(읽기 전용, 로그인한 모든 계정).",
+        "operationId": "get_releases_api_releases_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleasesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/import-schemas": {
       "get": {
         "summary": "List Import Schemas",
@@ -15833,6 +15852,50 @@
         ],
         "title": "BindingSave"
       },
+      "BuildInfo": {
+        "properties": {
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "built_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Built At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "bundle",
+                  "git"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "title": "BuildInfo",
+        "description": "Commit and date of the running build (empty without a stamp and without Git)."
+      },
       "BundleActivation": {
         "properties": {
           "recipe_id": {
@@ -22448,6 +22511,57 @@
         ],
         "title": "RegistrationResponse"
       },
+      "ReleaseEntry": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "date",
+          "notes"
+        ],
+        "title": "ReleaseEntry"
+      },
+      "ReleasesResponse": {
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/VersionInfo"
+          },
+          "build": {
+            "$ref": "#/components/schemas/BuildInfo"
+          },
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseEntry"
+            },
+            "type": "array",
+            "title": "Releases"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "build",
+          "releases"
+        ],
+        "title": "ReleasesResponse",
+        "description": "Top-bar version button and 버전 게시판 (``docs/features/version-board.md``)."
+      },
       "ReopenBody": {
         "properties": {
           "expected_revision": {
@@ -26604,6 +26718,30 @@
           "files"
         ],
         "title": "VersionCreate"
+      },
+      "VersionInfo": {
+        "properties": {
+          "current": {
+            "type": "string",
+            "title": "Current"
+          },
+          "released_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Released At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current"
+        ],
+        "title": "VersionInfo"
       },
       "VersionResponse": {
         "properties": {

@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { DriveStatusBanner } from '../../shared/components/DriveStatusBanner'
 import { NotificationBell } from '../../features/notifications/NotificationBell'
+import { VersionBadge } from '../../features/releases/VersionBadge'
 import { DriveReconnectButton } from '../../features/storage/DriveAdminPanel'
 
 type AppShellProps = {
@@ -44,6 +45,6 @@ type AppTopbarProps = {
 export function AppTopbar({ actions, breadcrumb }: AppTopbarProps) {
   return <header className="topbar">
     <div className="breadcrumb">{breadcrumb}</div>
-    <div className="top-actions"><NotificationBell />{actions}</div>
+    <div className="top-actions"><VersionBadge /><NotificationBell />{actions}</div>
   </header>
 }

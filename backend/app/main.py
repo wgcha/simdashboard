@@ -64,6 +64,8 @@ from .routers.semantic_impact import router as semantic_impact_router
 from .routers.semantic_vocabulary import router as semantic_vocabulary_router
 from .adapters.http.routers.physicsai_link import router as physicsai_link_router
 from .adapters.http.routers.esl_link import router as esl_link_router
+from .adapters.http.routers.releases import router as releases_router
+from .version import __version__
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
@@ -127,7 +129,7 @@ async def lifespan(_: FastAPI):
         drive_gateway.shutdown()
 
 
-app = FastAPI(title="Analysis Canvas API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Analysis Canvas API", version=__version__, lifespan=lifespan)
 app.add_middleware(SecurityMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -176,6 +178,7 @@ app.include_router(feature_examples_router)
 app.include_router(projects_router)
 app.include_router(physicsai_link_router)
 app.include_router(esl_link_router)
+app.include_router(releases_router)
 app.include_router(import_schemas_router)
 app.include_router(portfolio_router)
 

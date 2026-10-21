@@ -67,6 +67,7 @@ if ($InnoSetupCompiler -and (Test-Path -LiteralPath (Join-Path (Split-Path -Pare
 
 $frontendDist = Join-Path $SourceRoot 'frontend\dist'
 Require-File (Join-Path $SourceRoot 'backend\requirements.lock') 'backend requirements.lock'
+Require-File (Join-Path $SourceRoot 'RELEASES.md') 'RELEASES.md (version board)'
 if (-not $SkipFrontendBuild) {
     Import-Module (Join-Path $SourceRoot 'scripts\windows\Runtime.psm1') -Force
     $null = Set-ProjectNodePath
@@ -145,6 +146,12 @@ try {
     foreach ($fileName in @('alembic.ini', 'requirements.txt', 'requirements.lock')) { Copy-Item -LiteralPath (Join-Path $SourceRoot "backend\$fileName") -Destination $releaseBackend -Force }
     Copy-Tree $frontendDist (Join-Path $bundle "release\$ReleaseId\frontend\dist")
     Copy-Item -LiteralPath (Join-Path $SourceRoot '.python-version') -Destination (Join-Path $bundle "release\$ReleaseId")
+    # Version board (docs/features/version-board.md): RELEASES.md and a build stamp sit beside backend\ so the
+    # installed app (backend\app\services\releases.py reads <release dir>\RELEASES.md and build-info.json) shows
+    # the version, commit and build date without Git on the target.  Both are listed in bundle-manifest.json below.
+    Copy-Item -LiteralPath (Join-Path $SourceRoot 'RELEASES.md') -Destination (Join-Path $bundle "release\$ReleaseId")
+    $buildStamp = [ordered]@{ commit = $sourceRevision; built_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); dirty = [bool]$dirty }
+    $buildStamp | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle "release\$ReleaseId\build-info.json") -Encoding UTF8
     Get-ChildItem -LiteralPath (Join-Path $bundle "release\$ReleaseId") -Recurse -File |
         Where-Object { $_.Extension -in @('.pyc', '.log') -or $_.Name -eq '.env' -or $_.Name -eq '.postgres-owner.env' -or $_.Name -like '*.db' } |
         Remove-Item -Force

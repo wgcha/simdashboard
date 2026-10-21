@@ -3174,6 +3174,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Releases
+         * @description 버전 게시판: 실행 중 서버 버전·빌드 정보와 ``RELEASES.md`` 목록(읽기 전용, 로그인한 모든 계정).
+         */
+        get: operations["get_releases_api_releases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/import-schemas": {
         parameters: {
             query?: never;
@@ -5237,6 +5257,18 @@ export interface components {
             recipe_ids?: string[];
             /** Template Id */
             template_id?: string | null;
+        };
+        /**
+         * BuildInfo
+         * @description Commit and date of the running build (empty without a stamp and without Git).
+         */
+        BuildInfo: {
+            /** Commit */
+            commit?: string | null;
+            /** Built At */
+            built_at?: string | null;
+            /** Source */
+            source?: ("bundle" | "git") | null;
         };
         /** BundleActivation */
         BundleActivation: {
@@ -7537,6 +7569,25 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** ReleaseEntry */
+        ReleaseEntry: {
+            /** Version */
+            version: string;
+            /** Date */
+            date: string;
+            /** Notes */
+            notes: string[];
+        };
+        /**
+         * ReleasesResponse
+         * @description Top-bar version button and 버전 게시판 (``docs/features/version-board.md``).
+         */
+        ReleasesResponse: {
+            version: components["schemas"]["VersionInfo"];
+            build: components["schemas"]["BuildInfo"];
+            /** Releases */
+            releases: components["schemas"]["ReleaseEntry"][];
+        };
         /** ReopenBody */
         ReopenBody: {
             /** Expected Revision */
@@ -8843,6 +8894,13 @@ export interface components {
             mode: "merge" | "replace";
             /** Files */
             files: components["schemas"]["FilePayload"][];
+        };
+        /** VersionInfo */
+        VersionInfo: {
+            /** Current */
+            current: string;
+            /** Released At */
+            released_at?: string | null;
         };
         /** VersionResponse */
         VersionResponse: {
@@ -15231,6 +15289,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EslLinkResponse"];
+                };
+            };
+        };
+    };
+    get_releases_api_releases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleasesResponse"];
                 };
             };
         };

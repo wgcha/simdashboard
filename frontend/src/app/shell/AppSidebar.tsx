@@ -20,6 +20,7 @@ import {
   ScrollText,
   Settings2,
   ShieldCheck,
+  Tag,
   Users,
   MessageSquare,
   BrainCircuit,
@@ -51,6 +52,7 @@ const MENU_ICONS = {
   menu_policy_admin: ShieldCheck,
   audit_admin: ScrollText,
   notifications: Bell,
+  releases: Tag,
 } satisfies Record<string, ComponentType>
 
 export type AppSidebarMenuId = keyof typeof MENU_ICONS
@@ -87,6 +89,7 @@ const MENU_GROUP_BY_ID: Record<AppSidebarMenuId, MenuGroupId> = {
   menu_policy_admin: 'administration',
   audit_admin: 'administration',
   notifications: 'overview',
+  releases: 'support',
   examples: 'support',
   help: 'support',
   voc: 'support',
@@ -110,6 +113,8 @@ export const SIDEBAR_HIDDEN_MENUS: ReadonlySet<AppSidebarMenuId> = new Set<AppSi
   'workbench_admin',
   // Opened from the top bar bell (2026-10-08), never a sidebar entry.
   'notifications',
+  // Opened from the top bar version button (2026-10-21), never a sidebar entry.
+  'releases',
   // 해석 작업 실행 is a demo page not used in the current scenario (user decision 2026-10-14).
   'workbench',
 ])

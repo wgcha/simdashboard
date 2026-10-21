@@ -40,6 +40,7 @@ import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspace
 import { NoAvailableWorkspaceMenu } from './features/bootstrap/NoAvailableWorkspaceMenu'
 import { VocRoute } from './app/workspace/VocRoute'
 import { NotificationsRoute } from './app/workspace/NotificationsRoute'
+import { ReleasesRoute } from './app/workspace/ReleasesRoute'
 import { ChangePasswordDialog } from './features/auth/ChangePasswordDialog'
 import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
 import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstrap'
@@ -874,6 +875,7 @@ function App() {
     return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />
   }
   if (workspacePage === 'notifications' && menuPolicyReady && authUser?.account_status === 'ACTIVE') return <NotificationsRoute authMode={authMode} user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
+  if (workspacePage === 'releases' && menuPolicyReady && authUser?.account_status === 'ACTIVE') return <ReleasesRoute authMode={authMode} user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
   if (workspacePage === 'voc' && menuPolicyReady && authUser?.account_status === 'ACTIVE' && allowedPages.has('voc')) {
     return <VocRoute authMode={authMode} user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
   }

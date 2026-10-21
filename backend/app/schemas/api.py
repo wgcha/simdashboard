@@ -247,6 +247,33 @@ class EslLinkResponse(BaseModel):
     base_path: str
 
 
+class BuildInfo(BaseModel):
+    """Commit and date of the running build (empty without a stamp and without Git)."""
+
+    commit: str | None = None
+    built_at: str | None = None
+    source: Literal["bundle", "git"] | None = None
+
+
+class VersionInfo(BaseModel):
+    current: str
+    released_at: str | None = None
+
+
+class ReleaseEntry(BaseModel):
+    version: str
+    date: str
+    notes: list[str]
+
+
+class ReleasesResponse(BaseModel):
+    """Top-bar version button and 버전 게시판 (``docs/features/version-board.md``)."""
+
+    version: VersionInfo
+    build: BuildInfo
+    releases: list[ReleaseEntry]
+
+
 class SelectionMetadataResponse(BaseModel):
     code: str | None = None
     name: str

@@ -30,6 +30,12 @@ export async function openWorkspaceRoute(page: Page, pathname: string) {
     await expect(page).toHaveURL(/\/workspace\/notifications(\?|$)/)
     return
   }
+  if (pathname === '/workspace/releases') {
+    // Not a sidebar menu: the top bar version button (2026-10-21).
+    await page.getByTestId('version-badge').first().click()
+    await expect(page).toHaveURL(/\/workspace\/releases(\?|$)/)
+    return
+  }
   const link = sidebar.locator(`a[href="${pathname}"], a[href^="${pathname}?"]`)
   if (pathname === '/workspace/overview' || pathname === '/workspace/requests') {
     await expect(link).toHaveCount(1)

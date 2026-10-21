@@ -9,6 +9,7 @@ import { timeoutGuard } from '../src/shared/api/requestTimeout.ts'
 import { normalizePhysicsAiLink, physicsAiNavHref, PHYSICSAI_LINK_OFF } from '../src/shared/api/physicsaiLinkModel.ts'
 import { eslNavHref, ESL_LINK_OFF, normalizeEslLink } from '../src/shared/api/eslLinkModel.ts'
 import { elapsedText, rescanProgressDetail } from '../src/shared/api/storageRescanModel.ts'
+import { buildLine, deploymentKey, newVersionDeployed, normalizeReleases, versionLabel } from '../src/shared/api/releasesModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
 const validationMessage = apiErrorMessage(validation, '요청 실패 (422)')
@@ -245,5 +246,34 @@ assert(rescanProgressDetail({ status: 'RUNNING', phase: 'DISCOVER', progress: { 
 assert(rescanProgressDetail({ ...stuck, cancel_requested: true }).includes('중지 요청됨'), 'cancel requested is shown')
 assert(rescanProgressDetail({ status: 'DONE' }) === '' && rescanProgressDetail(null) === '', 'no detail when not running')
 assert(elapsedText(59) === '59초' && elapsedText(0) === '', 'elapsed text')
+
+// Version button and 버전 게시판 (docs/features/version-board.md).
+const releasesPayload = {
+  version: { current: '0.3.0', released_at: '2026-10-21' },
+  build: { commit: '0c09b07abcde', built_at: '2026-10-21T00:43:38Z', source: 'bundle' },
+  releases: [{ version: '0.3.0', date: '2026-10-21', notes: ['a', 'b'] }, { version: '0.2.0', date: '2026-10-06', notes: [] }, { version: '', date: 'x', notes: [] }, null],
+}
+const releasesInfo = normalizeReleases(releasesPayload)
+assert(releasesInfo && releasesInfo.current === '0.3.0' && releasesInfo.releasedAt === '2026-10-21', 'releases: current version')
+assert(releasesInfo.releases.length === 2 && releasesInfo.releases[0].notes.join() === 'a,b', 'releases: keeps order, drops entries without a version')
+assert(releasesInfo.build.commit === '0c09b07abcde' && releasesInfo.build.source === 'bundle', 'releases: build info')
+assert(normalizeReleases(null) === null && normalizeReleases({}) === null && normalizeReleases({ version: { current: ' ' } }) === null, 'releases: no current version means no data')
+const sparse = normalizeReleases({ version: { current: '1.0.0' } })
+assert(sparse && sparse.releases.length === 0 && sparse.build.commit === null && sparse.build.source === null && sparse.releasedAt === null, 'releases: sparse payload')
+assert(normalizeReleases({ version: { current: '1.0.0' }, build: { source: 'weird' } }).build.source === null, 'releases: unknown build source ignored')
+assert(versionLabel('0.3.0') === 'v0.3.0' && versionLabel('v0.3.0') === 'v0.3.0', 'releases: v label')
+assert(buildLine({ commit: null, builtAt: null, source: null }) === '', 'releases: nothing known, no build line')
+assert(buildLine(releasesInfo.build) === '빌드 2026-10-21 · 0c09b07abcde', 'releases: bundle build line')
+assert(buildLine({ commit: 'abc', builtAt: '2026-10-21T00:43:38Z', source: 'git' }, () => '2026. 10. 21.') === '커밋 날짜 2026. 10. 21. · abc', 'releases: a source checkout labels the date as the commit date')
+assert(buildLine({ commit: 'abc', builtAt: null, source: 'git' }) === 'abc', 'releases: commit only')
+// "새 버전이 배포되었습니다" notice: the deployment this page was loaded with against what the server runs now.
+const loadedKey = deploymentKey(releasesInfo)
+assert(loadedKey === '0.3.0+0c09b07abcde', 'releases: deployment key = version + commit')
+assert(deploymentKey({ current: '0.3.0', build: { commit: null, builtAt: null, source: null } }) === '0.3.0', 'releases: key without commit')
+assert(!newVersionDeployed(null, releasesInfo) && !newVersionDeployed(loadedKey, null), 'releases: no notice before the first read')
+assert(!newVersionDeployed(loadedKey, releasesInfo), 'releases: same deployment, no notice')
+assert(newVersionDeployed(loadedKey, { ...releasesInfo, current: '0.3.1' }), 'releases: a new version shows the notice')
+assert(newVersionDeployed(loadedKey, { ...releasesInfo, build: { ...releasesInfo.build, commit: 'ffffffffffff' } }), 'releases: same version, new commit shows the notice')
+assert(newVersionDeployed('0.3.0', releasesInfo), 'releases: a server that now reports its commit is a new deployment')
 
 console.log('Shared API self-test passed.')

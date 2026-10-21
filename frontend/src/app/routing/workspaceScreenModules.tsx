@@ -11,6 +11,7 @@ export const HelpCenter = preloadableScreen(() => import('../../features/help/He
 export const VocBoard = preloadableScreen(() => import('../../features/voc/VocBoard').then((m) => ({ default: m.VocBoard })))
 export const LocalPcSettingsPage = preloadableScreen(() => import('../../features/local-pc/LocalPcSettingsPage').then((m) => ({ default: m.LocalPcSettingsPage })))
 export const NotificationsPage = preloadableScreen(() => import('../../features/notifications/NotificationsPage').then((m) => ({ default: m.NotificationsPage })))
+export const ReleaseBoard = preloadableScreen(() => import('../../features/releases/ReleaseBoard').then((m) => ({ default: m.ReleaseBoard })))
 export const WorkflowView = preloadableScreen(() => import('../../features/requests/WorkflowView').then((m) => ({ default: m.WorkflowView })))
 export const ResultsWorkspace = preloadableScreen(() => import('../../features/results/ResultsWorkspace').then((m) => ({ default: m.ResultsWorkspace })))
 export const RequestCaseResultsWorkspace = preloadableScreen(() => import('../../features/results/RequestCaseResultsWorkspace').then((m) => ({ default: m.RequestCaseResultsWorkspace })))
@@ -28,7 +29,7 @@ const modulesByPage: Partial<Record<WorkspacePage, { preload: () => Promise<unkn
   dashboard: [WorkflowView, PendingAnalysisWorkspace, ResultsWorkspace, RequestCaseResultsWorkspace],
   data: [DataWorkspace], materials: [MaterialsDashboard], workbench: [SimulationWorkbench],
   schemas: [FolderSchemaWorkspace], variables: [VariableCatalogPage], templates: [AutomationTemplatesPage],
-  examples: [FeatureExampleGallery], help: [HelpCenter], voc: [VocBoard], notifications: [NotificationsPage],
+  examples: [FeatureExampleGallery], help: [HelpCenter], voc: [VocBoard], notifications: [NotificationsPage], releases: [ReleaseBoard],
   access_admin: [AccessAdminPage], menu_policy_admin: [MenuPolicyAdminPage], audit_admin: [AuditAdminPage],
   workbench_admin: [WorkbenchTypeAdmin], project_result_profiles: [ProjectResultProfileBinding],
 }

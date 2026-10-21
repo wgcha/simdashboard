@@ -1,0 +1,38 @@
+/* Version button (top bar) and 버전 게시판 /workspace/releases (desktop). */
+.version-badge { display: flex; align-items: center; gap: var(--space-2); }
+.top-actions .version-badge__button,
+.version-badge__button { height: 36px; padding: 0 12px; justify-content: center; border: 1px solid var(--color-border-strong); border-radius: 18px; color: var(--color-text-muted); background: transparent; font: 600 var(--text-caption) var(--font-mono, monospace); cursor: pointer; }
+.version-badge__button:hover { color: var(--color-text-strong); border-color: var(--color-focus); }
+.version-badge__button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.version-badge__notice { display: inline-flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) 0 var(--space-3); min-height: 32px; border: 1px solid var(--color-focus); border-radius: var(--radius-md); color: var(--color-text-strong); background: var(--color-surface-selected); font-size: var(--text-caption); white-space: nowrap; }
+.top-actions .version-badge__notice button { height: 26px; padding: 0 var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text); background: var(--color-surface-raised); font-size: var(--text-caption); cursor: pointer; }
+.top-actions .version-badge__notice svg { width: 14px; height: 14px; }
+
+.release-board { width: 100%; padding: 28px var(--shell-pad-x, 32px) 40px; box-sizing: border-box; }
+.release-board__head { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; }
+.release-board__eyebrow { display: inline-flex; align-items: center; gap: 6px; color: var(--color-accent); font-size: calc(var(--text-caption) * .85); font-weight: 800; letter-spacing: .12em; }
+.release-board__eyebrow svg { width: 14px; height: 14px; }
+.release-board__head h1 { margin: 8px 0 4px; font-size: var(--text-title); }
+.release-board__head p { margin: 0; color: var(--color-text-muted); font-size: var(--text-caption); }
+.release-board__current { display: grid; gap: 4px; margin: 0; text-align: right; }
+.release-board__current div { display: flex; justify-content: flex-end; gap: 8px; }
+.release-board__current dt { color: var(--color-text-muted); font-size: var(--text-caption); }
+.release-board__current dd { margin: 0; color: var(--color-text-strong); font: 600 var(--text-caption) var(--font-mono, monospace); }
+.release-board__notice,
+.release-board__error,
+.release-board__empty { display: flex; align-items: center; gap: var(--space-3); margin: 18px 0 0; padding: 12px 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text-muted); font-size: var(--text-caption); }
+.release-board__notice { border-color: var(--color-focus); color: var(--color-text-strong); background: var(--color-surface-selected); }
+.release-board__notice button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control-h-sm); padding: 0 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text); background: var(--color-surface-1); font: inherit; cursor: pointer; }
+.release-board__notice button svg { width: 14px; height: 14px; }
+.release-board__error { border-color: var(--color-danger-border); color: var(--color-danger); background: var(--color-danger-surface); }
+.release-board__empty { justify-content: center; border-style: dashed; padding: 32px; }
+.release-board__list { display: grid; gap: 14px; margin: 22px 0 0; padding: 0; list-style: none; }
+.release-board__item { padding: 16px 20px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-1); }
+.release-board__item.is-current { border-color: var(--color-focus); }
+.release-board__item > header { display: flex; align-items: baseline; gap: 12px; }
+.release-board__item h2 { margin: 0; color: var(--color-text-strong); font: 700 var(--text-subtitle, var(--text-body)) var(--font-mono, monospace); }
+.release-board__item time { color: var(--color-text-muted); font-size: var(--text-caption); }
+.release-board__tag { padding: 1px 8px; border-radius: 10px; color: var(--color-text-on-accent); background: var(--color-accent); font-size: calc(var(--text-caption) * .9); font-weight: 700; }
+.release-board__item ul { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px; color: var(--color-text); font-size: var(--text-body); line-height: 1.5; }
+.release-board__empty-notes { margin: 10px 0 0; color: var(--color-text-muted); font-size: var(--text-caption); }
+.release-board button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }

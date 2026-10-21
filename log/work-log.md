@@ -2,6 +2,18 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-21 — 상단 버전 버튼과 버전 게시판(0.3.0), 대시보드 자체 버전 기록
+
+- 요청(사용자 2026-10-21): PhysicsAI 플랫폼의 버전 버튼·버전 게시판을 이 대시보드로 옮겨 스스로 버전 기록을 관리. 기준 구현(`physicsai-platform` `origin/feat/native-geom-r1`)은 이 작업 환경에서 읽을 수 없어(공유 체크아웃 git 접근 차단, GitHub 권한 없음) 요청서의 설명대로 이 앱의 관례에 맞춰 새로 구현했다. 화면 문구·새 버전 알림 판정 방식은 기준 구현과 다를 수 있다.
+- 버전 기준 값은 `backend/app/version.py` `__version__`(0.3.0) 한 곳. `frontend/package.json`(0.1.0→0.3.0)과 `RELEASES.md` 맨 위 항목이 같아야 하고, 아니면 `tests/test_releases.py`가 실패한다. FastAPI 앱 버전도 이 값(`openapi.json` `info.version` 갱신).
+- `RELEASES.md`(루트): 규칙 머리말, 0.3.0(2026-10-21), 0.2.0(2026-10-06, PR #46·#47 main 합류일), 0.1.0(2026-09-15, PR #22). 0.1.0·0.2.0은 Git 기록으로 나중에 정리한 항목.
+- 빌드 정보: 소스 배포는 서버가 `git log -1`로 커밋·커밋 날짜를 한 번 읽음(없으면 비움). 폐쇄망 번들은 `build-offline-bundle.ps1`이 `release/<id>/RELEASES.md`와 `build-info.json`(커밋·UTC 빌드 시각·dirty)을 넣고 `bundle-manifest.json` 해시 목록에 포함. GitHub 워크플로 변경 없음.
+- API `GET /api/releases`(로그인한 모든 계정, 읽기 전용): `ReleasesResponse`(`version`, `build`, `releases`). 라우터 `adapters/http/routers/releases.py`, 서비스 `services/releases.py`.
+- 화면: `features/releases/`(`VersionBadge` 상단 바 `v0.3.0` 버튼, `ReleaseBoard` `/workspace/releases`, 60초·포커스 폴링과 모듈 상태 `releasesStore.ts`). 로드 시점과 다른 배포(버전+커밋)가 되면 "새 버전이 배포되었습니다 — 새로고침". 라우트는 알림처럼 사이드바·메뉴 정책 밖(`MENU_POLICY_FREE_PAGES`).
+- 문서: `docs/features/version-board.md`(문서 지도 연결).
+- 검증: `tests/test_releases.py` 9건·`test_openapi_contract_check`·`test_esl_link_contract` 통과, `check_openapi_contract.py` OK, `tsc -b --noEmit`·`npm run test:api`·`test:routing`·`test:css-architecture`·`node scripts/css-architecture.mjs` 통과. e2e(`workspace-test-helpers.ts`·`ui-density-p5-root.spec.ts`에 새 경로 반영)와 PowerShell 번들 빌드는 실행하지 못함. `test_architecture_check.py::test_checked_in_architecture_baseline_passes`와 `npm run check:architecture`는 이 변경 이전부터 실패(백엔드 `auth_accounts.py`·`dashboard.py` execute 수, 프런트 `App.tsx` 줄 수 1085>1077 등); 이번에 `App.tsx`가 2줄 늘었다.
+- 남은 확인: Rocky 8 패키지는 `RELEASES.md`·`build-info.json`을 싣지 않아 그쪽 게시판은 빈 목록. 버전을 올릴 때 `frontend/openapi.json`을 다시 만들 것.
+
 ## 2026-10-21 — 저장 폴더 새로고침이 DISCOVER에서 14분+ 멈춤·드라이브 파일 이름으로 의뢰 확인 전체 실패 (이슈 #55)
 
 - 실서버 증상(SCX 드라이브, 729c806): `GET …/rescan`이 14분 뒤에도 `RUNNING, phase DISCOVER, rounds 0, progress 0/0`; 같은 시각 `SCX drive read list_dir failed: rel=PROJ-000002_testProject/CAD code=DRIVE_BUSY message=queue wait timeout`. 별도로 `Folder sync FAILED … code=SPDM_INVALID_PATH "이 서버에서 쓸 수 없는 이름입니다(Windows 금지 문자·대소문자 중복)"`.

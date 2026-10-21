@@ -28,6 +28,7 @@ const expectedPaths = {
   help: '/workspace/help',
   voc: '/workspace/voc',
   notifications: '/workspace/notifications',
+  releases: '/workspace/releases',
 }
 
 const paths = new Set()
