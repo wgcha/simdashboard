@@ -6368,6 +6368,26 @@
         }
       }
     },
+    "/api/folder-discovery/environments/rescan/cancel": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Rescan Cancel",
+        "description": "[중지]: stop the running full rescan at its next check point (global administrators only, issue #55).\n\nThe run ends ``CANCELLED`` and keeps what it found so far. ``requested`` is false when no rescan runs.",
+        "operationId": "rescan_cancel_api_folder_discovery_environments_rescan_cancel_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/exclusions": {
       "post": {
         "tags": [

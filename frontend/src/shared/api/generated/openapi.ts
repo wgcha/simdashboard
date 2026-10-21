@@ -2183,6 +2183,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/rescan/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rescan Cancel
+         * @description [중지]: stop the running full rescan at its next check point (global administrators only, issue #55).
+         *
+         *     The run ends ``CANCELLED`` and keeps what it found so far. ``requested`` is false when no rescan runs.
+         */
+        post: operations["rescan_cancel_api_folder_discovery_environments_rescan_cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/exclusions": {
         parameters: {
             query?: never;
@@ -13489,6 +13511,26 @@ export interface operations {
         };
     };
     rescan_start_api_folder_discovery_environments_rescan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    rescan_cancel_api_folder_discovery_environments_rescan_cancel_post: {
         parameters: {
             query?: never;
             header?: never;
