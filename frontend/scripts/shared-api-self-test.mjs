@@ -9,7 +9,7 @@ import { timeoutGuard } from '../src/shared/api/requestTimeout.ts'
 import { normalizePhysicsAiLink, physicsAiNavHref, PHYSICSAI_LINK_OFF } from '../src/shared/api/physicsaiLinkModel.ts'
 import { eslNavHref, ESL_LINK_OFF, normalizeEslLink } from '../src/shared/api/eslLinkModel.ts'
 import { elapsedText, rescanProgressDetail } from '../src/shared/api/storageRescanModel.ts'
-import { buildLine, deploymentKey, newVersionDeployed, normalizeReleases, versionLabel } from '../src/shared/api/releasesModel.ts'
+import { buildLine, compareVersion, deploymentKey, isNewVersion, newVersionDeployed, normalizeReleases, versionLabel } from '../src/shared/api/releasesModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
 const validationMessage = apiErrorMessage(validation, '요청 실패 (422)')
@@ -274,6 +274,8 @@ assert(!newVersionDeployed(null, releasesInfo) && !newVersionDeployed(loadedKey,
 assert(!newVersionDeployed(loadedKey, releasesInfo), 'releases: same deployment, no notice')
 assert(newVersionDeployed(loadedKey, { ...releasesInfo, current: '0.3.1' }), 'releases: a new version shows the notice')
 assert(newVersionDeployed(loadedKey, { ...releasesInfo, build: { ...releasesInfo.build, commit: 'ffffffffffff' } }), 'releases: same version, new commit shows the notice')
+assert(compareVersion('0.10.0', '0.9.9') > 0 && compareVersion('v0.3.0', '0.3.0') === 0, 'releases: numeric version comparison')
+assert(isNewVersion('0.3.0', null) && isNewVersion('0.3.1', '0.3.0') && !isNewVersion('0.3.0', '0.3.0'), 'releases: new-version dot rule')
 assert(newVersionDeployed('0.3.0', releasesInfo), 'releases: a server that now reports its commit is a new deployment')
 
 console.log('Shared API self-test passed.')

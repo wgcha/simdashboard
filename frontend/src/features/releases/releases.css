@@ -36,3 +36,6 @@
 .release-board__item ul { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px; color: var(--color-text); font-size: var(--text-body); line-height: 1.5; }
 .release-board__empty-notes { margin: 10px 0 0; color: var(--color-text-muted); font-size: var(--text-caption); }
 .release-board button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.version-badge__button { position: relative; }
+.version-badge__new { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--color-danger, #d93025); }
+.release-board__tag.is-new { color: var(--color-danger, #d93025); border-color: currentColor; }

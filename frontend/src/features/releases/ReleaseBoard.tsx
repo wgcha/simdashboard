@@ -1,7 +1,8 @@
 import { RefreshCw, Tag } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
-import { buildLine, releaseDateText, versionLabel } from '../../shared/api/releasesModel'
+import { buildLine, isNewVersion, releaseDateText, versionLabel } from '../../shared/api/releasesModel'
+import { readLastSeen, writeLastSeen } from './lastSeen'
 import { formatServerDate } from '../../shared/api/serverTime'
 import { refreshReleases, useReleasesSnapshot } from './releasesStore'
 import './releases.css'
@@ -9,7 +10,11 @@ import './releases.css'
 /** ``/workspace/releases``: running version, build info and every RELEASES.md entry, newest first (read-only). */
 export function ReleaseBoard() {
   const { info, stale, unavailable } = useReleasesSnapshot()
+  // "새 버전" tags use the value seen before this visit; opening the board marks the newest as seen.
+  const [lastSeen] = useState<string | null>(() => readLastSeen())
   useEffect(() => { void refreshReleases() }, [])
+  const newest = info?.releases[0]?.version ?? info?.current
+  useEffect(() => { if (newest) writeLastSeen(newest) }, [newest])
   const build = info ? buildLine(info.build, formatServerDate) : ''
 
   return <section className="release-board" aria-labelledby="release-board-title" data-testid="release-board">
@@ -32,11 +37,13 @@ export function ReleaseBoard() {
     {!info && !unavailable && <p className="release-board__empty">불러오는 중입니다.</p>}
     {info && info.releases.length === 0 && <p className="release-board__empty">등록된 릴리스 기록이 없습니다.</p>}
     {info && info.releases.length > 0 && <ol className="release-board__list" aria-label="릴리스 목록">
-      {info.releases.map((release) => <li key={release.version} className={`release-board__item${release.version === info.current ? ' is-current' : ''}`} data-testid="release-entry">
+      {info.releases.map((release, index) => <li key={release.version} className={`release-board__item${release.version === info.current ? ' is-current' : ''}`} data-testid="release-entry">
         <header>
           <h2>{versionLabel(release.version)}</h2>
           <time dateTime={release.date}>{releaseDateText(release.date)}</time>
+          {index === 0 && <span className="release-board__tag">최신</span>}
           {release.version === info.current && <span className="release-board__tag">현재 버전</span>}
+          {(lastSeen === null ? index === 0 : isNewVersion(release.version, lastSeen)) && <span className="release-board__tag is-new">새 버전</span>}
         </header>
         {release.notes.length > 0 ? <ul>{release.notes.map((note, index) => <li key={index}>{note}</li>)}</ul> : <p className="release-board__empty-notes">기록된 주요 기능이 없습니다.</p>}
       </li>)}

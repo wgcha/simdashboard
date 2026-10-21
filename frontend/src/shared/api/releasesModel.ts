@@ -69,3 +69,19 @@ export function buildLine(build: BuildInfo, formatDate: (iso: string) => string 
 export function releaseDateText(date: string): string {
   return date || '날짜 미상'
 }
+
+/** x.y.z comparison (as in PhysicsAI): positive when a > b; non-numeric parts count as 0. */
+export function compareVersion(a: string, b: string): number {
+  const pa = a.replace(/^v/, '').split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const pb = b.replace(/^v/, '').split('.').map((part) => Number.parseInt(part, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff) return diff
+  }
+  return 0
+}
+
+/** Newer than the version this browser last saw on the board (nothing seen yet = new). */
+export function isNewVersion(version: string, lastSeen: string | null): boolean {
+  return lastSeen === null || compareVersion(version, lastSeen) > 0
+}
