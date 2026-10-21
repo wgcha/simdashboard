@@ -112,6 +112,11 @@ Rocky OS RPM, 조직 CA와 DNF 저장소까지 번들에 포함하는 것은 아
 수정된 상태에서는 기본적으로 생성을 거부한다. 검증 목적의 로컬 변경을 일부러
 포함할 때만 `--allow-dirty`를 사용한다.
 
+번들의 `payload/`에는 버전 게시판용 `RELEASES.md`와 `build-info.json`(`commit`, UTC `built_at`,
+`dirty`; Windows 오프라인 번들과 같은 형식)이 들어가며, `install.sh`가 릴리스 루트
+(`<INSTALL_ROOT>/releases/<id>/`, `backend/`와 같은 층)에 복사한다. 상단 버전 버튼·버전 게시판이 이 둘을
+읽는다(`docs/features/version-board.md`). 폐쇄망 번들(`install-offline.sh`)은 둘이 없으면 설치를 거부한다.
+
 ## 수동 2. 대상 서버 설정 파일 준비
 
 번들을 대상 Rocky 서버로 복사하고 압축을 푼 뒤 설정 예제를 별도 root 전용

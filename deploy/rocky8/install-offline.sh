@@ -73,7 +73,7 @@ source /etc/os-release
 [[ "$(uname -m)" == x86_64 ]] || die "This offline bundle targets x86_64; detected $(uname -m)."
 
 for required_path in install.sh payload/backend/app payload/backend/migrations \
-  payload/backend/requirements.lock payload/.python-version wheelhouse \
+  payload/backend/requirements.lock payload/.python-version payload/RELEASES.md payload/build-info.json wheelhouse \
   runtime/python.tar.gz rpm-repo/repodata rpm-repo/RPM-GPG-KEY-Rocky-8 \
   SHA256SUMS RELEASE_ID; do
   [[ -e "${script_root}/${required_path}" ]] || die "Offline bundle is incomplete: ${required_path}"

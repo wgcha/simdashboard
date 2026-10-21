@@ -1,0 +1,41 @@
+name: Version bump
+
+# Every deployment changes the version (docs/features/version-board.md): a push to a deployed branch or a
+# pull request into main that changes anything other than docs/logs/tests/workflows must raise
+# backend/app/version.py __version__.  Pure Python/git: no dependencies, runs in seconds, separate from CI
+# so it also covers claude/scx-drive, which ci.yml does not build.
+on:
+  push:
+    branches: [claude/scx-drive, main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version-bump:
+    name: Version bumped for deployable changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check the version changed
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            base="${PR_BASE_SHA}"
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            base="${PUSH_BEFORE_SHA}"
+          else
+            base="$(git rev-parse HEAD~1 2>/dev/null || true)"
+          fi
+          if [[ -z "${base}" ]]; then echo "No base commit; nothing to compare."; exit 0; fi
+          python3 backend/scripts/check_version_bump.py --base "${base}" --head HEAD

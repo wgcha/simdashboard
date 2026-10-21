@@ -36,21 +36,22 @@ export function normalizeReleases(value: unknown): ReleasesInfo | null {
   }
 }
 
-/** `0.3.0` -> `v0.3.0`. */
+/** `0.3.0` -> `v0.3.0`; `0.3.0.1` -> `v0.3.0.1`. */
 export function versionLabel(version: string): string {
   return version.startsWith('v') ? version : `v${version}`
 }
 
 /**
- * What identifies one deployment: the version plus the commit when the server knows it, so a redeploy of
- * the same version number with new code (the browser still holds the old page) is noticed too.
+ * What identifies one deployment: the version alone.  Every deployment changes the version number
+ * (`x.y.z`, or `x.y.z.n` for a small deployment), so the commit and build date are display info only and
+ * a redeploy of the same version is, by the release rule, not a new deployment.
  */
-export function deploymentKey(info: Pick<ReleasesInfo, 'current' | 'build'>): string {
-  return info.build.commit ? `${info.current}+${info.build.commit}` : info.current
+export function deploymentKey(info: Pick<ReleasesInfo, 'current'>): string {
+  return info.current.trim().replace(/^v/, '')
 }
 
-/** True when the server now runs a different deployment than the one this page was loaded with. */
-export function newVersionDeployed(loadedKey: string | null, info: Pick<ReleasesInfo, 'current' | 'build'> | null): boolean {
+/** True when the server now runs a different version than the one this page was loaded with. */
+export function newVersionDeployed(loadedKey: string | null, info: Pick<ReleasesInfo, 'current'> | null): boolean {
   return loadedKey !== null && info !== null && deploymentKey(info) !== loadedKey
 }
 
@@ -70,7 +71,7 @@ export function releaseDateText(date: string): string {
   return date || '날짜 미상'
 }
 
-/** x.y.z comparison (as in PhysicsAI): positive when a > b; non-numeric parts count as 0. */
+/** x.y.z[.n] comparison (as in PhysicsAI): positive when a > b; a missing part counts as 0 (`0.3.0.1 > 0.3.0`), non-numeric as 0. */
 export function compareVersion(a: string, b: string): number {
   const pa = a.replace(/^v/, '').split('.').map((part) => Number.parseInt(part, 10) || 0)
   const pb = b.replace(/^v/, '').split('.').map((part) => Number.parseInt(part, 10) || 0)

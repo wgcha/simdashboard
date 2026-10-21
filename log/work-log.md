@@ -2,6 +2,17 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-21 — 배포마다 버전 변경(0.3.0.1): 네 자리 버전·버전 기준 새 버전 알림·올림 검사·Rocky 8 버전 기록
+
+- 사용자 결정(2026-10-21): 모든 배포는 버전 번호를 바꾼다. 묶을 수 있으면 릴리스(`x.y.z`)로, 잘게 나눠 올릴 때는 네 번째 자리(`x.y.z.n`)를 붙인다.
+- 버전 형식: `RELEASES.md` 제목 정규식과 `__version__`이 `x.y.z[.n]`(n≥1; `x.y.z.0`은 거부)을 받는다. `version_tuple`은 4튜플(`0.3.0` < `0.3.0.1`), 프런트 `compareVersion`은 이미 숫자 다중 자리라 그대로(시험 추가). `frontend/package.json`은 **앞 세 자리 `x.y.z`만**(npm semver는 네 자리 불가) — 작은 배포에서는 건드리지 않고, 일치 시험이 `package_version(__version__)`과 비교한다. 네 자리를 다른 곳에 따로 두는 대신 `__version__`이 유일한 전체 값이라 복사본이 늘지 않는다.
+- 새 버전 알림: `deploymentKey`가 버전만 쓴다(커밋 제외). 커밋·빌드 날짜는 표시용. 같은 버전 재배포는 알림 없음(규칙상 있을 수 없음).
+- 올림 검사: `backend/scripts/check_version_bump.py --base <커밋>`과 새 워크플로 `.github/workflows/version-bump.yml`(`claude/scx-drive`·`main` 푸시, `main` PR). 기준과 HEAD 사이에 문서·로그·시험·워크플로·`*.md` 밖의 파일이 바뀌었는데 `__version__`이 커지지 않았으면 실패. 기존 워크플로는 건드리지 않았다(`ci.yml`은 `claude/scx-drive`를 빌드하지 않아 별도 워크플로로 둠). 문서만 고친 푸시는 면제. 기준 커밋을 모르면 건너뜀. 일치 검사(`test_version_values_agree_with_top_release_entry`)는 그대로 필수.
+- 0.3.0.1로 올림(a2c77d5의 새 버전 점·태그 변경분): `version.py`, `RELEASES.md`(2026-10-21 항목과 새 규칙 머리말), `frontend/openapi.json`(`info.version`) 재생성.
+- Rocky 8: `deploy/rocky8/build-release.sh`가 `payload/RELEASES.md`·`payload/build-info.json`(Windows 번들과 같은 `commit`·`built_at`·`dirty`)을 넣고, `install.sh`가 릴리스 루트(`backend/`와 같은 층 — 백엔드 `release_root()`가 읽는 곳)에 복사한다. `install-offline.sh` 필수 목록·`verify-offline-bundle.sh` 모양 검사·`validate-templates.sh` 계약 문자열 추가. `deploy-from-source.sh`와 `ci-build-offline.sh`는 둘 다 `build-release.sh`를 거치므로 코드 변경 없음. 체크아웃에서 바로 `install.sh`를 쓰는 경우 `build-info.json`은 Git에서 만든다.
+- 문서: `docs/features/version-board.md` §1(올리는 방법·검사)·§3(Rocky 8)·§5(알림 기준).
+- 검증: 아래 최종 보고 참조(`tests/test_releases.py`, OpenAPI 계약 검사, `tsc -b --noEmit`, `npm run test:api`, `bash -n deploy/rocky8/*.sh`, `validate-templates.sh`, 번들 스탬프 조각을 임시 폴더에서 실행해 `read_build_info`로 읽음). 못 한 것: Rocky 8.6 컨테이너에서 실제 번들 빌드·`verify-offline-bundle.sh`, 새 워크플로의 GitHub 실행.
+
 ## 2026-10-21 — 상단 버전 버튼과 버전 게시판(0.3.0), 대시보드 자체 버전 기록
 
 - 요청(사용자 2026-10-21): PhysicsAI 플랫폼의 버전 버튼·버전 게시판을 이 대시보드로 옮겨 스스로 버전 기록을 관리. 기준 구현(`physicsai-platform` `origin/feat/native-geom-r1`)은 이 작업 환경에서 읽을 수 없어(공유 체크아웃 git 접근 차단, GitHub 권한 없음) 요청서의 설명대로 이 앱의 관례에 맞춰 새로 구현했다. 화면 문구·새 버전 알림 판정 방식은 기준 구현과 다를 수 있다.

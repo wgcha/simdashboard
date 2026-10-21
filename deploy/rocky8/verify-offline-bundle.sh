@@ -18,6 +18,10 @@ bundles=("${verify_root}"/*/)
 [[ "${#bundles[@]}" == 1 ]] || exit 1
 bundle="${bundles[0]%/}"
 (cd "$bundle" && sha256sum --check --quiet SHA256SUMS)
+# Version board: RELEASES.md and a build stamp in the Windows bundle's build-info.json format.
+[[ -s "${bundle}/payload/RELEASES.md" ]] && grep -Eq '^## [0-9]+\.[0-9]+\.[0-9]+' "${bundle}/payload/RELEASES.md" || exit 1
+grep -Eq '"commit": "[0-9a-f]{40}"' "${bundle}/payload/build-info.json" && \
+  grep -Eq '"built_at": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z"' "${bundle}/payload/build-info.json" || exit 1
 
 # This is a genuinely fresh OS instance: the builder's installed RPMs cannot
 # accidentally satisfy omitted dependencies. All network interfaces are disabled

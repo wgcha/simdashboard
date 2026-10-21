@@ -126,6 +126,20 @@ if [[ -d "${project_root}/examples" ]]; then
   cp -a "${project_root}/examples" "${payload_root}/"
 fi
 
+# Version board (docs/features/version-board.md): backend/app/services/releases.py reads RELEASES.md and
+# build-info.json from the release root (the directory holding backend/).  build-info.json has the same
+# format scripts/windows/build-offline-bundle.ps1 writes: full commit, UTC build time, dirty flag.
+[[ -f "${project_root}/RELEASES.md" ]] || {
+  printf '%s\n' 'RELEASES.md is missing (version board).' >&2
+  exit 1
+}
+cp "${project_root}/RELEASES.md" "${payload_root}/RELEASES.md"
+git_commit="$(git -C "${project_root}" rev-parse HEAD 2>/dev/null || true)"
+git_dirty=false
+[[ -z "$(git -C "${project_root}" status --porcelain 2>/dev/null)" ]] || git_dirty=true
+printf '{\n  "commit": "%s",\n  "built_at": "%s",\n  "dirty": %s\n}\n' \
+  "${git_commit}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${git_dirty}" >"${payload_root}/build-info.json"
+
 find "${payload_root}" -type f \( -name '*.pyc' -o -name '*.log' \) -delete
 find "${payload_root}" -depth -type d \( -name '__pycache__' -o -name '.pytest_cache' \) -exec rmdir {} + 2>/dev/null || true
 printf '%s\n' "${release_id}" >"${bundle_root}/RELEASE_ID"

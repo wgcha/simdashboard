@@ -8,6 +8,9 @@ bash -n "${root}/build-release.sh"
 bash -n "${root}/install.sh"
 bash -n "${root}/install-offline.sh"
 bash -n "${root}/bootstrap-python-runtime.sh"
+bash -n "${root}/build-offline-release.sh"
+bash -n "${root}/deploy-from-source.sh"
+bash -n "${root}/verify-offline-bundle.sh"
 
 for template in \
   "${root}/systemd/simdashboard.service.template" \
@@ -92,6 +95,12 @@ for required_installer_contract in \
 done
 
 grep -Fq 'wheelhouse' "${root}/build-release.sh"
+# Version board: the bundle ships RELEASES.md + build-info.json and the installer puts them next to backend/.
+grep -Fq '"${payload_root}/RELEASES.md"' "${root}/build-release.sh"
+grep -Fq '"${payload_root}/build-info.json"' "${root}/build-release.sh"
+grep -Fq '"${release_root}/RELEASES.md"' "${root}/install.sh"
+grep -Fq '"${release_root}/build-info.json"' "${root}/install.sh"
+grep -Fq 'payload/RELEASES.md payload/build-info.json' "${root}/install-offline.sh"
 grep -Fq 'AUTH_COOKIE_SECURE=true' "${root}/install.env.example"
 grep -Fq 'PYTHON_BIN=' "${root}/install.env.example"
 grep -Fq 'UV_VERSION=0.11.8' "${root}/bootstrap-python-runtime.sh"

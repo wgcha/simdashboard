@@ -29,7 +29,9 @@ BUILD_INFO_FILE = "build-info.json"
 COMMIT_DISPLAY_LENGTH = 12
 GIT_TIMEOUT_SECONDS = 5
 
-_HEADING = re.compile(r"^##\s+(?P<version>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\s+[—–-]\s+(?P<date>\d{4}-\d{2}-\d{2})\s*$")
+# ``x.y.z`` is a whole release; ``x.y.z.n`` (n >= 1) is a small deployment of it.  ``x.y.z.0`` is not a
+# version (it is ``x.y.z``), so the pattern refuses it and a release cannot be listed twice under two spellings.
+_HEADING = re.compile(r"^##\s+(?P<version>\d+\.\d+\.\d+(?:\.[1-9]\d*)?(?:[-+][0-9A-Za-z.-]+)?)\s+[—–-]\s+(?P<date>\d{4}-\d{2}-\d{2})\s*$")
 _BULLET = re.compile(r"^[-*]\s+(?P<text>\S.*)$")
 _COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
@@ -46,10 +48,16 @@ def release_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def version_tuple(version: str) -> tuple[int, int, int]:
+def version_tuple(version: str) -> tuple[int, int, int, int]:
+    """``0.3.0`` -> (0, 3, 0, 0); ``0.3.0.1`` -> (0, 3, 0, 1).  Orders versions; ``x.y.z`` sorts below ``x.y.z.n``."""
     core = re.split(r"[-+]", version, maxsplit=1)[0]
-    major, minor, patch = (int(part) for part in core.split("."))
-    return major, minor, patch
+    major, minor, patch, *rest = (int(part) for part in core.split("."))
+    return major, minor, patch, (rest[0] if rest else 0)
+
+
+def package_version(version: str) -> str:
+    """The ``x.y.z`` part of a version: what ``frontend/package.json`` carries (npm semver has no 4th part)."""
+    return ".".join(re.split(r"[-+]", version, maxsplit=1)[0].split(".")[:3])
 
 
 def parse_releases(text: str, *, strict: bool = False) -> list[ReleaseEntry]:

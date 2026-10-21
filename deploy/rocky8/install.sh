@@ -430,6 +430,21 @@ ln -s "${RUNTIME_DIRECTORY}/report-templates" "${release_root}/backend/assets/re
 cp "${source_root}/backend/alembic.ini" "${source_root}/backend/requirements.txt" \
   "${source_root}/backend/requirements.lock" "${release_root}/backend/"
 cp -a "${source_root}/frontend/dist" "${release_root}/frontend/"
+# Version board (docs/features/version-board.md): the backend reads RELEASES.md and build-info.json from
+# the release root (next to backend/).  A bundle brings both in its payload; an install straight from a
+# checkout has RELEASES.md and stamps build-info.json from Git when it can (otherwise the board shows no build info).
+if [[ -f "${source_root}/RELEASES.md" ]]; then
+  cp "${source_root}/RELEASES.md" "${release_root}/RELEASES.md"
+else
+  log 'WARNING: RELEASES.md is not in the payload; the version board will be empty.'
+fi
+if [[ -f "${source_root}/build-info.json" ]]; then
+  cp "${source_root}/build-info.json" "${release_root}/build-info.json"
+elif command -v git >/dev/null 2>&1 && [[ -e "${source_root}/.git" ]] && \
+  stamp_commit="$(git -c "safe.directory=${source_root}" -C "${source_root}" rev-parse HEAD 2>/dev/null)" && [[ -n "${stamp_commit}" ]]; then
+  printf '{\n  "commit": "%s",\n  "built_at": "%s",\n  "dirty": false\n}\n' \
+    "${stamp_commit}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${release_root}/build-info.json"
+fi
 if [[ -d "${source_root}/video_example" ]]; then
   cp -a "${source_root}/video_example" "${release_root}/"
 fi
