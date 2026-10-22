@@ -72,9 +72,9 @@ def _register_shallow(scx, request: str) -> dict:
     return created
 
 
-def _sync(scx, created: dict, **extra) -> dict:
+def _sync(scx, created: dict, *, drain: bool = True, **extra) -> dict:
     return scx.post(ENV + "/sync", {"project_id": created["project_id"], "request_id": created["id"],
-                                    "environment": "DISTRIBUTION", "force": True, **extra})
+                                    "environment": "DISTRIBUTION", "force": True, **extra}, drain=drain)
 
 
 def _count_misses(monkeypatch) -> list[tuple[str, str]]:
@@ -106,10 +106,12 @@ def test_sync_reads_a_deep_multi_version_final_branch_in_bulk(scx, monkeypatch):
         _final_deep(scx, request, version=f"{number + 1:032x}", leaf=f"Leaf{number}",
                     scenes=tuple(f"S{index}" for index in range(6)))
     misses = _count_misses(monkeypatch)
-    synced = _sync(scx, created)
+    synced = _sync(scx, created, drain=False)    # the sync only (its Case captures are capture jobs)
     assert synced["status"] in {"REFRESHED", "UNCHANGED"}, synced
     kinds = [kind for kind, _rel in misses]
-    assert "subtree" in kinds and len(misses) <= 3, misses     # one bulk round, not one miss per branch
+    # One bulk listing, not one miss per branch: since 2026-10-22 the classification lists the whole tree
+    # before the body (listings first), so the body has no listing miss at all.
+    assert "list" not in kinds and len(misses) <= 3, misses
     nodes = _snapshot_nodes(scx, created)
     deepest = f"{request}/FINAL/CAE/{FINAL_CASE}/{6:032x}/Leaf5/Drop/{RUN}/INDIVIDUAL/S5"
     assert deepest in nodes
@@ -126,7 +128,7 @@ def test_manual_refresh_reads_the_deep_tree_in_bulk_too(scx, monkeypatch):
         _final_deep(scx, request, version=f"{number + 1:032x}", leaf=f"Leaf{number}")
     misses = _count_misses(monkeypatch)
     refreshed = scx.post(ENV + "/refresh", {"project_id": created["project_id"], "request_id": created["id"],
-                                            "environment": "DISTRIBUTION"})
+                                            "environment": "DISTRIBUTION"}, drain=False)
     assert refreshed["status"] in {"REFRESHED", "UNCHANGED"}, refreshed
     assert len(misses) <= 3, misses
 

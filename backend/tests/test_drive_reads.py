@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from app.database_connection import connect, connection_held
 from app.main import app
-from app.services import folder_auto_sync, spdm_storage
+from app.services import capture_jobs, folder_auto_sync, spdm_storage
 from app.services.drive import gateway as drive_gateway
 from app.services.drive import reads as drive_reads
 from app.services.storage import provider_for_root
@@ -59,10 +59,19 @@ class Scx:
     def add(self, rel: str, content: bytes = CSV_BYTES) -> None:
         self.drive.add_file(self.path(rel), content)
 
-    def post(self, route: str, payload: dict) -> dict:
+    def post(self, route: str, payload: dict, *, drain: bool = True) -> dict:
+        """POST; then the capture worker's pass (SCX drive: Case results are captured by background
+        capture jobs, 2026-10-22), as the worker thread would right after the request."""
         response = self.client.post(route, json=payload)
         assert response.status_code == 200, response.text
+        if drain:
+            drain_captures()
         return response.json()
+
+
+def drain_captures() -> dict:
+    """Run every pending capture job now (the background worker's pass; tests run no worker thread)."""
+    return capture_jobs.run_pending(budget_seconds=120.0)
 
 
 @pytest.fixture
@@ -114,6 +123,7 @@ def _register(scx: Scx) -> tuple[str, str]:
     assert preview["can_apply"], preview
     registered = scx.post(ENV + "/registrations", {"preview_id": preview["id"], "idempotency_key": f"d2-{uuid.uuid4()}",
                                                   "capture": True})
+    registered = scx.client.get(f"{ENV}/registrations/{registered['registration_id']}").json()
     assert registered["capture_jobs"] and {job["status"] for job in registered["capture_jobs"]} == {"COMPLETED"}, registered
     with connect() as conn:
         request_id = conn.execute("SELECT request_id FROM folder_environment_registrations WHERE id=?",
@@ -330,9 +340,16 @@ def test_busy_download_is_retried_by_the_next_sync(scx):
     scx.drive.add_file(added, CSV_BYTES)
     scx.drive.busy_paths.add(added)
     busy = _sync(scx, project_id, request_id)
-    assert busy["status"] == "FAILED", busy
+    # 2026-10-22: the folder check never depends on a download; the Case's capture stays 결과 받는 중
+    # (PENDING, no error) and the next capture pass reads it.
+    assert busy["status"] == "REFRESHED", busy
+    with connect() as conn:
+        assert capture_jobs.pending_cases(conn, request_id, "DISTRIBUTION"), "the busy Case waits for the next pass"
     scx.drive.busy_paths.clear()
-    assert _sync(scx, project_id, request_id)["status"] == "REFRESHED"
+    drain_captures()
+    with connect() as conn:
+        assert capture_jobs.pending_cases(conn, request_id, "DISTRIBUTION") == set()
+    assert _latest_asset(request_id, "8_Busy") == CSV_BYTES
     assert "8_Busy" in _scenes(scx, request_id)
 
 
@@ -414,7 +431,10 @@ def test_capture_retry_before_the_next_sync_never_reads_the_unreviewed_change(sc
     preview = scx.post(ENV + "/previews", {"scan_id": scan["id"], "assignments": []})
     registered = scx.post(ENV + "/registrations", {"preview_id": preview["id"], "idempotency_key": f"d2-{uuid.uuid4()}",
                                                   "capture": True})
-    assert {job["status"] for job in registered["capture_jobs"]} == {"FAILED"}, registered
+    # The registration answers before any download (결과 받는 중); the busy file only delays its capture.
+    assert {job["status"] for job in registered["capture_jobs"]} == {"PENDING"}, registered
+    current = scx.client.get(f"{ENV}/registrations/{registered['registration_id']}").json()
+    assert [(job["status"], job["error_code"]) for job in current["capture_jobs"]] == [("PENDING", None)], current
     scx.drive.busy_paths.clear()
     project_id, request_id = registered["project_id"], registered["request_id"]
     _sync(scx, project_id, request_id)       # classifies the request folder (rows of every result file)

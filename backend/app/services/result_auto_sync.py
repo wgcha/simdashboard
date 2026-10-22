@@ -5,7 +5,9 @@ values below 60 are raised to 60) one background thread:
 
 1. registers new SPDM project/request folders (``folder_auto_discovery.discover``), then
 2. checks every request with a live folder registration and environment
-   (``folder_auto_sync.sync_scope``), the same quick-then-full check the screens use.
+   (``folder_auto_sync.sync_scope``), the same quick-then-full check the screens use;
+3. SCX drive: wakes the capture worker (``capture_jobs``), which downloads the result files of the
+   Cases these steps queued (결과 받는 중) in its own bounded drive sessions.
 
 A pass is skipped while the administrator's full rescan (``storage_rescan``) runs: it does both
 steps itself, and a parallel pass only competes with it for the drive worker (issue #55).
@@ -90,6 +92,9 @@ def run_once(stop_event: threading.Event | None = None) -> dict[str, Any]:
             summary["refreshed"] += 1
         if result.get("status") in {"FAILED", "CONFLICT"}:
             summary["failed"] += 1
+    from . import capture_jobs
+
+    capture_jobs.wake()
     if summary["refreshed"] or summary["discovered"]:
         logger.info("Result auto-sync: %(scopes)d request scope(s), %(refreshed)d refreshed, "
                     "%(discovered)d new folder(s), %(failed)d failed", summary)

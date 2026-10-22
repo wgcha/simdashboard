@@ -62,7 +62,8 @@
 | `SIMDASH_SCX_CA_BUNDLE` | 권장 | — | 사내 CA 번들 pem 절대 경로 |
 | `SIMDASH_SCX_WORK_DIR` | — | `backend\data\scx-worker` | 워커 TEMP·adcopy 로그·`dashboard.lock`·작업자 stderr `worker.log`(§8.8). 서버 설치는 릴리스 폴더 밖 경로 권장 |
 | `SIMDASH_SCX_STAGING_DIR` | — | `<WORK_DIR>\staging` | 다운로드·업로드 임시 저장소. 대시보드 서비스 계정만 접근 |
-| `SIMDASH_SCX_MAX_CONCURRENCY` | — | `1` | 워커 동시 SDK 호출 수(1–8) |
+| `SIMDASH_SCX_MAX_CONCURRENCY` | — | `1` | 워커 동시 SDK 호출 수(1–8). **권장 1(많아도 2)**: 결과 파일은 캡처 작업자 하나가 한 파일씩 받고(§8.9) 화면 읽기는 우선순위 INTERACTIVE로 그 앞에 선다. 값을 올려도 다운로드 하나의 속도는 빨라지지 않고 SCX 서버·작업자 큐 부하(`DRIVE_BUSY`)만 늘어난다 |
+| `SIMDASH_CAPTURE_WORKER_SECONDS` | — | `60` | 캡처 작업자가 깨우는 신호 없이 남은 결과 받기 작업을 확인하는 간격(초, §8.9). 0 이하면 작업자 스레드를 띄우지 않는다(시험용; 그때는 [저장 폴더 새로고침]의 CAPTURE 단계만 결과를 받는다) |
 | `SIMDASH_SCX_CACHE_TTL_SECONDS` | — | `30` | 어댑터 목록·조회 캐시(0–3600초) |
 | `SIMDASH_DRIVE_SCAN_MAX_SECONDS` | — | `180` | 드라이브 폴더 조사 시간 상한(15–3600초). 의뢰 폴더 미리 목록 읽기·조사·내용 지문에 적용. local 모드는 15초 그대로. 범위 밖·숫자 아님은 경고 로그 후 기본값 |
 | `SIMDASH_DRIVE_SCAN_MAX_ENTRIES` | — | `200000` | 드라이브 폴더 조사 전체 항목 수 상한(1000–2000000). local 50000 |
@@ -245,7 +246,7 @@ HPC SSO가 drive-desktop 클라이언트의 아이디·비밀번호 로그인을
 - 32 MiB 초과 파일은 지우지 않고 **서버 보관소**(`SIMDASH_DRIVE_BLOB_DIR/<sha256 앞 2자>/<sha256>`)로 옮긴다. 같은 버전을 다시 읽을 때는 보관소 파일의 sha256을 확인해 그대로 쓴다(프로세스마다 파일별로 처음 한 번 전체 해시를 확인하고, 그 뒤에는 크기·수정 시각(ns)이 확인 때와 같으면 다시 해시하지 않는다. 다르면 다시 해시하고 어긋나면 지운다). 용량 상한을 넘으면 오래 안 쓴 것부터 지운다 — 지우는 대상은 `<64자리 hex>` 이름이 `<앞 2자>` 폴더 안에 있는 파일뿐이고 다른 파일은 건드리지 않는다. 보관소 폴더가 작업·임시 폴더와 같거나 그 상위이거나 임시 폴더 안이면 기동을 거부한다(`SIMDASH_DRIVE_BLOB_DIR`, 검수 L2).
 - 세션이 성공하면 받은 파일의 sha256·보관 경로를 `drive_source_versions`에 기록한다(처음 읽은 파일은 새 버전 행 생성).
 - **사용환경 소재(OptiStruct `.fem`, 500–1000 MB)**: 일반 읽기 한도 512 MiB와 별개로 `SIMDASH_OPTISTRUCT_MAX_BYTES`(기본 2 GiB)까지 받는다. 요청 스레드는 내려받지 않고, 백그라운드 분석 작업이 DB 연결 없이 자기 읽기 세션(`drive_reads.run`, 우선순위 BACKGROUND)으로 **한 번** 받아 보관소로 옮긴다(세션 임시 한도 2 GiB·여유 1 GiB 규칙 그대로). 분석 결과는 `materials_deck_cache`(migration 0039)에 `drive:<version_token>` 지문과 보관소 sha256으로 남아, 버전이 같으면 다시 받지도 분석하지도 않고, 분석기 버전만 바뀌면 보관소 파일을 다시 쓴다. `.fem`은 `drive_source_versions` 대상 확장자가 아니어서 원본 변경 확인(§8.4) 없이 현재 드라이브 버전을 읽는다. 자세한 규칙은 [사용환경 소재](materials-optistruct.md).
-- 내용 지문(`scan_fingerprints`)은 scx 모드에서 파일을 읽지 않고 `version_token`을 쓴다. **변경 없는 자동 반영은 파일을 내려받지 않는다**(S2-5, 시험으로 확인). 전체 새로고침(새 파일·새 Scene·새 버전 등록 뒤)은 지금처럼 그 의뢰 Case의 캡처 파일을 다시 읽으므로 그때 내려받는다.
+- 내용 지문(`scan_fingerprints`)은 scx 모드에서 파일을 읽지 않고 `version_token`을 쓴다. **변경 없는 자동 반영은 파일을 내려받지 않는다**(S2-5, 시험으로 확인). 전체 새로고침(새 파일·새 Scene·새 버전 등록 뒤)은 2026-10-22부터 파일을 받지 않고 그 의뢰 Case들을 **결과 받기 작업**으로 넘긴다(§8.9). 작업 세션이 받은 파일은 크기와 관계없이 보관소에 두고 `drive_source_versions`에 sha256·보관 경로·버전 token을 기록하므로, 같은 버전은 다시 받지 않는다(끊긴 작업의 이어 받기, 바뀌지 않은 파일의 재수집).
 
 ### 8.4 원본 비교·확인 (05 §4, 사용자 결정 §9 D3)
 
@@ -269,7 +270,7 @@ HPC SSO가 drive-desktop 클라이언트의 아이디·비밀번호 로그인을
 
 ### 8.5 자동 반영(60초) 흐름
 
-`POST /api/folder-discovery/environments/sync`(scx): 권한 확인(짧은 연결) → 합치기 간격 확인 → 의뢰별 드라이브 잠금(연결 없이) → 읽기 세션: ① 분류(§8.4, 드라이브 목록은 연결 없이, DB는 짧은 연결) ② 기존 빠른 확인·새로고침(연결 → 의뢰 범위 잠금, local 모드·등록 삭제와 같은 잠금 순서) → 결과에 `drive: {pending_changes, missing, ignored, token_kind, new_files}`. 드라이브 오류(`BUSY`·`TIMEOUT`·`AUTH_REQUIRED` 등)는 `FAILED`+코드로 끝나고 등록 버전은 바뀌지 않으며 다음 주기에 다시 확인한다.
+`POST /api/folder-discovery/environments/sync`(scx): 권한 확인(짧은 연결) → 합치기 간격 확인 → 의뢰별 드라이브 잠금(연결 없이) → 읽기 세션: ① 분류(§8.4: **먼저 의뢰 트리 전체 목록**(FINAL 포함, `require_subtree`), 그다음 크기·시각 token 파일의 내용 비교 다운로드 — 최대 `COMPARE_SECONDS` 60초이고 세션 한도가 지나면 하지 않으며, 비교하지 못한 파일은 등록 버전을 계속 쓰고 다음 확인에서 비교한다) ② 기존 빠른 확인·새로고침(연결 → 의뢰 범위 잠금, local 모드·등록 삭제와 같은 잠금 순서; 목록만 읽고 Case 수집은 결과 받기 작업으로, §8.9) → 결과에 `drive: {pending_changes, missing, ignored, token_kind, new_files}`. 드라이브 오류(`BUSY`·`TIMEOUT`·`AUTH_REQUIRED` 등)는 `FAILED`+코드로 끝나고 등록 버전은 바뀌지 않으며 다음 주기에 다시 확인한다.
 
 이슈 #51(2026-10-12, 실제 드라이브 현장 보고)에서 고친 규칙:
 
@@ -317,6 +318,22 @@ HPC SSO가 drive-desktop 클라이언트의 아이디·비밀번호 로그인을
 - 조사 미완료(`FOLDER_SCHEMA_SCAN_INCOMPLETE`)는 같은 줄 끝에 `issues=<코드>:<경로>, …`(처음 3개와 나머지 수)를 붙인다. 수동 조사가 미완료로 저장되면 `WARNING Folder scan INCOMPLETE: path=… issues=…`(로거 `app.services.folder_discovery_environment`). `SCAN_LIMIT`·`ENTRY_LIMIT`는 위 `SIMDASH_DRIVE_SCAN_MAX_*`, `PATH_UNAVAILABLE`은 같은 시각의 드라이브 읽기 로그를 본다.
 - **로그 인코딩:** 서버 로그(`uvicorn.log`·`uvicorn-error.log`, 오프라인 설치 서비스 로그)는 UTF-8이다(`start.ps1`과 오프라인 설치의 API 서비스가 `PYTHONUTF8=1`·`PYTHONIOENCODING=utf-8`로 백엔드를 띄움). 한국어 메시지는 `Get-Content -Encoding UTF8 backend\uvicorn-error.log -Tail 200`(실시간은 `-Wait` 추가)으로 읽는다. 인코딩 없이 `Get-Content`(Windows PowerShell 5.1 기본 cp949)로 읽거나 이 변경 전에 쓴 줄은 `�ֱ� ���� …`처럼 깨져 보인다.
 - 관리 › 드라이브 관리 › **드라이브 점검**은 조회 전용(stat·list·작은 파일 download)이라 통과해도 동기화 실패 원인(구조·크기 한도·수집)은 위 로그로 확인한다.
+
+### 8.9 결과 받기 작업 — 등록·확인은 목록만, 다운로드는 뒤에서 (이슈 #55 후속, 2026-10-22)
+
+**현장 증상(운영 서버, 어댑터 수정 뒤):** [저장 폴더 새로고침]에서 `WR-00000806_유통 환경 시뮬레이션`은 매번 `DISCOVERY_TIME_BUDGET`("폴더 조사가 한 번의 확인(시간 300초·드라이브 조회 횟수) 안에 끝나지 않았습니다"), `WR-00000804_…`는 `FOLDER_SCHEMA_SCAN_INCOMPLETE`("읽지 못한 곳: …/FINAL (list_dir, DRIVE_READ_NOT_PREPARED)"). 진행 로그에서 드라이브 호출은 약 6초에 1건(결과 CSV·JPG 다운로드, 작업자 동시 호출 1)이었다.
+
+**원인:** 등록(`folder_discovery_environment.register(capture=True)`의 `drive_reads.require_content`)과 의뢰 확인(`refresh_scope`의 `require_content`, 분류의 내용 비교)이 모든 결과 파일을 **조사와 같은 읽기 세션·같은 시간 한도**(`drive_reads.bounded`: 탐색 회차 300초, 의뢰 하나 300초) 안에서 받았다. Scene이 많은 의뢰는 다운로드만으로 한도를 넘어 등록이 끝나지 않았고(매 회차 처음부터: `DISCOVERY_TIME_BUDGET`), 확인은 다운로드가 한도를 쓴 뒤 FINAL 목록이 세션에 없어(분류는 Final 보관 폴더를 목록으로 읽지 않음) 조사가 미완료였다. 받은 파일은 세션 임시 폴더와 함께 지워져 다음 시도도 처음부터였다.
+
+**바뀐 동작(scx 모드, `folder_discovery_environment.captures_deferred`):**
+
+- **등록·조사·미리보기·확인은 목록만 읽는다.** 등록은 Case를 바로 만들고(`dashboard_cases`, 등록 소유) Case마다 결과 받기 작업(`folder_environment_capture_jobs`, `PENDING` = **결과 받는 중**)을 남긴 채 끝난다. 확인(새로고침)은 스냅샷을 만들고, 예전에 그 자리에서 수집하던 Case들을 의뢰의 최신 등록 작업으로 다시 `PENDING`(작업 행은 등록·Case마다 하나)으로 둔다. 새로고침이 다운로드 때문에 실패하거나(`FOLDER_SCHEMA_CAPTURE_FAILED`) 미완료가 되는 일은 없다. 분류는 의뢰 트리 전체 목록을 먼저 읽는다(§8.5).
+- **작업자 하나(`capture_jobs.py`)**가 작업을 처리한다: 등록 하나의 대기 작업을 읽기 세션 하나(우선순위 BACKGROUND, `SESSION_SECONDS` 300초 한도)에서 Case 순서대로. 먼저 그 등록 뒤의 확인 스냅샷이 없으면 확인을 한 번 돌려(목록만) 작업 문맥을 스냅샷에서 가져오고(세션마다 의뢰 트리 전체를 다시 읽지 않음), Case마다 결과 파일을 받은 뒤 쓰기 트랜잭션으로 수집한다. 문맥은 등록 뒤 스냅샷이 있으면 그 스냅샷, 없으면 등록 미리보기(예전 등록 수집과 같음)다.
+- **이어 받기:** 한도·[중지]·`DRIVE_BUSY`·`DRIVE_STAGING_FULL`·`DRIVE_UNAVAILABLE`·`SPDM_FILE_BUSY`·마지막 읽기 회차로 멈춘 작업은 오류 없이 `PENDING`으로 대기열 뒤로 가서 다음 차례에 이어진다. 작업 세션(`drive_reads.run(resumable=True)`)의 다운로드는 보관소(`SIMDASH_DRIVE_BLOB_DIR`)에 두고 세션이 끝날 때(한도로 끝나도) `drive_source_versions`에 기록하므로 이어 받을 때 같은 버전 파일은 드라이브를 부르지 않는다. 끝난 작업(`COMPLETED`)은 다시 하지 않고, 파일 내용 문제(파싱·경로 등)만 `FAILED`(관리 화면 [미완료 결과 다시 읽기])이다. scx 모드의 다시 읽기는 작업을 `PENDING`으로 돌리고 작업자를 깨운다(요청이 다운로드를 기다리지 않음).
+- **누가 돌리나:** 서버 작업자 스레드(기동 시 시작, 등록·확인이 작업을 남기면 바로 깨우고 아니면 `SIMDASH_CAPTURE_WORKER_SECONDS` 간격; 한 번에 최대 600초 돌고 쉰다), 5분 자동 반영 뒤 깨우기, [저장 폴더 새로고침]의 마지막 단계 `CAPTURE`(900초, [폴더 스키마 새로고침](folder-schema-refresh.md)). 프로세스 잠금으로 한 번에 하나만 돌아 드라이브에는 다운로드 흐름 하나만 간다. 새로고침이 도는 동안 작업자 스레드는 쉬고(새로고침이 직접 돌림), 화면 읽기(INTERACTIVE)가 작업보다 앞선다. 권장 `SIMDASH_SCX_MAX_CONCURRENCY=1`(§3).
+- **화면:** 등록 이력·등록 결과의 Case 상태 `결과 받는 중`(`PENDING`/`CAPTURING`), Case 결과 화면은 받는 중인 Case 이름 뒤에 `· 결과 받는 중`, 결과가 아직 없으면 "결과 받는 중입니다. 드라이브에서 결과 파일을 받는 대로 자동으로 표시됩니다."(카탈로그 `cases[].capture_pending`), [저장 폴더 새로고침] 결과에 `결과 받는 중 n/N (백그라운드에서 계속 받습니다)`(상태 `captures`). 로그: `Capture jobs: n completed, n failed, n interrupted`(INFO), 새로고침 진행 줄의 `captures_pending=n/N`.
+- local 모드는 그대로(등록·새로고침이 그 자리에서 수집; 작업자는 아무것도 하지 않음).
+- 회귀 시험: `tests/test_capture_jobs_drive.py`(다운로드 지연 + Scene 많은 Case 둘, 수 초 한도: 예전 코드는 `DISCOVERY_TIME_BUDGET`·확인 실패, 지금은 바로 등록되고 여러 번의 짧은 작업으로 모든 파일을 한 번씩만 받아 수집 완료).
 
 ## 9. 코드 위치와 경계
 

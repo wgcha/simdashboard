@@ -119,7 +119,8 @@ RETRY_BACKOFF_SECONDS = (120.0, 300.0, 600.0)
 # steps, the reads inside a step (prefetch rounds) stop at budget + slack.
 DRIVE_READ_SLACK_SECONDS = 30.0
 # SCX drive read rounds of one run (issue #51): upper levels + per new request one round for its folder
-# tree (``drive_reads.require_subtree``) and one for its capture files (``require_content``), with slack.
+# tree (``drive_reads.require_subtree``), with slack.  Since 2026-10-22 the registration downloads no result
+# files (capture jobs, ``capture_jobs``), so a request with many Scenes registers within one run.
 DISCOVERY_READ_ROUNDS = drive_reads.MAX_ROUNDS + 3 * MAX_NEW_REQUESTS_PER_RUN
 ACTIVE_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
 

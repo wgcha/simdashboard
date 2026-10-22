@@ -120,9 +120,13 @@ async def lifespan(_: FastAPI):
     # Results appear without anyone viewing them: server-side folder sync every 5 minutes (2026-10-14).
     from .services import result_auto_sync
     result_auto_sync.start()
+    # SCX drive: Case results are downloaded by one background capture worker (issue #55 follow-up).
+    from .services import capture_jobs
+    capture_jobs.start()
     try:
         yield
     finally:
+        capture_jobs.stop()
         result_auto_sync.stop()
         drive_upload_queue.stop()
         scx_relay.shutdown()

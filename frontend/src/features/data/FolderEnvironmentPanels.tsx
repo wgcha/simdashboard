@@ -5,7 +5,7 @@ import { formatServerTime } from '../../shared/api/serverTime'
 // D8: the usage-environment "평가" level is now SCENE; legacy EVALUATION snapshots are shown as Scene too.
 export const environmentRoleLabels: Record<string, string> = { PROJECT: '프로젝트', REQUEST: '의뢰', WORKING: 'Working 작업 영역', FINAL: 'Final 보관 영역', FINAL_CAE: 'Final CAE', FINAL_REPORTS: 'Final Report', FINAL_CAD: 'Final CAD', FINAL_VERSION: 'Final 버전', SIMULATION_CASE: '해석 Case', EVALUATION: 'Scene', LOAD_CASE: '하중경우', EXECUTION_RUN: 'Run Case', RUN_OPTION: 'Run Option', INPUT: '입력 폴더', RESULTS: '결과 폴더', SCENE: 'Scene', CONTAINER: '일반 중간 폴더', CONTENT: '내용물', EXCLUDE: '이번 등록에서 제외' }
 export const roleLabel = (value?: string | null) => value ? environmentRoleLabels[value] ?? value : '확인 필요'
-const states: Record<string, string> = { REGISTERED: '연결 완료', CAPTURING: '결과 읽는 중', COMPLETED: '결과 읽기 완료', FAILED: '결과 읽기 실패', PENDING: '결과 읽기 대기', RUNNING: '결과 읽는 중', PARTIAL: '일부 결과 확인 필요' }
+const states: Record<string, string> = { REGISTERED: '연결 완료', CAPTURING: '결과 받는 중', COMPLETED: '결과 읽기 완료', FAILED: '결과 읽기 실패', PENDING: '결과 받는 중', RUNNING: '결과 읽는 중', PARTIAL: '일부 결과 확인 필요' }
 const captureErrorMessages: Record<string, string> = {
   FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED: '선택한 의뢰의 폴더 연결을 확인할 수 없습니다. 프로젝트·의뢰 연결과 확정 폴더를 확인하세요.',
   FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS: '같은 의뢰에 연결된 폴더가 여러 곳입니다. 사용할 의뢰 폴더 연결을 확인하세요.',

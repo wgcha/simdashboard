@@ -79,7 +79,7 @@ export type StorageRescanState = {
   started_at: string | null
   finished_at: string | null
   started_by: string | null
-  phase: 'DISCOVER' | 'REINTERPRET' | 'SYNC' | null
+  phase: 'DISCOVER' | 'REINTERPRET' | 'SYNC' | 'CAPTURE' | null
   /** Live progress (issue #55): requests done/total of REINTERPRET/SYNC; DISCOVER step, current folder and projects. */
   progress: {
     done: number; total: number
@@ -92,6 +92,8 @@ export type StorageRescanState = {
   cancel_requested?: boolean
   /** Requests the SYNC phase left for the next rescan (phase time limit). */
   sync_deferred?: number
+  /** SCX drive capture jobs after the CAPTURE phase: pending = 결과 받는 중 (the background worker continues them). */
+  captures?: { total: number; pending: number; completed: number; failed: number; completed_now?: number; interrupted?: number }
   created_projects: Array<{ id: string; name: string }>
   created_requests: Array<{ id: string; name: string; environment: FolderEnvironment; project_id: string }>
   needs_review: FolderDiscoveryReview[]

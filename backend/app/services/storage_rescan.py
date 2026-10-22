@@ -22,6 +22,11 @@ runs this rescan instead:
 4. Every request with a live folder registration (``folder_auto_sync.registered_scopes``) is checked
    with ``folder_auto_sync.sync_scope(force=True)``, the same check the 5-minute server auto-sync
    and the screens use (drive mode: no DB connection is held while the drive is read).
+5. CAPTURE (SCX drive, issue #55 follow-up 2026-10-22): registration and the folder check only list
+   folders; the Cases' result files are downloaded by capture jobs (``capture_jobs``).  This phase runs
+   the pending jobs for ``CAPTURE_BUDGET_SECONDS`` and reports ``captures`` (total / pending / completed /
+   failed): jobs left over are ``결과 받는 중`` and the background capture worker continues them, they
+   are never a failure of the rescan.
 
 The result reports every unregistered folder with its reason (path, code, Korean message), merged
 over the rounds and deduplicated by path + code, and every request whose check failed or kept a
@@ -80,6 +85,8 @@ REINTERPRET_BUDGET_SECONDS = 1800.0
 # at most SCOPE_BUDGET_SECONDS of drive reads.
 SYNC_BUDGET_SECONDS = 1800.0
 SCOPE_BUDGET_SECONDS = 300.0
+# CAPTURE phase (SCX drive): pending capture jobs are run this long; the rest continues in the background.
+CAPTURE_BUDGET_SECONDS = 900.0
 # A "Storage rescan progress" WARNING line this often while a rescan runs.
 PROGRESS_LOG_SECONDS = 30.0
 REINTERPRET_ACTIVE_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
@@ -119,7 +126,11 @@ def _initial(started_by: str | None = None) -> dict[str, Any]:
             "needs_review": [], "rounds": 0, "scopes": 0, "refreshed": 0, "failed": [], "partial": False,
             "reinterpreted": [], "reinterpret_blocked": [], "reinterpret_unchanged": 0, "reinterpret_deferred": 0,
             "sync_deferred": 0, "drive": _drive_counters(), "elapsed_seconds": 0, "cancel_requested": False,
-            "error": None}
+            "captures": _capture_counters(), "error": None}
+
+
+def _capture_counters() -> dict[str, int]:
+    return {"total": 0, "pending": 0, "completed": 0, "failed": 0, "completed_now": 0, "interrupted": 0}
 
 
 def state() -> dict[str, Any]:
@@ -200,7 +211,9 @@ def progress_line(current: dict[str, Any] | None = None) -> str:
              "last_drive_error=" + (f"{last.get('code')}:{last.get('operation')}:{last.get('relative_path')}"
                                     if last else "-"),
              f"new_requests={len(current.get('created_requests') or [])}",
-             f"needs_review={len(current.get('needs_review') or [])}"]
+             f"needs_review={len(current.get('needs_review') or [])}",
+             f"captures_pending={(current.get('captures') or {}).get('pending', 0)}/"
+             f"{(current.get('captures') or {}).get('total', 0)}"]
     if current.get("cancel_requested"):
         parts.append("cancel_requested=true")
     return " ".join(parts)
@@ -533,6 +546,34 @@ def _sync_all(actor: str) -> None:
         _update(refreshed=refreshed, failed=list(failed))
 
 
+def _capture_all() -> None:
+    """Phase 5: run pending capture jobs for a while (module docstring); the rest stays 결과 받는 중."""
+    from . import capture_jobs
+    from .drive import reads as drive_reads
+
+    _checkpoint()
+    if not drive_reads.active():
+        return
+    with connect() as conn:
+        before = capture_jobs.counts(conn)
+    _phase("CAPTURE", before["pending"])
+    _update(captures={**_capture_counters(), **before})
+    if not before["pending"]:
+        return
+
+    def progress(tally: dict[str, int]) -> None:
+        _set_progress(done=tally["completed_now"] + tally["failed_now"])
+
+    result = capture_jobs.run_pending(
+        budget_seconds=CAPTURE_BUDGET_SECONDS, wait_seconds=capture_jobs.SESSION_SECONDS + 30.0,
+        cancel=_cancel, observer=_on_drive, progress=progress)
+    with connect() as conn:
+        after = capture_jobs.counts(conn)
+    _update(captures={**after, "completed_now": int(result.get("completed_now") or 0),
+                      "interrupted": int(result.get("interrupted") or 0)})
+    _checkpoint()
+
+
 def _finish(**fields: Any) -> None:
     with _lock:
         _clock["ended"] = time.monotonic()
@@ -547,6 +588,7 @@ def _run(actor: str, started_by: str | None = None) -> None:
         _discover_all()
         _reinterpret_all(actor, started_by)
         _sync_all(actor)
+        _capture_all()
         _finish(status="DONE")
         logger.warning("Storage rescan done: %s", progress_line())
     except _Cancelled:

@@ -173,6 +173,8 @@ def isolated_database(request: pytest.FixtureRequest, tmp_path: Path, monkeypatc
     monkeypatch.setenv("DEPLOYMENT_PROFILE", "local")
     # No background result auto-sync thread in tests (tests call result_auto_sync.run_once directly).
     monkeypatch.setenv("SIMDASH_RESULT_AUTO_SYNC_SECONDS", "0")
+    # No background capture worker either (tests call capture_jobs.run_pending directly).
+    monkeypatch.setenv("SIMDASH_CAPTURE_WORKER_SECONDS", "0")
     monkeypatch.setenv("AUTH_ALLOW_INSECURE_LOCAL", "true")
 
     postgres_test_enabled = (

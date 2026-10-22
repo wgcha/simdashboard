@@ -24,6 +24,7 @@ function progressLabel(state: StorageRescanState | null): string {
   if (!state || state.status !== 'RUNNING') return '저장 폴더 확인 중'
   if (state.phase === 'SYNC') return `저장 폴더 확인 중 · 의뢰 ${state.progress.done}/${state.progress.total}`
   if (state.phase === 'REINTERPRET') return `저장 폴더 확인 중 · 새 깊이 스키마 적용 ${state.progress.done}/${state.progress.total}`
+  if (state.phase === 'CAPTURE') return `저장 폴더 확인 중 · 결과 받는 중 ${state.progress.done}/${state.progress.total}`
   return state.rounds > 0 ? `저장 폴더 확인 중 · 새 폴더 ${state.created_requests.length}개` : '저장 폴더 확인 중 · 새 폴더 찾기'
 }
 
@@ -37,6 +38,7 @@ function summary(state: StorageRescanState): string {
   if (state.reinterpreted.length || state.reinterpret_blocked.length) parts.push(`새 스키마 적용 ${state.reinterpreted.length}`, `적용 못함 ${state.reinterpret_blocked.length}`)
   if (excluded) parts.push(`제외 ${excluded}`)
   if (state.sync_deferred) parts.push(`시간 제한으로 미확인 ${state.sync_deferred}`)
+  if (state.captures?.pending) parts.push(`결과 받는 중 ${state.captures.pending}/${state.captures.total} (백그라운드에서 계속 받습니다)`)
   if (state.status === 'CANCELLED') return `저장 폴더 확인을 중지했습니다. 그때까지의 결과만 반영했습니다 (${parts.join(' · ')}).`
   return `저장 폴더를 다시 확인했습니다 (${parts.join(' · ')})${state.partial ? '. 남은 폴더가 있어 한 번 더 실행하세요' : ''}.`
 }

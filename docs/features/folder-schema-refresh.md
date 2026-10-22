@@ -64,6 +64,12 @@ SPDM이 저장소 root에 만든 새 프로젝트·의뢰 폴더는 관리자 �
 
 **드라이브 파일 이름(이슈 #55, 2026-10-21)**: `SPDM_INVALID_PATH "이 서버에서 쓸 수 없는 이름입니다(Windows 금지 문자·대소문자 중복)"`가 의뢰 확인 전체를 실패시켰다. 원인은 `DriveStorageProvider._file_version`의 `local_safe` 검사가 내용 지문(`content_token`, 드라이브 `version_token`만 쓰고 서버에 파일을 두지 않음)에도 걸린 것이다. 드라이브 이름은 Windows 경로가 아니므로 이제 이 검사는 **서버에 내려받을 때만** 적용한다: 대소문자만 다른 쌍둥이 이름은 다운로드마다 새 임시 폴더를 쓰므로 그대로 읽고, Windows가 담을 수 없는 이름(`<>:"\|?*`, 끝 공백·마침표, 예약 이름)은 내려받지 않는다(미리 받기도 건너뜀). 그런 파일·폴더는 Case 수집에서 `UNPROCESSED_FILE:<경로>:NAME_NOT_LOCAL_SAFE` 한 항목이 되고(로그 `Capture skipped a drive file … <경로>`), 대시보드가 경로로 쓸 수 없는 `:`·`\` 이름은 폴더 조사에서 빠지고 `skipped_entries`(`NAME_NOT_SUPPORTED`)와 시간당 한 번의 `Folder scan skipped a drive entry …` 로그로 남는다. 의뢰 확인은 실패하지 않는다. 내려받기에서 거절될 때의 메시지는 파일 경로를 담는다.
 
+**이슈 #55 후속(2026-10-22, 결과 받기 작업)**: 운영 서버에서 Scene이 많은 의뢰가 매번 `DISCOVERY_TIME_BUDGET`, 다른 의뢰의 확인이 `FOLDER_SCHEMA_SCAN_INCOMPLETE …/FINAL (list_dir, DRIVE_READ_NOT_PREPARED)`였다. 등록과 확인이 결과 파일 전부를 조사와 같은 시간 한도(회차·의뢰 300초) 안에서 받았기 때문이다(다운로드 약 6초/건). SCX 드라이브 모드에서는 이제:
+
+- 탐색의 등록과 의뢰 확인은 **목록만** 읽는다. Case는 바로 생기고 결과는 Case별 결과 받기 작업(`folder_environment_capture_jobs`, `PENDING`)이 받는다. 의뢰 확인의 분류는 의뢰 트리 전체 목록(FINAL 포함)을 다운로드보다 먼저 읽고, 내용 비교 다운로드는 한도 안에서만(못 한 것은 다음 확인) 한다. 그래서 다운로드가 느려도 등록·스냅샷은 끝나고 진행이 쌓인다.
+- 새로고침 순서 마지막에 **CAPTURE** 단계(`CAPTURE_BUDGET_SECONDS` 900초): 대기 작업을 `capture_jobs.run_pending`으로 처리한다(등록 하나당 읽기 세션 하나, 300초). 끝나지 않은 작업은 실패가 아니라 `captures.pending`으로 남고 서버의 캡처 작업자가 이어서 받는다(이미 받은 파일은 보관소에서 다시 쓰고, 끝난 작업은 다시 하지 않음). 상태 `captures`: `total`·`pending`·`completed`·`failed`·`completed_now`·`interrupted`. 버튼 옆 `저장 폴더 확인 중 · 결과 받는 중 3/12`, 결과 요약 `결과 받는 중 n/N (백그라운드에서 계속 받습니다)`, 진행 로그 `captures_pending=n/N`.
+- 화면은 그 Case를 없는 것이 아니라 **결과 받는 중**으로 보인다. 자세한 규칙: [SCX 드라이브 §8.9](scx-drive.md).
+
 ## scoped Refresh와 실패
 
 `POST /api/folder-discovery/environments/refresh`는 `project_id`, `request_id`, `environment`를 받아 해당 의뢰 경계만 조사한다. 현재 storage root와 프로필 revision을 확인하고 제한된 scan, 구조·내용 fingerprint, 역할 판정을 마친 뒤 정상 snapshot을 활성화한다. 같은 fingerprint의 재시도는 기존 snapshot을 재사용한다. 내용이 바뀌어 capture가 새로 필요하면 과거 capture를 수정하지 않고 새 버전으로 보존한다. 내용 바이트 해시는 `.csv`, `.json`, `.jpg`, `.jpeg`, `.png`, `.mp4`, `.webm`, `.inc`, `.rad`에 적용한다. 그 외 확장자는 경로·크기·수정 시각으로 변화를 판정하므로 크기와 수정 시각이 모두 같게 바뀐 내용은 탐지하지 못할 수 있다.

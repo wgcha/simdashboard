@@ -56,7 +56,7 @@ function SelectField({ label, value, choices, onChange, disabled = false }: { la
   const unique = Array.from(new Map(choices.map((choice) => [choice.id, choice])).values())
   return <label className="simulation-dashboard__select"><span>{label}</span><Select controlSize="sm" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>{unique.some((choice) => !choice.id) ? null : <option value="">선택</option>}{unique.map((choice) => <option key={choice.id || 'folder-schema'} value={choice.id} disabled={choice.disabled} title={choice.reason ?? undefined}>{choice.label}</option>)}</Select></label>
 }
-function pathChoices(choices: DashboardChoice[]): HierarchyChoiceOption[] { return choices.map((item) => ({ id: item.id, label: item.label, title: item.relative_path ?? item.label, disabled: item.disabled, reason: item.reason })) }
+function pathChoices(choices: DashboardChoice[]): HierarchyChoiceOption[] { return choices.map((item) => ({ id: item.id, label: item.capture_pending ? `${item.label} · 결과 받는 중` : item.label, title: item.relative_path ?? item.label, disabled: item.disabled, reason: item.reason })) }
 function currentHierarchyChoice(item: DashboardChoice, activeCaptureId: string) {
   return item.capture_id == null || (activeCaptureId !== '' && item.capture_id === activeCaptureId)
 }
@@ -270,7 +270,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
 
   const componentLabel = componentChoices.find((item) => item.id === componentId)?.label
   const viewContext = tab === 'distribution' && !materialsActive && (activeView === 'summary' || activeView === 'compare' || activeView === 'cases') && componentLabel && basis ? `${componentLabel} · ${basisLabel(basis)}` : ''
-  const distributionEmpty = catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
+  const distributionEmpty = selectedCase?.capture_pending && !selectedCase.capture_count ? '결과 받는 중입니다. 드라이브에서 결과 파일을 받는 대로 자동으로 표시됩니다.' : catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
   const distribution = (section: 'summary' | 'compare') => <DistributionArea key={`${projectId}:${requestId}`} section={section} compareView={compareView} onCompareView={setCompareView} edges={edges} lines={lines} comparison={comparison} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={distributionEmpty} />
   const optionChoiceForCompare = options.find((item) => item.id === optionId)
   const comparePathReady = Boolean(activeCaptureId && runId && mode && componentId && basis && optionChoiceForCompare && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId))

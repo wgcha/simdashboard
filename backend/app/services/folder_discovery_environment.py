@@ -627,12 +627,19 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         "schema": schema,
     }
     encoded_snapshot = json.dumps(snapshot, ensure_ascii=False)
-    if capture_cases and not revision_only_unchanged:
+    capture_now = capture_cases and not revision_only_unchanged
+    # SCX drive (issue #55 follow-up, 2026-10-22): the snapshot is made from listings only; the Cases'
+    # captures become capture jobs of the request's registration (``capture_jobs``), so a slow download
+    # never fails or delays the folder check.  Without a live registration (legacy) they run here.
+    defer_to = (_scope_registration(conn, project_id, request_id, environment)
+                if capture_now and captures_deferred() else None)
+    if capture_now and defer_to is None:
         # SCX drive (D2): download the Cases' capture files before the snapshot transaction (no-op locally).
         drive_reads.require_content([
             str(node.get("relative_path") or "") for node in scoped_nodes
             if node.get("role_kind") == "SIMULATION_CASE" and node.get("status") == "CONFIRMED"
             and not is_final_segment(node)])
+    enqueued = 0
     created_at = now()
     if previous and previous.get("created_at") and previous["created_at"] >= created_at:
         from datetime import timedelta
@@ -650,7 +657,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
             conn, project_id, request_id, environment, schema=schema,
         )
         capture_errors = []
-        if capture_cases and not revision_only_unchanged:
+        if capture_now:
             storage_root_id = dashboard_capture._root_id(root)
             for case_node in scoped_nodes:
                 if case_node.get("role_kind") != "SIMULATION_CASE" or case_node.get("status") != "CONFIRMED":
@@ -672,6 +679,13 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
                 # change tries again.  Local mode keeps capturing registered Cases only.
                 new_case = owner is None
                 if new_case and not (drive_reads.active() and _has_result_files(fresh, case_path)):
+                    continue
+                if defer_to is not None:
+                    if new_case:
+                        _ensure_case_row(conn, defer_to, case_id, str(project_id), str(request_id), environment,
+                                         storage_root_id, case_path)
+                    enqueue_capture(conn, defer_to, case_id)
+                    enqueued += 1
                     continue
                 try:
                     dashboard_capture.create_capture(
@@ -702,9 +716,13 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         conn.execute("ROLLBACK")
         raise
     drive_reads.after_commit()   # SCX drive (L1): the snapshot is durable; later misses fail, never repeat the body
+    if enqueued:
+        from . import capture_jobs
+
+        capture_jobs.wake()
     return {**_refresh_result(snapshot_id, "REFRESHED", not revision_only_unchanged, schema,
                               structure_fingerprint, content_fingerprint, diff, location_projection),
-            "stat_fingerprint": quick_fingerprint}
+            "stat_fingerprint": quick_fingerprint, "captures_queued": enqueued}
 
 
 def _has_result_files(fresh: dict, case_path: str) -> bool:
@@ -1539,11 +1557,61 @@ def _registration_location_projection(conn, root, project_id: str, request_id: s
     )
 
 
+def captures_deferred(capture: bool = True) -> bool:
+    """SCX drive (issue #55 follow-up, 2026-10-22): Case captures run as background capture jobs.
+
+    Registration and refresh only list folders; the result files are downloaded and parsed by
+    ``capture_jobs`` (one worker, own bounded drive session per job, resumable).  Local mode keeps
+    capturing in the request (local reads are fast).
+    """
+    return bool(capture) and drive_reads.active()
+
+
+def _ensure_case_row(conn, registration_id: str, case_id: str, project_id: str, request_id: str,
+                     environment: str, storage_root_id: str, relative_path: str) -> None:
+    """A deferred capture's Case is visible right away (``결과 받는 중``), owned by the registration."""
+    if conn.execute("SELECT 1 FROM dashboard_cases WHERE id=?", [case_id]).fetchone():
+        return
+    _record_created_case(conn, registration_id, case_id)
+    name = PurePosixPath(relative_path).name
+    conn.execute(
+        "INSERT INTO dashboard_cases(id,project_id,request_id,storage_root_id,relative_path,environment,source_name,"
+        "metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        [case_id, project_id, request_id, storage_root_id, relative_path, environment, name,
+         json.dumps({"source_name": name}, ensure_ascii=False), now()])
+
+
+def enqueue_capture(conn, registration_id: str, case_id: str) -> str:
+    """One PENDING capture job per (registration, Case): an existing row is set back to PENDING."""
+    found = conn.execute("SELECT id FROM folder_environment_capture_jobs WHERE registration_id=? AND case_id=? "
+                         "ORDER BY created_at LIMIT 1", [registration_id, case_id]).fetchone()
+    if found:
+        conn.execute("UPDATE folder_environment_capture_jobs SET status='PENDING',error_code=NULL,updated_at=? "
+                     "WHERE id=? AND status<>'PENDING'", [now(), found[0]])
+        return str(found[0])
+    job_id = ident("environment-capture-job")
+    conn.execute("INSERT INTO folder_environment_capture_jobs(id,registration_id,case_id,load_case_id,run_case_id,"
+                 "run_option_id,option_label,option_status,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                 [job_id, registration_id, case_id, None, None, None, None, None, "PENDING", now(), now()])
+    return job_id
+
+
+def _scope_registration(conn, project_id: str, request_id: str, environment: str) -> str | None:
+    row = conn.execute(
+        "SELECT id FROM folder_environment_registrations WHERE project_id=? AND request_id=? AND environment=? "
+        "AND status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') ORDER BY created_at DESC,id DESC LIMIT 1",
+        [project_id, request_id, environment]).fetchone()
+    return str(row[0]) if row else None
+
+
 def register(conn, preview_id, idempotency_key, capture, principal, root, *, creator_membership=True,
              supersedes=()):
     """Register a preview; ``supersedes`` (automatic discovery, a renamed request folder) lists live
     registrations of the same project/request/environment that become ``DELETED`` tombstones in the
     same transaction. Only the registration rows change: no Case, capture or other data is deleted.
+
+    SCX drive (:func:`captures_deferred`): the registration only lists folders; its Cases are created
+    and get PENDING capture jobs that the background capture worker runs (``capture_jobs``).
     """
     actor = principal.user_id
     existing = conn.execute("SELECT id,preview_id FROM folder_environment_registrations WHERE idempotency_key=?", [idempotency_key]).fetchone()
@@ -1581,10 +1649,7 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
         legacy.fail("ENVIRONMENT_SCAN_STALE", "조사 이후 폴더 구조 또는 저장소가 변경되었습니다. 다시 조사하세요.")
     registration_id = ident("environment-registration")
     preview_saved = preview_data(preview_row[1]); plan_rows = preview_saved["rows"]
-    if capture:
-        # SCX drive (D2): download every Case's capture files before the registration commits, so
-        # the capture phase after the commit never has to wait for the drive (no-op in local mode).
-        drive_reads.require_content([r["relative_path"] for r in plan_rows if r["role_kind"] == "SIMULATION_CASE"])
+    deferred = captures_deferred(capture)
     if preview_saved.get("require_usage_review"):
         for entry in (item for item in plan_rows if item["role_kind"] == "SIMULATION_CASE"):
             _validated_usage_review(root, entry["relative_path"], preview_saved.get("usage_reviews", {}).get(entry["relative_path"]))
@@ -1620,13 +1685,22 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
             target = row.get("target_id") or stable("environment-target", scan_row[0], row["relative_path"], row["role_kind"])
             conn.execute("INSERT INTO folder_environment_registry(id,registration_id,root_key,relative_path,role_kind,parent_context_id,target_id,raw_name,option_status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)", [ident("environment-registry"), registration_id, scan_row[0], row["relative_path"], row["role_kind"], row.get("parent_context"), target, row["name"], row.get("option_status"), now()])
         if capture:
+            storage_root_id = dashboard_capture._root_id(root)
             for entry in [r for r in plan_rows if r["role_kind"] == "SIMULATION_CASE"]:
-                case_id = dashboard_capture._case_id(dashboard_capture._root_id(root), entry["relative_path"])
+                case_id = dashboard_capture._case_id(storage_root_id, entry["relative_path"])
                 conn.execute("INSERT INTO folder_environment_capture_jobs(id,registration_id,case_id,load_case_id,run_case_id,run_option_id,option_label,option_status,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", [ident("environment-capture-job"), registration_id, case_id, None, None, None, None, None, "PENDING", now(), now()])
+                if deferred:
+                    _ensure_case_row(conn, registration_id, case_id, str(project_id), str(request_id),
+                                     str(scan_row[2]), storage_root_id, entry["relative_path"])
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+    if deferred:
+        from . import capture_jobs
+
+        capture_jobs.wake()
+        return registration(conn, registration_id)
     # SCX drive (L1): the registration is durable; a capture read the session lacks now fails its
     # job (retryable, DRIVE_READ_NOT_PREPARED) instead of repeating the endpoint.
     with drive_reads.committed_phase():
@@ -1762,6 +1836,20 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
     context = registration(conn, registration_id)
     if context["status"] == "DELETED":
         legacy.fail("ENVIRONMENT_REGISTRATION_DELETED", "삭제된 등록은 다시 캡처할 수 없습니다.")
+    if captures_deferred():
+        # SCX drive (2026-10-22): the jobs go back to the background capture worker (결과 받는 중);
+        # the request never waits for downloads.
+        query = ("UPDATE folder_environment_capture_jobs SET status='PENDING',error_code=NULL,updated_at=? "
+                 "WHERE registration_id=? AND status IN ('FAILED','PENDING')")
+        args = [now(), registration_id]
+        if job_ids:
+            query += f" AND id IN ({','.join('?' for _ in job_ids)})"
+            args.extend(job_ids)
+        conn.execute(query, args)
+        from . import capture_jobs
+
+        capture_jobs.wake()
+        return registration(conn, registration_id)
     if principal is not None and root is not None and drive_reads.current_session() is not None:
         # SCX drive (D2): capture files first, before any job row changes (local mode: no session, skipped).
         retry_cases = rows(conn.execute(
@@ -1859,6 +1947,138 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                     notifications.capture_failed(conn, registration_id, principal.user_id)
                     conn.execute("COMMIT")
     return registration(conn, registration_id)
+
+
+# Codes of a capture that stopped because of the drive, not because of its files: the job stays PENDING
+# and the next capture-worker pass continues it (issue #55 follow-up, 2026-10-22).
+CAPTURE_INTERRUPTED_CODES = frozenset({
+    drive_reads.NOT_PREPARED, drive_reads.READ_DEADLINE, drive_reads.READ_CANCELLED, drive_reads.BUSY_CODE,
+    drive_reads.STAGING_FULL, "DRIVE_UNAVAILABLE", "SPDM_FILE_BUSY",
+})
+
+
+def _interrupted(code: str | None) -> bool:
+    """The capture stopped at the drive (a code above, or the session's deadline / cancel ended its reads)."""
+    if str(code or "") in CAPTURE_INTERRUPTED_CODES or drive_reads.stop_reason() is not None:
+        return True
+    # The session's last read round: a folder it could not list yet is not a failure of the Case.
+    return drive_reads.final_round() and str(code or "") in {"FOLDER_SCHEMA_SCAN_INCOMPLETE", "FOLDER_SCHEMA_SCAN_UNAVAILABLE"}
+
+
+def _job_payload(conn, root, job: dict, cache: dict) -> dict:
+    """Capture payload of one job: the newest context of its request (an active refresh snapshot made
+    after the registration, else the registration's own preview, as the inline capture used)."""
+    from . import folder_schema_resolver as resolver
+
+    root_key = root_identity(root)
+    project_id, request_id, environment = str(job["project_id"]), str(job["request_id"]), str(job["environment"])
+    case_row = conn.execute("SELECT relative_path FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone()
+    saved_preview = preview_data(job["rows_json"])
+    plan_rows = saved_preview.get("rows") or []
+    storage_root_id = dashboard_capture._root_id(root)
+    entry = next((row for row in plan_rows if row.get("role_kind") == "SIMULATION_CASE"
+                  and dashboard_capture._case_id(storage_root_id, row["relative_path"]) == job["case_id"]), None)
+    case_path = str(case_row[0]) if case_row else (entry["relative_path"] if entry else None)
+    if not case_path:
+        raise dashboard_capture.DashboardCaptureError("CAPTURE_CONTEXT_MISSING", "수집할 Case를 찾을 수 없습니다.")
+    key = ("snapshot", project_id, request_id, environment)
+    if key not in cache:
+        active = resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+        schema = active["schema_json"] if active and active.get("created_at") and job["registered_at"] \
+            and active["created_at"] > job["registered_at"] else None
+        cache[key] = (schema, resolver.resolve_request_locations(conn, project_id, request_id, environment, schema=schema)
+                      if isinstance(schema, dict) else None)
+    schema, projection = cache[key]
+    if isinstance(schema, dict) and any(
+            node.get("role_kind") == "SIMULATION_CASE" and node.get("status") == "CONFIRMED"
+            and not is_final_segment(node)
+            and resolver._fold(str(node.get("relative_path") or "")) == resolver._fold(case_path)
+            for node in schema.get("nodes") or []):
+        return _case_capture_payload(root, schema, projection, case_path)
+    if entry is None:
+        raise dashboard_capture.DashboardCaptureError("CAPTURE_CONTEXT_MISSING", "수집할 Case를 등록 계획에서 찾을 수 없습니다.")
+    current = conn.execute("SELECT revision FROM folder_environment_profiles WHERE id=?", [job["profile_id"]]).fetchone()
+    if not current or int(current[0]) != int(job["profile_revision"]):
+        raise dashboard_capture.DashboardCaptureError("ENVIRONMENT_PROFILE_STALE", "저장 규칙이 변경되었습니다. 다시 조사하세요.")
+    key = ("registration", job["registration_id"])
+    if key not in cache:
+        try:
+            cache[key] = _registration_location_projection(conn, root, project_id, request_id, environment,
+                                                           str(job["scan_id"]), saved_preview)
+        except Exception as exc:  # noqa: BLE001 - the job records the code (as the inline capture did)
+            raise dashboard_capture.DashboardCaptureError(_capture_context_error_code(exc), str(exc)[:200]) from exc
+    projection = cache[key]
+    return _case_capture_payload(root, projection.schema, projection, entry["relative_path"],
+                                 saved_preview.get("usage_reviews", {}).get(entry["relative_path"]))
+
+
+def capture_job(conn, job_id: str, root, *, actor: str, cache: dict | None = None) -> dict:
+    """Run one PENDING capture job (``capture_jobs`` worker, inside its drive read session).
+
+    The Case's result files are prepared (downloaded) before any write, so a read miss repeats the
+    session body without a durable change.  Outcome ``COMPLETED``/``FAILED`` as before; ``INTERRUPTED``
+    when the drive stopped it (deadline, cancel, busy): the job stays PENDING for the next pass.
+    """
+    cache = {} if cache is None else cache
+    found = rows(conn.execute(
+        "SELECT j.id,j.registration_id,j.case_id,j.status,r.status AS registration_status,r.project_id,r.request_id,"
+        "r.environment,r.created_at AS registered_at,p.rows_json,s.id AS scan_id,s.root_key,s.profile_id,s.profile_revision "
+        "FROM folder_environment_capture_jobs j JOIN folder_environment_registrations r ON r.id=j.registration_id "
+        "JOIN folder_environment_previews p ON p.id=r.preview_id JOIN folder_environment_scans s ON s.id=p.scan_id "
+        "WHERE j.id=?", [job_id]))
+    if not found or found[0]["status"] != "PENDING" or found[0]["registration_status"] == "DELETED":
+        return {"status": "SKIPPED"}
+    job = found[0]
+
+    def finish(status: str, code: str | None = None, capture_id: str | None = None) -> dict:
+        conn.execute("UPDATE folder_environment_capture_jobs SET status=?,error_code=?,capture_id=COALESCE(?,capture_id),"
+                     "updated_at=? WHERE id=?", [status, code, capture_id, now(), job_id])
+        if status == "FAILED":
+            notifications.capture_failed(conn, str(job["registration_id"]), actor)
+        return {"status": status, "code": code, "capture_id": capture_id}
+
+    def interrupted(code: str) -> dict:
+        # Back of the queue, no error shown: the next pass continues (downloads kept in the blob store).
+        conn.execute("UPDATE folder_environment_capture_jobs SET status='PENDING',error_code=NULL,updated_at=? WHERE id=?",
+                     [now(), job_id])
+        _logger.info("Capture job interrupted job=%s code=%s", job_id, code)
+        return {"status": "INTERRUPTED", "code": code}
+
+    if root_identity(root) != job["root_key"]:
+        return finish("FAILED", "ENVIRONMENT_ROOT_CHANGED")
+    try:
+        payload = _job_payload(conn, root, job, cache)
+    except Exception as exc:  # noqa: BLE001 - a context the job cannot build is its failure (code kept)
+        code = exc.code if isinstance(exc, dashboard_capture.DashboardCaptureError) else _capture_context_error_code(exc)
+        return interrupted(code) if _interrupted(code) else finish("FAILED", code)
+    # Download before writing: a miss here repeats the session body (nothing is durable yet).
+    drive_reads.require_content([str(payload["root_relative_path"])])
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute("UPDATE folder_environment_capture_jobs SET status='RUNNING',updated_at=? WHERE id=?", [now(), job_id])
+        if not conn.execute("SELECT 1 FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone():
+            _record_created_case(conn, str(job["registration_id"]), str(job["case_id"]))
+        result = dashboard_capture.create_capture(conn, payload, actor=actor)
+        conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',error_code=NULL,capture_id=?,updated_at=? "
+                     "WHERE id=?", [result["id"], now(), job_id])
+        conn.execute("COMMIT")
+        return {"status": "COMPLETED", "capture_id": result["id"]}
+    except dashboard_capture.DashboardCaptureError as exc:
+        conn.execute("ROLLBACK")
+        conn.execute("BEGIN TRANSACTION")
+        outcome = interrupted(exc.code) if _interrupted(exc.code) else finish("FAILED", exc.code)
+        conn.execute("COMMIT")
+        return outcome
+    except Exception:  # noqa: BLE001 - one Case never stops the others
+        conn.execute("ROLLBACK")
+        _logger.warning("Capture job failed unexpectedly job=%s", job_id, exc_info=True)
+        conn.execute("BEGIN TRANSACTION")
+        outcome = finish("FAILED", "CAPTURE_UNEXPECTED_ERROR")
+        conn.execute("COMMIT")
+        return outcome
+    except BaseException:   # DriveReadMiss: the session downloads and repeats the body
+        conn.execute("ROLLBACK")
+        raise
 
 
 def usage_review(conn, preview_id, case_relative_path, selection, selected_sources, metric_paths, excludes, acknowledge_partial, root):

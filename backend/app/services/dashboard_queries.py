@@ -177,6 +177,16 @@ def catalog(conn, request_id, environment, project_id=None):
             dashboard_case_ids[str(case_id)] = str(case["id"])
     for case in schema_cases.values():
         result["cases"].append(case)
+    # SCX drive: a Case whose capture job is still pending is shown as 결과 받는 중 (capture_jobs).
+    from .capture_jobs import pending_cases
+    from .dashboard_capture import _case_id
+    pending = pending_cases(conn, request_id, environment)
+    for case in result["cases"] if pending else []:
+        dashboard_id = case.get("dashboard_case_id") or (
+            _case_id(current_storage_root_id, str(case["relative_path"]))
+            if current_storage_root_id and case.get("relative_path") else None)
+        if dashboard_id in pending:
+            case["capture_pending"] = True
 
     case_choices = {str(item["id"]): item for item in result["cases"]}
 

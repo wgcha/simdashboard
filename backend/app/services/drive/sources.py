@@ -34,6 +34,7 @@ step is a short connection of its own.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
@@ -48,6 +49,10 @@ from .reads import Accepted, Version, epoch_us, normal_sha1, version_of
 _logger = logging.getLogger(__name__)
 AUTO_ACTOR = "auto-sync"
 MAX_SCOPE_FILES = 50_000
+# Content comparisons (size/time tokens without sha1) of one classification: at most this long, and never
+# after the session's deadline; the files left over keep their registered version until the next check
+# (issue #55 follow-up, 2026-10-22: downloads must not use up the time the folder scan needs).
+COMPARE_SECONDS = 60.0
 # Same set as folder_discovery_scan.RESULT_RELEVANT_EXTENSIONS (results, media, decks, reports).
 RELEVANT_SUFFIXES = frozenset({".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm", ".inc", ".rad",
                                ".pdf", ".ppt", ".pptx", ".xlsx"})
@@ -320,6 +325,9 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
     request_path, path_ambiguous = resolve_request_folder(session, stored_path)
     session.scope = request_path
     session.scope_ids = (str(project_id), str(request_id))
+    # Every listing of the request tree first (FINAL included, which the folder check reads for its roles),
+    # before any download below: a slow download can then never leave the scan without its listings.
+    reads.require_subtree(request_path)
     files, skipped = _walk_scope(session, request_path)
     with connect() as conn:
         registered = _scope_rows(conn, session.root_key, request_path, stored_path=stored_path,
@@ -345,6 +353,7 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
     inserts: list[tuple[str, Version]] = []
     updates: list[tuple[str, dict[str, Any]]] = []
     renames = {str(registered[new]["id"]): new for new in respelled.values()}
+    compare_until = time.monotonic() + COMPARE_SECONDS
     for rel, entry in sorted(files.items()):
         live = version_of(entry)
         row = registered.get(rel)
@@ -355,6 +364,8 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
         same = accepted.same_as(live)
         if not same and not (live.sha1 and accepted.sha1) and row.get("sha256"):
             # size/time differ but sha1 cannot decide: compare the content (05 §4)
+            if reads.stop_reason() is not None or time.monotonic() > compare_until:
+                continue   # compared by the next check; until then the registered version is read
             try:
                 _size, digest = reads.local_copy_sha256(session.spdm_root, rel, live, masked=False,
                                                         max_bytes=reads.MAX_FILE_BYTES)

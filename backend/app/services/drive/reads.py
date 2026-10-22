@@ -280,6 +280,9 @@ class DriveReadSession:
     final_round: bool = False
     rounds: int = 0
     ephemeral: bool = False
+    # Capture job sessions (issue #55 follow-up, 2026-10-22): every download is kept in the server blob
+    # store and recorded, so a job interrupted by its deadline reuses it next time instead of downloading again.
+    resumable: bool = False
     _counter: int = 0
 
     def next_dir(self) -> Path:
@@ -478,10 +481,13 @@ def after_commit() -> None:
 
 
 def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | None = None,
-        rounds: int = MAX_ROUNDS, scope: str | None = None, priority: str = "INTERACTIVE") -> T:
+        rounds: int = MAX_ROUNDS, scope: str | None = None, priority: str = "INTERACTIVE",
+        resumable: bool = False) -> T:
     """Run ``body`` (which opens its own DB connections) with a drive read session (module docstring).
 
     Outside scx mode, or inside an already open session, this is just ``body()``.
+    ``resumable`` (capture jobs): downloads go to the blob store and are recorded even when the body
+    ends without using them (a deadline), so the next session reuses them (:func:`_download`).
     """
     if not active() or current_session() is not None:
         return body()
@@ -489,6 +495,7 @@ def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | 
         raise RuntimeError("drive read session must start without an open database connection")
     _cleanup_orphans()
     session = _new_session(priority=priority, scope=scope)
+    session.resumable = resumable
     token = _session_var.set(session)
     try:
         load_overlay(session)
@@ -513,6 +520,8 @@ def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | 
             return result
         raise RuntimeError("unreachable: the final round never raises DriveReadMiss")
     finally:
+        if session.resumable and session.downloads and not connection_held():
+            _record_downloads(session)   # kept in the blob store: the next attempt reuses them
         _leave_session(token)
         _close_session(session)
 
@@ -1060,7 +1069,8 @@ def _recorded_blob(session: DriveReadSession, rel: str, version: Version) -> Loc
 
 def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Version, max_bytes: int) -> LocalCopy:
     key = (rel, version.token)
-    if version.size is not None and version.size > BLOB_THRESHOLD_BYTES:
+    if session.resumable or (version.size is not None and version.size > BLOB_THRESHOLD_BYTES):
+        # Same drive version already downloaded (a large file, or by an interrupted capture job): no drive call.
         reused = _recorded_blob(session, rel, version)
         if reused is not None:
             session.files[key] = reused
@@ -1082,7 +1092,7 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
     stored: str | None = None
     copy = LocalCopy(path=local, sha256=sha256, size=size)
     session.staged_bytes += size
-    if size > BLOB_THRESHOLD_BYTES:
+    if size > BLOB_THRESHOLD_BYTES or session.resumable:
         blob = blob_store().put(local, sha256)
         session.staged_bytes -= size   # moved out of the session folder into the blob store
         copy = LocalCopy(path=blob, sha256=sha256, size=size, blob=True)
