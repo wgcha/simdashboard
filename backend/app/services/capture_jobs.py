@@ -265,7 +265,7 @@ def _loop(idle: int) -> None:
         if storage_rescan.running():
             continue   # the rescan runs the jobs in its CAPTURE phase
         try:
-            run_pending(cancel=_stop, should_stop=storage_rescan.running)
+            run_pending(cancel=storage_rescan.yield_signal(_stop), should_stop=storage_rescan.running)
         except Exception:  # noqa: BLE001 - the thread never dies
             logger.warning("Capture worker pass failed", exc_info=True)
 

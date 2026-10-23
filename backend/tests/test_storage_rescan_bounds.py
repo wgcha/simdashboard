@@ -247,3 +247,18 @@ def test_content_token_needs_no_local_name_but_a_local_read_names_the_file(scx):
     with pytest.raises(SpdmStorageError) as caught:
         fs.read_stable("A/odd?name.csv")
     assert caught.value.code == "SPDM_INVALID_PATH" and "A/odd?name.csv" in str(caught.value)
+
+
+def test_background_drive_work_steps_aside_once_a_rescan_runs(monkeypatch):
+    """Issue #51 (2026-10-23 18:22): a rescan waited 3 min at ROUND_START behind a capture job's session."""
+    shutdown = threading.Event()
+    signal = storage_rescan.yield_signal(shutdown)
+    running = {"on": False}
+    monkeypatch.setattr(storage_rescan, "running", lambda: running["on"])
+    with drive_reads.bounded(cancel=signal):
+        assert drive_reads.stop_reason() is None
+        running["on"] = True
+        assert drive_reads.stop_reason() == drive_reads.READ_CANCELLED
+        running["on"] = False
+        shutdown.set()
+        assert drive_reads.stop_reason() == drive_reads.READ_CANCELLED

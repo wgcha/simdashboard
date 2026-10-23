@@ -1645,7 +1645,12 @@ def discover(*, force: bool = False, connection_factory=None, fresh: bool = Fals
         # Issue #51: a run needs about one round per new request for its tree and one for its capture
         # files, plus a few for the upper levels (DISCOVERY_READ_ROUNDS).
         try:
-            with drive_reads.bounded(deadline=time.monotonic() + budget + DRIVE_READ_SLACK_SECONDS):
+            from . import storage_rescan
+
+            # The rescan's own rounds (``fresh``) keep its bounds; every other run steps aside for it.
+            yield_cancel = None if fresh else storage_rescan.yield_signal()
+            with drive_reads.bounded(deadline=time.monotonic() + budget + DRIVE_READ_SLACK_SECONDS,
+                                     cancel=yield_cancel):
                 result = drive_reads.run(run_once, priority="BACKGROUND", rounds=DISCOVERY_READ_ROUNDS)
         except Exception as exc:  # noqa: BLE001 - issue #51: another background drive activity kept the worker
             if getattr(exc, "code", None) != "DRIVE_BUSY":

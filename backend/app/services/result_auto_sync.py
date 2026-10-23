@@ -78,8 +78,8 @@ def run_once(stop_event: threading.Event | None = None) -> dict[str, Any]:
         logger.warning("Result auto-sync: could not list registered requests", exc_info=True)
         return summary
     for project_id, request_id, environment in scopes:
-        if stop_event is not None and stop_event.is_set():
-            break
+        if (stop_event is not None and stop_event.is_set()) or storage_rescan.running():
+            break   # issue #51: the administrator's rescan started; it checks every request itself
         summary["scopes"] += 1
         try:
             result = folder_auto_sync.sync_scope(project_id, request_id, environment, ACTOR)

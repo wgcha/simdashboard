@@ -149,6 +149,26 @@ def running() -> bool:
         return _state.get("status") == "RUNNING"
 
 
+class _YieldToRescan:
+    """Cancel signal (``is_set``) of background drive work that must step aside for the administrator's rescan.
+
+    Issue #51 (2026-10-23 18:22 log): a rescan sat at ``ROUND_START`` with no drive call for 3 minutes
+    while a capture job (and the discovery behind it) kept the one background drive lane.  Background
+    work bounded with this signal stops at its next drive call once a rescan runs; ``extra`` (e.g. the
+    worker's shutdown event) also counts.
+    """
+
+    def __init__(self, extra: threading.Event | None = None) -> None:
+        self.extra = extra
+
+    def is_set(self) -> bool:
+        return running() or (self.extra is not None and self.extra.is_set())
+
+
+def yield_signal(extra: threading.Event | None = None) -> _YieldToRescan:
+    return _YieldToRescan(extra)
+
+
 def _update(**fields: Any) -> None:
     with _lock:
         _state.update(fields)
