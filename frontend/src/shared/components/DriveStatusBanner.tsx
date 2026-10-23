@@ -13,7 +13,8 @@ const BANNER_TEXT: Record<string, string> = {
 const ADMIN_AUTH_TEXT = '드라이브 인증이 필요합니다.'
 
 /**
- * Polls GET /api/drive/status every 60 s; hidden in none mode and for OK/DEGRADED/UNKNOWN.
+ * Polls GET /api/drive/status every 60 s while the tab is visible (the server caches worker health
+ * for 20 s, issue #51); hidden in none mode and for OK/DEGRADED/UNKNOWN.
  * ``adminAction`` (issue #50) is shown to global admins next to AUTH_REQUIRED — the app
  * shell passes the [다시 연결] button so this shared component stays feature-agnostic.
  */
@@ -25,6 +26,11 @@ export function DriveStatusBanner({ adminAction }: { adminAction?: ReactNode } =
     let timer: number | undefined
     const controller = new AbortController()
     const poll = async () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        // Issue #51: background tabs do not poll (each open tab used to add one status request per minute).
+        timer = window.setTimeout(() => { void poll() }, DRIVE_STATUS_POLL_MS)
+        return
+      }
       try {
         const status = await driveApi.userStatus(controller.signal)
         if (stopped) return

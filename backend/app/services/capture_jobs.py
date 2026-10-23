@@ -220,7 +220,12 @@ def run_pending(*, budget_seconds: float = PASS_SECONDS, session_seconds: float 
                 with drive_reads.bounded(cancel=cancel, observer=observer):
                     _run_registration(registration_id, min(deadline, time.monotonic() + session_seconds), tally,
                                       should_stop)
-            except Exception:  # noqa: BLE001 - one registration never stops the others
+            except Exception as exc:  # noqa: BLE001 - one registration never stops the others
+                if getattr(exc, "code", None) == "DRIVE_BUSY":
+                    # Issue #51: another background drive activity kept the worker; the jobs stay pending.
+                    logger.info("Capture jobs of registration %s deferred: the drive is busy", registration_id)
+                    status = "BUSY"
+                    break
                 logger.warning("Capture jobs of registration %s failed", registration_id, exc_info=True)
             if progress is not None:
                 progress(dict(tally))

@@ -400,8 +400,9 @@ def _error_info(error: BaseException) -> DriveErrorInfo:
 
 
 def _health(gateway: Any) -> dict[str, Any]:
+    """Cached worker health (issue #51): status polls never queue a worker call next to real drive calls."""
     try:
-        return drive_gateway.health_dict(gateway.health()) or {"state": "UNAVAILABLE"}
+        return drive_gateway.cached_health(gateway) or {"state": "UNAVAILABLE"}
     except Exception as error:
         return {"state": "UNAVAILABLE", "last_error_code": drive_gateway.drive_error_code(error) or "INTERNAL"}
 

@@ -42,6 +42,7 @@ from ..storage import server_local
 from ..storage.provider import SpdmStorageError
 from . import auth as drive_auth
 from . import gateway as drive_gateway
+from . import lanes as drive_lanes
 from . import upload_queue
 from . import writes as drive_writes
 from .config import DriveConfigError, RelaySettings, check_relay_rel_path, drive_mode, relay_settings
@@ -414,14 +415,25 @@ def _read_call(fn: Callable[[Any], T], op: str, rel: str, *, job_lookup: bool = 
     """A read (or job status) call: one refresh-and-retry on ``AUTH_REQUIRED`` like the dashboard reads."""
     gateway = _ready()
     try:
-        try:
-            return fn(gateway)
-        except Exception as error:  # noqa: BLE001
-            if drive_gateway.drive_error_code(error) != "AUTH_REQUIRED" or not drive_auth.auto_refresh_once(gateway):
-                raise
-            return fn(drive_gateway.get_drive_gateway() or gateway)
+        # Issue #51: the relay's reads share the worker slots with the dashboard (screens first).
+        with drive_lanes.call_slot(drive_lanes.BACKGROUND):
+            try:
+                return fn(gateway)
+            except Exception as error:  # noqa: BLE001
+                if drive_gateway.drive_error_code(error) != "AUTH_REQUIRED":
+                    raise
+                outcome = drive_auth.auto_refresh(gateway)
+                if outcome == drive_auth.TRANSIENT:
+                    raise RelayError(503, "DRIVE_UNAVAILABLE", "드라이브 토큰 갱신이 잠시 실패했습니다. 잠시 후 다시 시도하세요.",
+                                     retryable=True, retry_after=30) from None
+                if outcome != drive_auth.REFRESHED:
+                    raise
+                return fn(drive_gateway.get_drive_gateway() or gateway)
     except RelayError:
         raise
+    except SpdmStorageError as error:   # no free worker slot in time
+        raise RelayError(503, str(error.code), drive_gateway.safe_error_message(error), retryable=True,
+                         retry_after=5) from None
     except Exception as error:  # noqa: BLE001 - adapter DriveError carries a code
         if drive_gateway.drive_error_code(error) is None:
             logger.warning("SCX relay %s raised %s: rel=%s", op, type(error).__name__, rel)
@@ -489,7 +501,7 @@ def health() -> dict[str, Any]:
     drive = None
     if gateway is not None:
         try:
-            drive = drive_gateway.health_dict(gateway.health())
+            drive = drive_gateway.cached_health(gateway)   # issue #51: at most one worker call per window
         except Exception:  # noqa: BLE001 - status only
             drive = {"state": "UNAVAILABLE", "last_success_at": None, "last_error_code": None, "last_error_at": None,
                      "token_refreshed_at": None, "queue_depth": 0, "in_flight": 0}

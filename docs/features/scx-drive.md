@@ -106,6 +106,8 @@
 - SDK는 세션을 만들 때마다 refresh 토큰을 회전시킨다. 워커가 알리는 새 토큰은 `DbTokenStore.save()`가 **자기 DB 연결로 즉시 커밋**한다(`updated_by='worker'`). 저장 실패는 ERROR 로그와 관리 화면 경고로 표시한다.
 - **세대 번호로 낡은 저장 차단**: 관리자 등록(`PUT`)마다 행의 `generation`을 이전 값보다 큰 새 값(이전+1과 현재 시각 µs 중 큰 값 — 삭제 뒤 재등록에도 재사용되지 않음)으로 쓴다. 게이트웨이마다 따로 만드는 토큰 저장소(`DbTokenStore.for_gateway`)는 마지막으로 읽은 세대를 기억하고, 워커의 `save()`는 `UPDATE … WHERE id='scx' AND generation=<읽은 세대>`만 한다(INSERT 없음). 0행이면 토큰 내용 없이 경고 로그만 남기고 버린다. 그래서 삭제 뒤 늦게 도착한 회전 토큰이 행을 되살리거나, 이전 계정의 회전 토큰이 새로 등록한 계정을 덮어쓰지 않는다.
 - **삭제·재등록 시 게이트웨이 초기화**: `DELETE`와 `PUT`은 저장 직후 `WorkerDriveGateway`를 닫고 버린다(워커가 메모리의 이전 토큰을 계속 쓰지 않게). 다음 드라이브 호출이 새 게이트웨이를 만들어 현재 행을 읽는다. 삭제 후 첫 호출은 `AUTH_REQUIRED`.
+- **`load()`는 잠깐의 DB 문제로 "토큰 없음"을 답하지 않는다(이슈 #51, 2026-10-23)**: 워커를 다시 띄울 때(`init`)와 `refresh_now`에서 어댑터는 `TokenStore.load()`의 답을 그대로 쓰므로, `None`이나 refresh 토큰 없는 번들이면 "no stored token to refresh"(재로그인 필요)가 된다. 읽기 실패(PostgreSQL 요청 풀 대기 시간 초과·끊긴 연결)는 0.2·0.5초 뒤 두 번 더 읽고, 그래도 안 되면 이 프로세스의 어느 저장소든 마지막으로 읽거나 저장한 같은 세대의 번들(공유 `StoreStatus.last_good`, 행 삭제·`MISSING`이면 비움)을 준다. `save()`는 access 토큰이 빈 번들을 버리고, refresh 토큰이 없는 번들은 저장된 refresh 토큰을 유지한 채 저장한다(갱신 실패가 행을 비우는 일 없음). 저장된 토큰에 refresh 토큰이 없으면 `load()`가 경고 로그를 남긴다.
+- **갱신 실패의 구분(이슈 #51)**: 자동 갱신(`auth.auto_refresh`, §4.1)이 SSO 5xx(`BAD_GATEWAY`)·시간 초과·연결 실패·`RATE_LIMITED`로 실패하면 **일시 오류**다: 저장된 토큰은 그대로, 그 `AUTH_REQUIRED` 회차를 소모하지 않고 30초(`TRANSIENT_REFRESH_SECONDS`) 동안 다시 묻지 않으며, 읽기는 `DRIVE_UNAVAILABLE`(재시도), 대기열은 `RETRY`(일시 정지 아님), relay는 503 `retryable`로 답한다. `AUTH_REFRESH_EXPIRED`(invalid_grant)·`AUTH_INVALID_CREDENTIALS` 등 확정 거절만 재로그인 필요다. 워커가 "no stored token"으로 거절했는데 DB 행에는 refresh 토큰이 있으면(워커 재시작으로 상태를 잃음) 회차당 한 번 게이트웨이를 다시 만들어 저장된 토큰으로 `init`한다.
 - 어댑터에는 경계에서만 어댑터의 `TokenBundle`(repr에 토큰이 보일 수 있음)로 바꿔 넘기고, 대시보드 안에서는 repr이 토큰을 가리는 `LocalTokenBundle`만 쓴다. 오류 문구는 `safe_error_message`가 `Bearer <값>`과 `eyJ…` 형태(JWT)를 한 번 더 가린다.
 - API 응답·로그·감사 기록에 토큰 값을 넣지 않는다. 감사: `DRIVE_CREDENTIALS_REGISTERED`(계정 표시명·발급 시각·서버 호스트·key_id), `DRIVE_CREDENTIALS_DELETED`, `DRIVE_CHECK_RUN`.
 - 새 토큰을 등록하면 게이트웨이를 새로 만들므로 등록 직후 연결 시험부터 새 토큰을 쓴다. 요청 본문은 64 KiB까지만 읽는다(`Content-Length`로 먼저 거부, 스트림도 상한). 너무 깊게 중첩된 JSON도 400 `DRIVE_CREDENTIALS_INVALID`.
@@ -186,7 +188,8 @@ HPC SSO가 drive-desktop 클라이언트의 아이디·비밀번호 로그인을
 | `AUTH_REQUIRED` (토큰 없음·키 변경·갱신 실패) | 재로그인 필요 | "드라이브 인증이 필요합니다. 관리자에게 문의하세요." |
 | `UNKNOWN` (토큰은 있으나 워커가 아직 한 번도 호출되지 않음) | 확인 전 | 없음 |
 
-- 배너는 `GET /api/drive/status`를 60초마다 조회한다(로그인 사용자, 상태 문자열과 `writes_available`·`writes_enabled`). 화면은 이 값으로 읽기 전용 안내를 띄우고 업로드·폴더 만들기·Final 지정 버튼을 끈다(§8.6). none 모드면 첫 응답 후 조회를 멈춘다. 상태 조회는 드라이브를 호출하지 않는다(`health()`만).
+- 배너는 `GET /api/drive/status`를 60초마다 조회한다(로그인 사용자, 상태 문자열과 `writes_available`·`writes_enabled`; 숨은 탭은 조회하지 않음). 화면은 이 값으로 읽기 전용 안내를 띄우고 업로드·폴더 만들기·Final 지정 버튼을 끈다(§8.6). none 모드면 첫 응답 후 조회를 멈춘다. 상태 조회는 드라이브를 호출하지 않는다(`health()`만).
+- **health 캐시(이슈 #51, 2026-10-23)**: 어댑터의 `health()`는 워커가 떠 있으면 IPC로 `health` op를 보내(2초 제한) 동시성 1 워커에서 긴 `download_to`/`list_dir` 뒤에 줄을 선다. 그래서 `/api/drive/status`·`/api/admin/drive/status`·`/api/admin/drive/auth`·relay `health`(PhysicsAI가 수 초마다 조회)·자동 갱신의 성공 시각 확인은 모두 `gateway.cached_health()` 한 곳을 거친다: 20초(`HEALTH_CACHE_SECONDS`, 자동 갱신 판단은 5초) 안의 값은 다시 묻지 않고, 동시에 온 조회는 한 번만 묻고 나머지는 직전 값을 받는다. 실패도 `UNAVAILABLE`로 캐시. 게이트웨이를 만들지 않으며(없으면 `None`), 게이트웨이 교체·종료 때 비운다.
 - 상태 조회(`/api/drive/status`, `/api/admin/drive/status`)는 **게이트웨이를 만들지 않는다**. 관리자 동작(토큰 등록·연결 시험·점검)이나 이후 드라이브 기능이 이미 만든 게이트웨이의 `health()`만 읽는다. 그래서 재시작 뒤 첫 드라이브 호출 전에는 토큰이 있으면 `UNKNOWN`(배너 없음)이다. 조회 중 어떤 오류(어댑터·설정·DB)도 500이 아니라 `UNAVAILABLE`로 응답한다(백오프 재생성보다 단순하고, 조회마다 워커를 띄울 수 없음).
 - 오류 코드 한글 문구는 `frontend/src/shared/api/drive.ts`의 `DRIVE_ERROR_MESSAGES`(integration 06 §2).
 
@@ -335,6 +338,17 @@ HPC SSO가 drive-desktop 클라이언트의 아이디·비밀번호 로그인을
 - **Case 경로 선택(2026-10-23):** 받는 중이거나 실패한 Case도 경로(Case › 하중경우 › Run Case › Run Option)에서 사라지지 않는다. 카탈로그는 Folder Schema 스냅샷이나 수집 결과가 없는 Case의 하중경우·Run Case·Run Option을 등록 때 저장한 폴더(`folder_environment_registry`)에서 채운다(`dashboard_queries._add_registry_hierarchy`, `capture_id=null`). 결과가 없는 Case와 그 하위 선택지는 선택 가능하되 `· 결과 받는 중`(작업 대기, `cases[].capture_pending`) 또는 `· 결과 없음`(작업 실패 `cases[].capture_failed`·결과 파일 없음)으로 표시하고 이유를 툴팁에 보인다. 선택하면 빈 결과 안내(받는 중/받지 못함)를 보인다. 후보가 정말 하나일 때만 고정 글자로 보인다(`HierarchyChoice`).
 - local 모드는 그대로(등록·새로고침이 그 자리에서 수집; 작업자는 아무것도 하지 않음).
 - 회귀 시험: `tests/test_capture_jobs_drive.py`(다운로드 지연 + Scene 많은 Case 둘, 수 초 한도: 예전 코드는 `DISCOVERY_TIME_BUDGET`·확인 실패, 지금은 바로 등록되고 여러 번의 짧은 작업으로 모든 파일을 한 번씩만 받아 수집 완료).
+
+### 8.10 동시성 1 워커 앞의 줄 세우기 (이슈 #51, 2026-10-23)
+
+**현장 증상:** 새로고침이 끝난 뒤에도 5분 자동 반영·화면의 `/sync`·결과 받기 작업자·relay가 동시에 읽어 어댑터 큐가 `OVERLOADED`("queue wait timeout", `DRIVE_BUSY`)로 답했고, 폴더 확인이 `FOLDER_SCHEMA_SCAN_UNAVAILABLE`/`…_INCOMPLETE`(…/FINAL `DRIVE_READ_NOT_PREPARED` 외 45건)로 실패했다.
+
+**대시보드 쪽 규칙(`app/services/drive/lanes.py`):**
+
+- **호출 자리(`call_slot`)**: 이 프로세스가 워커에 동시에 넘기는 호출은 `SIMDASH_SCX_MAX_CONCURRENCY`개까지. 화면 읽기(INTERACTIVE 세션)가 기다리는 동안 BACKGROUND 호출은 시작하지 않는다. 읽기(`reads._call_once`), 업로드 대기열 항목(`upload_queue._execute`, BACKGROUND), relay 읽기(BACKGROUND)가 모두 거친다. 자리를 기다리는 한도(화면 30초, 뒤 작업 120초 또는 작업 한도)가 지나면 대시보드가 `DRIVE_BUSY`로 답한다(워커 큐 시간 초과 대신).
+- **뒤 작업 하나(`background_activity`)**: BACKGROUND 읽기 세션(`reads.run(priority="BACKGROUND")` — 의뢰 하나의 확인, 결과 받기 작업 세션 하나, 새로고침의 한 단계, 자동 탐색, OptiStruct 해석)은 한 번에 하나만 돈다. 기다리는 순서대로(FIFO) 차례가 오며 같은 스레드는 중첩 가능. 기다림은 작업 한도(`bounded`)까지, 없으면 60초; 폴더 확인(`sync_drive`)은 20초(`SYNC_ACTIVITY_WAIT_SECONDS`).
+- **`DRIVE_BUSY`는 "잠시 후 다시 확인"**: 폴더 확인이 바쁜 드라이브 때문에 끝나지 못하면(원인 사슬의 `DRIVE_BUSY`, 또는 이번 확인의 호출이 `DRIVE_BUSY`를 받은 채 `SCAN_UNAVAILABLE`/`SCAN_INCOMPLETE`/`NOT_PREPARED`/`READ_DEADLINE`) 결과는 `FAILED` + `code=DRIVE_BUSY`, `retry: true`, "드라이브 요청이 많아 지금은 폴더를 확인하지 못했습니다. 잠시 후 다시 확인합니다."이고 로그는 INFO `Folder sync deferred (drive busy, …)`(WARNING `Folder sync FAILED` 아님). 활성 스냅샷은 그대로. 결과 받기 작업자는 같은 상황에서 작업을 `PENDING`으로 둔 채 이번 차례를 끝내고(`status=BUSY`), 자동 탐색은 `DRIVE_BUSY` 검토 항목과 함께 다음 확인으로 미룬다.
+- 시험: `tests/test_drive_issue51.py`.
 
 ## 9. 코드 위치와 경계
 

@@ -71,6 +71,7 @@ from ..storage.provider import SpdmStorageError
 from ..storage.server_local import BlobStore
 from . import auth as drive_auth
 from . import gateway as drive_gateway
+from . import lanes as drive_lanes
 from .config import validate_drive_rel_path
 
 logger = logging.getLogger("app.services.drive.reads")
@@ -482,17 +483,35 @@ def after_commit() -> None:
 
 def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | None = None,
         rounds: int = MAX_ROUNDS, scope: str | None = None, priority: str = "INTERACTIVE",
-        resumable: bool = False) -> T:
+        resumable: bool = False, activity_wait: float | None = None) -> T:
     """Run ``body`` (which opens its own DB connections) with a drive read session (module docstring).
 
     Outside scx mode, or inside an already open session, this is just ``body()``.
     ``resumable`` (capture jobs): downloads go to the blob store and are recorded even when the body
     ends without using them (a deadline), so the next session reuses them (:func:`_download`).
+    Issue #51: a ``BACKGROUND`` session is one background drive activity (``lanes.background_activity``):
+    it waits up to ``activity_wait`` seconds (default: until the current bounds' deadline, else
+    ``lanes.BACKGROUND_ACTIVITY_WAIT_SECONDS``) for the one before it and then raises ``DRIVE_BUSY``.
     """
     if not active() or current_session() is not None:
         return body()
     if connection_held():
         raise RuntimeError("drive read session must start without an open database connection")
+    if priority == "BACKGROUND":
+        bounds = _bounds_var.get()
+        deadline = bounds.deadline if bounds is not None else None
+        wait = activity_wait
+        if wait is None:
+            wait = (max(0.0, deadline - time.monotonic()) if deadline is not None
+                    else drive_lanes.BACKGROUND_ACTIVITY_WAIT_SECONDS)
+        with drive_lanes.background_activity(scope or "background", timeout=wait, deadline=deadline):
+            return _run_session(body, prepare=prepare, rounds=rounds, scope=scope, priority=priority,
+                                resumable=resumable)
+    return _run_session(body, prepare=prepare, rounds=rounds, scope=scope, priority=priority, resumable=resumable)
+
+
+def _run_session(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | None,
+                 rounds: int, scope: str | None, priority: str, resumable: bool) -> T:
     _cleanup_orphans()
     session = _new_session(priority=priority, scope=scope)
     session.resumable = resumable
@@ -611,6 +630,32 @@ def _busy_backoff() -> tuple[float, ...]:
     return INTERACTIVE_BUSY_BACKOFF_SECONDS
 
 
+_busy_var: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar("drive_busy_watch", default=None)
+
+
+@contextmanager
+def watch_busy() -> Iterator[dict[str, int]]:
+    """Count the ``DRIVE_BUSY`` answers of this thread's drive calls inside the block (issue #51).
+
+    Folder sync uses it to report "드라이브가 바빠 잠시 후 다시 확인" instead of a schema failure when a
+    scan stayed incomplete only because the worker queue was full."""
+    seen = {"busy": 0}
+    token = _busy_var.set(seen)
+    try:
+        yield seen
+    finally:
+        try:
+            _busy_var.reset(token)
+        except (ValueError, RuntimeError):
+            _busy_var.set(None)
+
+
+def _note_busy() -> None:
+    seen = _busy_var.get()
+    if seen is not None:
+        seen["busy"] += 1
+
+
 def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
     """One drive call; ``DRIVE_BUSY`` is retried with backoff a bounded number of times, then raised.
 
@@ -627,6 +672,8 @@ def _call(fn: Callable[[Any], T], op: str = "-", rel: str = "-") -> T:
         try:
             result = _call_once(fn, op, rel, retries=retries, final=retries >= len(backoff))
         except SpdmStorageError as error:
+            if error.code == BUSY_CODE:
+                _note_busy()
             if error.code == BUSY_CODE and retries < len(backoff) and _wait(backoff[retries]):
                 retries += 1
                 continue
@@ -658,14 +705,26 @@ def _call_once(fn: Callable[[Any], T], op: str, rel: str, *, retries: int = 0, f
         raise SpdmStorageError("DRIVE_UNAVAILABLE", str(exc)[:200]) from None
     if gateway is None:
         raise SpdmStorageError("DRIVE_MODE_DISABLED", "SCX 드라이브 모드가 아닙니다.")
+    session = current_session()
+    bounds = _bounds_var.get()
     try:
-        try:
-            return fn(gateway)
-        except Exception as error:  # noqa: BLE001
-            # Issue #50 §3.5: one refresh_now per AUTH_REQUIRED episode, then this call once more.
-            if drive_gateway.drive_error_code(error) != "AUTH_REQUIRED" or not drive_auth.auto_refresh_once(gateway):
-                raise
-            return fn(drive_gateway.get_drive_gateway() or gateway)
+        # Issue #51: at most max_concurrency calls go to the worker at once, screens first.
+        with drive_lanes.call_slot(session.priority if session is not None else "INTERACTIVE",
+                                   deadline=bounds.deadline if bounds is not None else None):
+            try:
+                return fn(gateway)
+            except Exception as error:  # noqa: BLE001
+                # Issue #50 §3.5: one refresh_now per AUTH_REQUIRED episode, then this call once more.
+                if drive_gateway.drive_error_code(error) != "AUTH_REQUIRED":
+                    raise
+                outcome = drive_auth.auto_refresh(gateway)
+                if outcome == drive_auth.TRANSIENT:
+                    # Issue #51: the SSO did not answer (5xx/timeout); the token is kept, so this is retryable.
+                    raise SpdmStorageError("DRIVE_UNAVAILABLE", "드라이브 토큰 갱신이 잠시 실패했습니다(인증 서버 응답 오류). "
+                                           "저장된 토큰은 그대로이며 잠시 후 다시 시도합니다.") from None
+                if outcome != drive_auth.REFRESHED:
+                    raise
+                return fn(drive_gateway.get_drive_gateway() or gateway)
     except SpdmStorageError as error:
         log(str(error.code), drive_gateway.safe_error_message(error))
         raise

@@ -307,6 +307,7 @@ def shutdown() -> None:
             _state.adapter = None
             _state.token_store = None
             _state.settings = None
+            forget_health()
             from . import auth
 
             auth.reset_state()
@@ -366,6 +367,7 @@ def reset_gateway() -> None:
     from . import auth
 
     auth.forget_capabilities()
+    forget_health()
     if gateway is None:
         return
     try:
@@ -419,6 +421,76 @@ def priority(name: str = "INTERACTIVE") -> Any:
     if enum is not None and hasattr(enum, name):
         return getattr(enum, name)
     return 0 if name == "INTERACTIVE" else 1
+
+
+# --- cached health (issue #51, 2026-10-23) ----------------------------------------------------------
+#
+# ``GET /api/drive/status`` (every open tab), the admin status/auth screens and PhysicsAI's relay health
+# check all asked ``gateway.health()``.  With a concurrency-1 worker such a call must never queue next to
+# (or in front of) real drive calls, so health is read at most once per ``HEALTH_CACHE_SECONDS`` here, by
+# one caller at a time (the others get the last answer), only from a gateway that already exists.
+
+HEALTH_CACHE_SECONDS = 20.0
+HEALTH_EPISODE_SECONDS = 5.0     # automatic refresh: "did a call succeed since the last attempt?"
+_UNAVAILABLE_HEALTH = {"state": "UNAVAILABLE", "last_success_at": None, "last_error_code": None, "last_error_at": None,
+                       "token_refreshed_at": None, "queue_depth": 0, "in_flight": 0}
+
+
+class _HealthCache:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()          # guards the fields
+        self.fetching = threading.Lock()      # one health() call at a time
+        self.gateway: Any = None
+        self.value: dict[str, Any] | None = None
+        self.at = 0.0
+        self.calls = 0                        # health() calls made (tests, diagnostics)
+
+    def reset(self) -> None:
+        with self.lock:
+            self.gateway, self.value, self.at = None, None, 0.0
+
+
+_health_cache = _HealthCache()
+
+
+def cached_health(gateway: Any = None, *, max_age: float | None = None) -> dict[str, Any] | None:
+    """``health_dict`` of the current gateway, at most one ``health()`` call per ``max_age`` seconds.
+
+    Never builds the gateway: ``None`` when none exists yet.  A failing ``health()`` is cached as
+    ``UNAVAILABLE`` too, so a stuck worker is not asked again on every poll.
+    """
+    import time
+
+    if gateway is None:
+        gateway = existing_gateway()
+    if gateway is None:
+        return None
+    age = HEALTH_CACHE_SECONDS if max_age is None else max(0.0, float(max_age))
+    cache = _health_cache
+    with cache.lock:
+        if cache.gateway is gateway and cache.value is not None and time.monotonic() - cache.at < age:
+            return dict(cache.value)
+        stale = dict(cache.value) if cache.gateway is gateway and cache.value is not None else None
+    if not cache.fetching.acquire(blocking=stale is None):
+        return stale            # another caller is asking the worker right now: never a second call
+    try:
+        with cache.lock:        # it may have been refreshed while this caller waited
+            if cache.gateway is gateway and cache.value is not None and time.monotonic() - cache.at < age:
+                return dict(cache.value)
+        try:
+            cache.calls += 1
+            value = health_dict(gateway.health()) or dict(_UNAVAILABLE_HEALTH)
+        except Exception as error:  # noqa: BLE001 - status only
+            value = {**_UNAVAILABLE_HEALTH, "last_error_code": drive_error_code(error) or "INTERNAL"}
+        with cache.lock:
+            cache.gateway, cache.value, cache.at = gateway, value, time.monotonic()
+        return dict(value)
+    finally:
+        cache.fetching.release()
+
+
+def forget_health() -> None:
+    _health_cache.reset()
 
 
 def health_dict(health: Any) -> dict[str, Any] | None:

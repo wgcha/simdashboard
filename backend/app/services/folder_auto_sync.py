@@ -219,9 +219,41 @@ def _check_scope(conn, root, root_key: str, key, project_id: str, request_id: st
         return {**result, "coalesced": False}
 
 
+# Issue #51 (2026-10-23): a check that could not finish because the drive worker was busy (adapter
+# ``OVERLOADED`` "queue wait timeout", no free worker slot, another background drive activity) is not a
+# folder-structure problem.  It is reported as DRIVE_BUSY "잠시 후 다시 확인" (status FAILED, retry=True)
+# and logged at INFO; the active snapshot is untouched and the next poll checks again.
+DRIVE_BUSY = "DRIVE_BUSY"
+DRIVE_BUSY_MESSAGE = "드라이브 요청이 많아 지금은 폴더를 확인하지 못했습니다. 잠시 후 다시 확인합니다."
+SYNC_ACTIVITY_WAIT_SECONDS = 20.0
+_BUSY_SCAN_CODES = frozenset({"FOLDER_SCHEMA_SCAN_UNAVAILABLE", "FOLDER_SCHEMA_SCAN_INCOMPLETE",
+                              "DRIVE_READ_NOT_PREPARED", "DRIVE_READ_DEADLINE", DRIVE_BUSY})
+
+
+def _drive_busy(exc: BaseException) -> bool:
+    """The failure comes from a busy drive: ``DRIVE_BUSY`` in the cause chain, or an incomplete scan
+    while this check's drive calls were answered ``DRIVE_BUSY`` (``reads.watch_busy``)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if str(getattr(current, "code", "")) == DRIVE_BUSY:
+            return True
+        current = current.__cause__ or current.__context__
+    if str(getattr(exc, "code", "")) not in _BUSY_SCAN_CODES:
+        return False
+    from .drive import reads as drive_reads
+
+    watched = drive_reads._busy_var.get()
+    return bool(watched and watched.get("busy"))
+
+
 def _failed(exc: BaseException, snapshot_id: str | None) -> dict[str, Any]:
     from . import folder_schema_resolver as resolver
 
+    if _drive_busy(exc):
+        return {**_result("FAILED", snapshot_id=snapshot_id, code=DRIVE_BUSY, message=DRIVE_BUSY_MESSAGE, mode="FULL"),
+                "retry": True}
     return _result("FAILED", snapshot_id=snapshot_id,
                    code=str(getattr(exc, "code", "FOLDER_SCHEMA_REFRESH_FAILED")),
                    message=str(exc) if isinstance(exc, resolver.FolderSchemaError)
@@ -264,6 +296,10 @@ def log_outcome(project_id: str, request_id: str, environment: str, result: dict
 
     issues = getattr(exc, "issues", None) if exc is not None else None
     detail = f" issues={mask_secrets(folder_discovery_scan.issue_summary(issues))[:400]}" if issues else ""
+    if code == DRIVE_BUSY:   # issue #51: deferred, not failed
+        logger.info("Folder %s deferred (drive busy, checked again later): project=%s request=%s environment=%s "
+                    "cause=%s", source, project_id, request_id, str(environment).upper(), _cause(exc))
+        return True
     logger.warning("Folder %s %s: project=%s request=%s environment=%s code=%s message=%s cause=%s%s",
                    source, status, project_id, request_id, str(environment).upper(), code,
                    mask_secrets(str(result.get("message") or ""))[:200], _cause(exc), detail)
@@ -325,7 +361,10 @@ def sync_drive(project_id: str, request_id: str, environment: str, actor: str, *
                                          "new_files": classified.get("new", 0)}}
 
         try:
-            result = reads.run(body, prepare=prepare, priority="BACKGROUND")
+            # Issue #51: one background drive activity at a time; a busy drive answers DRIVE_BUSY (retry).
+            with reads.watch_busy():
+                result = reads.run(body, prepare=prepare, priority="BACKGROUND", scope=None,
+                                   activity_wait=SYNC_ACTIVITY_WAIT_SECONDS)
         except (ValueError, OSError, spdm_storage.SpdmStorageError) as exc:
             result = {**_failed(exc, None), "coalesced": False}
             _remember(key, result, None, None)

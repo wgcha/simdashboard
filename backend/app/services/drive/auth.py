@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -55,7 +56,10 @@ AUTH_ERRORS: dict[str, tuple[int, str]] = {
 
 
 class DriveAuthError(Exception):
-    """A re-login failure as (HTTP status, code, Korean message); never carries secrets."""
+    """A re-login failure as (HTTP status, code, Korean message); never carries secrets.
+
+    ``detail`` is the adapter's sanitized message (logs and the transient/definitive decision only;
+    never part of an HTTP answer)."""
 
     def __init__(self, status: int, code: str, message: str, **extra: Any) -> None:
         super().__init__(code)
@@ -63,6 +67,33 @@ class DriveAuthError(Exception):
         self.code = code
         self.message = message
         self.extra = extra
+        self.detail = ""
+
+
+# Issue #51 (2026-10-23): a refresh that failed because the SSO answered 5xx (``BAD_GATEWAY``), timed out
+# or could not be reached says nothing about the refresh token.  Such a failure is retried later and
+# never treated as "re-login required"; only a definitive refusal (expired/invalid grant) is.
+TRANSIENT_REFRESH_SECONDS = 30.0
+DEFINITIVE_REFRESH_CODES = frozenset({"AUTH_REFRESH_EXPIRED", "AUTH_INVALID_CREDENTIALS", "AUTH_ACCOUNT_LOCKED",
+                                      "AUTH_MFA_REQUIRED", "AUTH_METHOD_UNSUPPORTED", "AUTH_REQUIRED",
+                                      "AUTH_DEVICE_EXPIRED", "AUTH_DEVICE_DENIED",
+                                      "DRIVE_ADAPTER_UPDATE_REQUIRED", "DRIVE_MODE_DISABLED",
+                                      "DRIVE_ACCOUNT_CHANGE_CONFIRM"})
+_TRANSIENT_HINT = re.compile(r"(?i)\b50[0-9]\b|bad[ _-]?gateway|service[ _-]unavailable|gateway[ _-]time-?out|"
+                             r"timed? ?out|temporar|connection (?:reset|refused|aborted|error)|unreachable")
+# The worker answered refresh_now without any refresh token in memory (adapter: "no stored token to
+# refresh") while the dashboard still holds the encrypted token: the worker lost its state (restart).
+_NO_WORKER_TOKEN = re.compile(r"(?i)no (?:stored |refresh |registered )?token")
+
+
+def refresh_failure_transient(error: DriveAuthError) -> bool:
+    """True when a failed refresh may succeed later with the same refresh token (5xx, timeout, network)."""
+    if error.code == "RATE_LIMITED":
+        return True
+    if error.code in DEFINITIVE_REFRESH_CODES:
+        # An adapter that reports an SSO 5xx as an auth code: its message still names the gateway error.
+        return error.code in {"AUTH_REQUIRED", "AUTH_REFRESH_EXPIRED"} and bool(_TRANSIENT_HINT.search(error.detail or ""))
+    return True   # DRIVE_UNAVAILABLE / DRIVE_TIMEOUT / DRIVE_BUSY / DRIVE_INTERNAL: nothing says the token is bad
 
 
 class AdapterUnsupported(Exception):
@@ -86,6 +117,7 @@ class _Status:
     last_error_code: str | None = None
     last_error_at: datetime | None = None
     auto_attempted_at: datetime | None = None
+    transient_until: float | None = None      # monotonic: no automatic refresh before (5xx/network backoff)
 
 
 _status = _Status()
@@ -304,12 +336,16 @@ def _adapter_failure(gateway: Any, name: str, error: BaseException, redact: tupl
     _record_error(code)
     if code in AUTH_ERRORS:
         status, message = AUTH_ERRORS[code]
-        return DriveAuthError(status, code, message)
+        failure = DriveAuthError(status, code, message)
+        failure.detail = detail
+        return failure
     mapping = drive_gateway.DRIVE_ERROR_MAP.get(code, drive_gateway.DRIVE_ERROR_MAP["INTERNAL"])
     shown = adapter_code or type(error).__name__
-    return DriveAuthError(mapping.http_status, mapping.storage_code,
-                          f"드라이브 인증 서버에 연결하지 못했습니다(어댑터 코드: {shown}). 서버 로그(uvicorn-error.log)의 "
-                          f"'SCX drive {name} failed' 줄에 원인이 있습니다.", adapter_code=shown)
+    failure = DriveAuthError(mapping.http_status, mapping.storage_code,
+                             f"드라이브 인증 서버에 연결하지 못했습니다(어댑터 코드: {shown}). 서버 로그(uvicorn-error.log)의 "
+                             f"'SCX drive {name} failed' 줄에 원인이 있습니다.", adapter_code=shown)
+    failure.detail = detail
+    return failure
 
 
 def _call(name: str, *args: Any, redact: tuple[str, ...] = ()) -> AuthResult:
@@ -403,21 +439,36 @@ def snapshot() -> dict[str, Any]:
 # --- automatic refresh (spec §3.5) ------------------------------------------------------------------
 
 def _last_success(gateway: Any) -> datetime | None:
-    try:
-        return _stamp(getattr(gateway.health(), "last_success_at", None))
-    except Exception:  # noqa: BLE001
-        return None
+    # Cached (issue #51): an AUTH_REQUIRED episode must not turn every failing read into a worker round-trip.
+    health = drive_gateway.cached_health(gateway, max_age=drive_gateway.HEALTH_EPISODE_SECONDS)
+    return _stamp((health or {}).get("last_success_at"))
+
+
+REFRESHED = "REFRESHED"     # the caller may run its call once more (new token, or a reloaded worker)
+TRANSIENT = "TRANSIENT"     # refresh failed for a passing reason: report the call as retryable, not as re-login
+NOT_REFRESHED = "NO"        # re-login required (or refresh not possible / already tried in this episode)
 
 
 def auto_refresh_once(gateway: Any) -> bool:
-    """One ``refresh_now`` for this AUTH_REQUIRED episode; True when the caller may retry its call once.
+    """One ``refresh_now`` for this AUTH_REQUIRED episode; True when the caller may retry its call once."""
+    return auto_refresh(gateway) == REFRESHED
+
+
+def auto_refresh(gateway: Any) -> str:
+    """One ``refresh_now`` for this AUTH_REQUIRED episode (:data:`REFRESHED`/:data:`TRANSIENT`/:data:`NOT_REFRESHED`).
 
     Conservative: never with a different account (the gateway is reset so the
     worker drops it), never while a manual re-login runs, never when the adapter
     lacks ``refresh``, and at most once until a drive call succeeds again.
+    Issue #51: a transient failure (SSO 5xx such as ``BAD_GATEWAY``, timeout, network) does not use up
+    the episode and never touches the stored token; the next attempt waits ``TRANSIENT_REFRESH_SECONDS``.
+    A worker that has no token to refresh while the encrypted row still holds one is rebuilt once from the row.
     """
     with _status.lock:
         attempted = _status.auto_attempted_at
+        backoff = _status.transient_until
+    if backoff is not None and time.monotonic() < backoff:
+        return TRANSIENT
     if attempted is not None:
         # A new episode needs a successful drive call after the last attempt *and* after the
         # refresh it produced (an adapter may count refresh_now itself as a success).
@@ -426,22 +477,33 @@ def auto_refresh_once(gateway: Any) -> bool:
             refreshed = _status.last_refresh_at
         floor = max(attempted, refreshed) if refreshed else attempted
         if succeeded is None or succeeded <= floor:
-            return False
+            return NOT_REFRESHED
     caps, supported, _error = capabilities(gateway)
     if not supported or not caps.get("refresh"):
-        return False
+        return NOT_REFRESHED
     if not operation_lock.acquire(blocking=False):
-        return False
+        return NOT_REFRESHED
     try:
         with _status.lock:
             if _status.auto_attempted_at is not None and _status.auto_attempted_at != attempted:
-                return False          # another thread started this episode's attempt
+                return NOT_REFRESHED  # another thread started this episode's attempt
             _status.auto_attempted_at = _now()
         try:
             result = refresh_now()
         except DriveAuthError as error:
+            if refresh_failure_transient(error):
+                with _status.lock:
+                    _status.auto_attempted_at = attempted      # the episode is not used up
+                    _status.transient_until = time.monotonic() + TRANSIENT_REFRESH_SECONDS
+                logger.warning("SCX drive automatic token refresh failed transiently (%s); the stored token is kept "
+                               "and the refresh is retried after %d s", error.code, int(TRANSIENT_REFRESH_SECONDS))
+                return TRANSIENT
+            if _reload_worker_tokens(error):
+                return REFRESHED
             logger.warning("SCX drive automatic token refresh failed (%s)", error.code)
-            return False
+            return NOT_REFRESHED
+        with _status.lock:
+            _status.transient_until = None
         store = drive_gateway.token_store()
         try:
             connected = store.connected_account() if store is not None else None
@@ -455,11 +517,32 @@ def auto_refresh_once(gateway: Any) -> bool:
                 gateway_store.detach()
             drive_gateway.reset_gateway()
             _record_error("DRIVE_ACCOUNT_CHANGE_CONFIRM")
-            return False
+            return NOT_REFRESHED
         with _status.lock:
             _status.last_refresh_at = _now()
             _status.expires_at = result.expires_at
         logger.info("SCX drive token refreshed automatically after AUTH_REQUIRED")
-        return True
+        return REFRESHED
     finally:
         operation_lock.release()
+
+
+def _reload_worker_tokens(error: DriveAuthError) -> bool:
+    """The worker had no token to refresh, but the encrypted row has one: rebuild the gateway from the row.
+
+    At most once per AUTH_REQUIRED episode (the caller already used the episode).  The stored row is
+    only read here, never changed.
+    """
+    if error.code not in {"AUTH_REFRESH_EXPIRED", "AUTH_REQUIRED"} or not _NO_WORKER_TOKEN.search(error.detail or ""):
+        return False
+    store = drive_gateway.token_store()
+    try:
+        stored = store.load_local() if store is not None else None
+    except Exception:  # noqa: BLE001
+        stored = None
+    if stored is None or not stored.refresh_token:
+        return False
+    logger.warning("SCX drive worker had no token to refresh (%s) while the encrypted token is stored; "
+                   "the worker is restarted with the stored token", error.code)
+    drive_gateway.reset_gateway()
+    return True

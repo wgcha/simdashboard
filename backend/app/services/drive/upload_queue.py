@@ -63,6 +63,7 @@ from ..storage import server_local
 from ..storage.provider import SpdmStorageError
 from . import auth as drive_auth
 from . import gateway as drive_gateway
+from . import lanes as drive_lanes
 from .. import notifications
 
 logger = logging.getLogger("app.services.drive.upload_queue")
@@ -1073,11 +1074,21 @@ def _execute(item: Item) -> _Outcome:
         return _Outcome("RETRY", "DRIVE_UNAVAILABLE", str(exc)[:200])
     if gateway is None:
         return _Outcome("FAILED", "DRIVE_MODE_DISABLED", "SCX 드라이브 모드가 아닙니다.")
-    outcome = _execute_on(gateway, item)
-    if outcome.code == "DRIVE_AUTH_REQUIRED" and drive_auth.auto_refresh_once(gateway):
-        # Issue #50 §3.5: one refresh_now per AUTH_REQUIRED episode before the queue pauses.
-        # AUTH_REQUIRED means nothing was written, so the same step simply runs once more.
-        outcome = _execute_on(drive_gateway.get_drive_gateway() or gateway, item)
+    try:
+        # Issue #51: the queue's calls share the worker slots with reads (screens first).
+        with drive_lanes.call_slot(drive_lanes.BACKGROUND):
+            outcome = _execute_on(gateway, item)
+            if outcome.code == "DRIVE_AUTH_REQUIRED":
+                # Issue #50 §3.5: one refresh_now per AUTH_REQUIRED episode before the queue pauses.
+                # AUTH_REQUIRED means nothing was written, so the same step simply runs once more.
+                refreshed = drive_auth.auto_refresh(gateway)
+                if refreshed == drive_auth.REFRESHED:
+                    outcome = _execute_on(drive_gateway.get_drive_gateway() or gateway, item)
+                elif refreshed == drive_auth.TRANSIENT:
+                    # Issue #51: the SSO answered 5xx/timed out; the stored token is kept, retry later.
+                    return _Outcome("RETRY", "DRIVE_UNAVAILABLE", "드라이브 토큰 갱신이 잠시 실패했습니다. 잠시 후 다시 시도합니다.")
+    except SpdmStorageError as error:   # no free worker slot in time
+        return _Outcome("RETRY", str(error.code), drive_gateway.safe_error_message(error))
     return outcome
 
 

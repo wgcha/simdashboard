@@ -103,6 +103,12 @@ class StoreStatus:
         self.last_save_error_at: datetime | None = None
         self.last_load_problem: str | None = None
         self.last_stale_save_at: datetime | None = None
+        # Issue #51: (generation, bundle) last read or written by any store of this process; served by
+        # ``load()`` while the database is briefly unreachable.  Cleared with the row (MISSING/clear()).
+        self.last_good: tuple[int, LocalTokenBundle] | None = None
+
+
+LOAD_RETRY_PAUSES = (0.2, 0.5)
 
 
 class DbTokenStore:
@@ -178,19 +184,48 @@ class DbTokenStore:
         bundle = self.load_local()
         return None if bundle is None else self._to_adapter(bundle)
 
+    def _read_row(self) -> Any:
+        """The token row; a failing read (pool timeout, dropped connection) is tried again briefly."""
+        error: BaseException | None = None
+        for pause in (*LOAD_RETRY_PAUSES, None):
+            try:
+                with self._connect() as conn:
+                    return conn.execute("SELECT ciphertext, key_id, generation FROM drive_credentials WHERE id=?",
+                                        [ROW_ID]).fetchone()
+            except Exception as exc:  # noqa: BLE001 - classified by the caller
+                error = exc
+            if pause is not None:
+                time.sleep(pause)
+        assert error is not None
+        raise error
+
     def load_local(self) -> LocalTokenBundle | None:
+        """The stored bundle, or ``None`` only when there is definitively no usable token.
+
+        Issue #51: the worker sends ``load()``'s answer to a (re)started worker in ``init`` and uses it for
+        ``refresh_now``; a ``None`` there becomes "no stored token to refresh" / re-login required.  A
+        database error (request pool exhausted while screens, syncs and the relay poll, a dropped
+        connection) is therefore retried, then answered with the last bundle any store of this process
+        read or saved for the current generation (shared :class:`StoreStatus`), never with ``None``.
+        """
         status = self._status
         try:
-            with self._connect() as conn:
-                row = conn.execute("SELECT ciphertext, key_id, generation FROM drive_credentials WHERE id=?",
-                                   [ROW_ID]).fetchone()
-        except Exception:
-            logger.error("SCX token load failed (database error)")
+            row = self._read_row()
+        except Exception as exc:  # noqa: BLE001
             status.last_load_problem = "DB_ERROR"
+            last = status.last_good
+            if last is not None:
+                self._loaded_generation = last[0]
+                logger.warning("SCX token load failed (database error: %s); the last stored token is used meanwhile",
+                               type(exc).__name__)
+                return last[1]
+            logger.error("SCX token load failed (database error: %s)", type(exc).__name__)
             return None
         if row is None:
             self._loaded_generation = None
+            status.last_good = None
             status.last_load_problem = "MISSING"
+            logger.warning("SCX token load: no token row is stored (re-registration required)")
             return None
         ciphertext, stored_key_id, generation = bytes(row[0]), str(row[1]), int(row[2])
         self._loaded_generation = None
@@ -212,7 +247,10 @@ class DbTokenStore:
             logger.warning("SCX token could not be decrypted; re-register the token")
             return None
         self._loaded_generation = generation
+        status.last_good = (generation, bundle)
         status.last_load_problem = None
+        if not bundle.refresh_token:
+            logger.warning("SCX token load: the stored token has no refresh token; the worker cannot refresh it")
         return bundle
 
     def save(self, bundle: Any) -> None:
@@ -227,6 +265,10 @@ class DbTokenStore:
             local = self.to_local(bundle)
         except Exception:
             logger.error("SCX token save failed: the worker sent an unreadable token bundle")
+            return
+        if not (local.access_token or "").strip():
+            # Issue #51: never let an empty notification (a failed refresh) replace the stored token.
+            logger.warning("SCX token not saved: the worker sent a bundle without an access token")
             return
         captured = self._captured
         strict = captured is not None and self._capture_strict
@@ -261,11 +303,17 @@ class DbTokenStore:
         if updated is None:
             self._dropped("the token row was deleted or re-registered since this gateway loaded it")
             return
+        self._status.last_good = (generation, updated)
         self._status.last_save_error_at = None
 
     def _save_locked(self, local: LocalTokenBundle, ciphertext: bytes, obtained_at: datetime, now: datetime,
                      generation: int, strict: bool) -> Any:
-        """UPDATE of the loaded generation (caller holds the write lock); ``False`` = refused account."""
+        """UPDATE of the loaded generation (caller holds the write lock).
+
+        Returns the bundle written, ``None`` when the generation is gone, ``False`` for a refused account.
+        Issue #51: a bundle without a refresh token (access-token-only rotation, or a notification sent
+        after a failed refresh) keeps the stored refresh token; it is never cleared by a save.
+        """
         with self._connect() as conn:
             connected = _connected_account(conn)
             other = bool(local.account_hint) and not same_account(local.account_hint, connected)
@@ -274,6 +322,14 @@ class DbTokenStore:
                 # the admin confirmed the change.  Expected, so not reported as a stale save.
                 logger.warning("SCX token not saved: it is not the connected account (confirmation required)")
                 return False
+            if not local.refresh_token:
+                kept = self._stored_refresh_token(conn, generation)
+                if kept:
+                    local = LocalTokenBundle(server_url=local.server_url, access_token=local.access_token,
+                                             refresh_token=kept, obtained_at=local.obtained_at,
+                                             account_hint=local.account_hint)
+                    ciphertext = self._fernet.encrypt(bundle_to_json(local))
+                    logger.info("SCX token saved without a new refresh token; the stored refresh token is kept")
             updated = conn.execute(
                 "UPDATE drive_credentials SET ciphertext=?, account_hint=?, obtained_at=?, updated_by=?, updated_at=? "
                 "WHERE id=? AND generation=? AND key_id=? RETURNING id",
@@ -281,7 +337,18 @@ class DbTokenStore:
             ).fetchone()
             if getattr(conn, "backend", "") == "postgresql":
                 conn.execute("COMMIT")
-            return updated
+            return local if updated is not None else None
+
+    def _stored_refresh_token(self, conn: Any, generation: int) -> str | None:
+        row = conn.execute("SELECT ciphertext FROM drive_credentials WHERE id=? AND generation=? AND key_id=?",
+                           [ROW_ID, generation, self._key_id]).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(self._fernet.decrypt(bytes(row[0])).decode("utf-8")).get("refresh_token")
+        except (InvalidToken, ValueError, TypeError, AttributeError, RecursionError):
+            return None
+        return value if isinstance(value, str) and value else None
 
     def _dropped(self, reason: str) -> None:
         self._status.last_stale_save_at = datetime.now(timezone.utc)
@@ -360,12 +427,14 @@ class DbTokenStore:
                 conn.execute("COMMIT")
             if adopt_into is not None:
                 adopt_into._loaded_generation = int(generation)
+            self._status.last_good = (int(generation), local)
         return generation
 
     def clear(self) -> bool:
         with self._lock, self._connect() as conn:
             existed = conn.execute("SELECT 1 FROM drive_credentials WHERE id=?", [ROW_ID]).fetchone() is not None
             conn.execute("DELETE FROM drive_credentials WHERE id=?", [ROW_ID])
+            self._status.last_good = None
         return existed
 
     def metadata(self) -> dict[str, Any]:

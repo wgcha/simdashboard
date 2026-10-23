@@ -1627,8 +1627,16 @@ def discover(*, force: bool = False, connection_factory=None, fresh: bool = Fals
         # connection; a round repeats only reads and idempotent steps (local mode: one plain call).
         # Issue #51: a run needs about one round per new request for its tree and one for its capture
         # files, plus a few for the upper levels (DISCOVERY_READ_ROUNDS).
-        with drive_reads.bounded(deadline=time.monotonic() + budget + DRIVE_READ_SLACK_SECONDS):
-            result = drive_reads.run(run_once, priority="BACKGROUND", rounds=DISCOVERY_READ_ROUNDS)
+        try:
+            with drive_reads.bounded(deadline=time.monotonic() + budget + DRIVE_READ_SLACK_SECONDS):
+                result = drive_reads.run(run_once, priority="BACKGROUND", rounds=DISCOVERY_READ_ROUNDS)
+        except Exception as exc:  # noqa: BLE001 - issue #51: another background drive activity kept the worker
+            if getattr(exc, "code", None) != "DRIVE_BUSY":
+                raise
+            _logger.info("Automatic discovery deferred: the drive is busy")
+            return {**_empty("FAILED"), "coalesced": False, "retry": True,
+                    "needs_review": [{**_review("", "DRIVE_BUSY", "드라이브 요청이 많아 지금은 폴더를 확인하지 못했습니다. "
+                                                                  "잠시 후 다시 확인합니다."), "error_code": "DRIVE_BUSY"}]}
         if result.get("status") != "CHECKED":
             return result
         with _state_lock:
