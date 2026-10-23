@@ -100,3 +100,35 @@ def test_adapter_sharing_violation_is_a_retryable_busy_file():
     assert gateway.to_storage_error(locked).code == "SPDM_FILE_BUSY"
     assert gateway.map_drive_error(locked).retryable is True
     assert gateway.to_storage_error(AdapterError("INTERNAL", "boom")).code == "DRIVE_INTERNAL"
+
+
+def test_download_is_retried_while_the_scanner_holds_the_new_file(monkeypatch, tmp_path):
+    """Issue #51: no scanner exclusion is allowed on the server, so download_to is retried a few times."""
+    from app.services.drive import reads
+    from app.services.storage.provider import SpdmStorageError
+
+    monkeypatch.setattr(reads, "DOWNLOAD_LOCK_RETRY_SECONDS", (0.0, 0.0))
+    calls = {"n": 0}
+
+    class Done(Exception):
+        pass
+
+    def fake_call(fn, op, rel):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise SpdmStorageError("SPDM_FILE_BUSY", "WinError 32")
+        raise Done()
+
+    class Session:
+        resumable = False
+        staged_bytes = 0
+        def next_dir(self):
+            return tmp_path
+
+    monkeypatch.setattr(reads, "_call", fake_call)
+    monkeypatch.setattr(reads, "_reserve_staging", lambda session, size: None)
+    monkeypatch.setattr(reads, "stop_reason", lambda: None)
+    version = type("V", (), {"size": 10, "token": "t"})()
+    with pytest.raises(Done):
+        reads._download(Session(), "root", "a/b.csv", version, 100)
+    assert calls["n"] == 3

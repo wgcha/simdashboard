@@ -81,6 +81,8 @@ T = TypeVar("T")
 BLOB_THRESHOLD_BYTES = 32 * 1024 * 1024
 MAX_FILE_BYTES = 512 * 1024 * 1024          # same bound as the local stable reader
 MAX_ROUNDS = 8
+# download_to retries while a scanner holds the freshly written file (issue #51, 2026-10-23).
+DOWNLOAD_LOCK_RETRY_SECONDS = (1.0, 3.0, 6.0)
 LIST_PREFETCH_DEPTH = 4                     # folder levels listed below a missed folder
 LIST_PREFETCH_MAX = 600                     # listings per miss
 CONTENT_PREFETCH_MAX_FILES = 2000
@@ -1135,10 +1137,21 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
             session.files[key] = reused
             return reused
     _reserve_staging(session, int(version.size or 0))
-    target = session.next_dir()
-    result = _call(lambda gateway: gateway.download_to(drive_path(spdm_root, _drive_rel(spdm_root, rel)), target,
-                                                       max_bytes=max_bytes, priority=_priority(session)),
-                   "download_to", rel)
+    result = None
+    for attempt, pause in enumerate((*DOWNLOAD_LOCK_RETRY_SECONDS, None)):
+        target = session.next_dir()   # a fresh folder: the locked part file of the last try stays behind
+        try:
+            result = _call(lambda gateway: gateway.download_to(drive_path(spdm_root, _drive_rel(spdm_root, rel)), target,
+                                                               max_bytes=max_bytes, priority=_priority(session)),
+                           "download_to", rel)
+            break
+        except SpdmStorageError as error:
+            # Windows: the virus scanner / DLP agent holds the adapter's new part file (WinError 32 -> BUSY,
+            # issue #51; scanning exclusions are not allowed on the server).  It lets go within seconds.
+            if error.code != "SPDM_FILE_BUSY" or pause is None or stop_reason() is not None:
+                raise
+            time.sleep(pause)
+    assert result is not None
     local = Path(result.local_path)
     if not server_local.is_regular_file_inside(local, target):
         raise SpdmStorageError("DRIVE_INTERNAL", "드라이브 다운로드 위치가 올바르지 않습니다.")
