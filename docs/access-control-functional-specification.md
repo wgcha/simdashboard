@@ -56,6 +56,8 @@
 ### 3.3 세션
 
 - 운영 애플리케이션 세션 쿠키는 HttpOnly, Secure, SameSite=Strict다.
+- 슬라이딩 세션(2026-10-23, 0.3.0.3): 로그아웃·관리자 비밀번호 초기화·계정 중지/비활성·`AUTH_SECRET_KEY` 변경이 아니면 로그인이 유지된다. 쿠키로 인증된 요청의 토큰이 1시간(수명이 2시간 미만이면 수명의 절반) 이상 지났으면 `SecurityMiddleware`가 응답에 새 토큰·쿠키를 다시 발급한다(password·OIDC 공통, 한 곳). 인증이 실패한 요청, 로그아웃, `Authorization: Bearer` 호출자, 이미 자체 세션 쿠키를 설정하는 응답은 갱신하지 않는다. 갱신은 계정 상태와 `sessions_revoked_at`(`iat <= 초기화 시각`이면 거부) 검사를 통과한 뒤에만 일어나므로 폐기된 토큰을 되살리지 못하고, 갱신된 토큰의 `iat`은 갱신 시각이라 이후의 초기화가 항상 이긴다.
+- 유휴 수명은 `AUTH_SESSION_IDLE_DAYS`(기본 30, 1~365일)이며 마지막 갱신부터 센다(토큰 `exp`와 쿠키 `max_age`). 절대 최대 수명은 없다. `AUTH_TOKEN_TTL_MINUTES`(5~525600분)를 비어 있지 않게 설정하면 하위 호환으로 그 값이 수명을 정하고 `AUTH_SESSION_IDLE_DAYS`는 무시된다(우선순위: TTL_MINUTES > IDLE_DAYS).
 - IdP 왕복용 임시 쿠키는 HttpOnly, Secure, SameSite=Lax이며 짧은 수명과 서명을 갖는다.
 - 프런트엔드는 `/api/auth/me`를 계정·permission·멤버십의 권위 소스로 사용한다.
 - sessionStorage의 사용자 표시 캐시는 권한 판정에 사용하지 않는다.

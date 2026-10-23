@@ -45,6 +45,10 @@ DEVICE_API_PATHS = {
     "/api/local-execution/device/events",
 }
 SESSION_COOKIE = "analysis_canvas_session"
+# Sliding session: a cookie-authenticated request whose token is at least this old (or, for short explicit
+# lifetimes, older than half the lifetime) gets a freshly issued token/cookie on its response.
+SESSION_RENEW_AFTER_SECONDS = 3600
+SESSION_RENEW_EXEMPT_PATHS = {"/api/auth/logout"}
 logger = logging.getLogger(__name__)
 
 
@@ -142,10 +146,47 @@ def create_access_token(principal: Principal) -> tuple[str, int]:
     if not settings.secret_key:
         raise RuntimeError("AUTH_SECRET_KEY가 설정되지 않았습니다.")
     now = int(time.time())
-    expires_at = now + settings.token_ttl_minutes * 60
+    expires_at = now + settings.session_lifetime_seconds
     payload = _b64url(json.dumps({"sub": principal.user_id, "iat": now, "exp": expires_at}, separators=(",", ":")).encode("utf-8"))
     signature = _b64url(hmac.new(settings.secret_key.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).digest())
     return f"{payload}.{signature}", expires_at
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    """The one place that writes the session cookie (login, OIDC callback, sliding renewal)."""
+    settings = security_settings()
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=settings.session_lifetime_seconds,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+
+
+def session_renew_after_seconds() -> int:
+    return min(SESSION_RENEW_AFTER_SECONDS, security_settings().session_lifetime_seconds // 2)
+
+
+def _renew_session_cookie(request: Request, response: Response, principal: Principal) -> None:
+    """Re-issue the cookie for an authenticated, non-revoked cookie session once its token is old enough.
+
+    Runs only after ``authenticate_request`` accepted the token (signature, expiry, account state and the
+    ``sessions_revoked_at`` rule), so a revoked or expired token is never renewed. The new token's ``iat`` is
+    now, so a later revocation (``iat <= sessions_revoked_at``) still beats it. Bearer-header callers and
+    logout are left alone; so is a response that already sets its own session cookie.
+    """
+    issued_at = getattr(request.state, "session_cookie_iat", None)
+    if issued_at is None or request.url.path in SESSION_RENEW_EXEMPT_PATHS or principal.user_id == "local-admin":
+        return
+    if int(time.time()) - issued_at < session_renew_after_seconds():
+        return
+    if any(value.startswith(f"{SESSION_COOKIE}=") for value in response.headers.getlist("set-cookie")):
+        return
+    token, _ = create_access_token(principal)
+    set_session_cookie(response, token)
 
 
 def _token_user_id(token: str) -> str:
@@ -205,12 +246,16 @@ def authenticate_request(request: Request) -> Principal:
         return Principal("local-admin", "local", "로컬 관리자", "ACTIVE", True, None, "admin")
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
+    from_cookie = scheme.lower() != "bearer" or not token
+    if from_cookie:
         token = request.cookies.get(SESSION_COOKIE, "")
     if not token:
         raise AuthenticationError("Bearer 인증 토큰이 필요합니다.")
     user_id, issued_at = _token_claims(token)
-    return _load_principal(user_id, issued_at)
+    principal = _load_principal(user_id, issued_at)
+    # Only cookie sessions slide; the middleware reads this after the request succeeded.
+    request.state.session_cookie_iat = issued_at if from_cookie else None
+    return principal
 
 
 def authenticate_credentials(username: str, password: str) -> Principal | None:
@@ -383,6 +428,10 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             return response
         response = await call_next(request)
         response.headers["X-Request-Id"] = request.state.request_id
+        try:
+            _renew_session_cookie(request, response, principal)
+        except Exception:
+            logger.exception("Failed to renew the session cookie")
         if response.status_code == 403:
             try:
                 write_audit_event(

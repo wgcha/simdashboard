@@ -39,7 +39,10 @@ class PostgresPoolSettings:
 class SecuritySettings:
     auth_mode: str
     secret_key: str | None
-    token_ttl_minutes: int
+    # Explicit AUTH_TOKEN_TTL_MINUTES (legacy, compatibility). When set it defines the token/cookie lifetime;
+    # otherwise ``session_idle_days`` does. Both are renewed on use (sliding session, see app.security).
+    token_ttl_minutes: int | None
+    session_idle_days: int
     cors_allowed_origins: tuple[str, ...]
     cookie_secure: bool
     oidc_issuer_url: str | None
@@ -56,6 +59,13 @@ class SecuritySettings:
     oidc_login_failure_url: str
     oidc_timeout_seconds: float
     oidc_allow_insecure_localhost: bool
+
+    @property
+    def session_lifetime_seconds(self) -> int:
+        """Token ``exp`` and cookie ``max_age``: explicit AUTH_TOKEN_TTL_MINUTES wins, else AUTH_SESSION_IDLE_DAYS."""
+        if self.token_ttl_minutes is not None:
+            return self.token_ttl_minutes * 60
+        return self.session_idle_days * 86400
 
 
 @dataclass(frozen=True)
@@ -284,12 +294,24 @@ def security_settings() -> SecuritySettings:
     secret_key = os.getenv("AUTH_SECRET_KEY")
     # A password installation may need to serve the public setup status before
     # its first secret/admin is created. Private traffic remains fail-closed.
+    # Sliding session: the lifetime is counted from the last renewal (idle lifetime), 30 days by default.
+    # An explicitly set AUTH_TOKEN_TTL_MINUTES (non-empty) still wins over AUTH_SESSION_IDLE_DAYS.
+    raw_ttl = os.getenv("AUTH_TOKEN_TTL_MINUTES", "").strip()
+    token_ttl_minutes: int | None = None
+    if raw_ttl:
+        try:
+            token_ttl_minutes = int(raw_ttl)
+        except ValueError as exc:
+            raise RuntimeError("AUTH_TOKEN_TTL_MINUTES는 정수여야 합니다.") from exc
+        if not 5 <= token_ttl_minutes <= 525600:
+            raise RuntimeError("AUTH_TOKEN_TTL_MINUTES는 5~525600분이어야 합니다.")
+    raw_idle_days = os.getenv("AUTH_SESSION_IDLE_DAYS", "").strip() or "30"
     try:
-        token_ttl_minutes = int(os.getenv("AUTH_TOKEN_TTL_MINUTES", "480"))
+        session_idle_days = int(raw_idle_days)
     except ValueError as exc:
-        raise RuntimeError("AUTH_TOKEN_TTL_MINUTES는 정수여야 합니다.") from exc
-    if not 5 <= token_ttl_minutes <= 10080:
-        raise RuntimeError("AUTH_TOKEN_TTL_MINUTES는 5~10080분이어야 합니다.")
+        raise RuntimeError("AUTH_SESSION_IDLE_DAYS는 정수여야 합니다.") from exc
+    if not 1 <= session_idle_days <= 365:
+        raise RuntimeError("AUTH_SESSION_IDLE_DAYS는 1~365일이어야 합니다.")
     origins = tuple(
         origin.strip()
         for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",")
@@ -343,6 +365,7 @@ def security_settings() -> SecuritySettings:
         auth_mode=auth_mode,
         secret_key=secret_key,
         token_ttl_minutes=token_ttl_minutes,
+        session_idle_days=session_idle_days,
         cors_allowed_origins=origins,
         cookie_secure=cookie_secure,
         oidc_issuer_url=os.getenv("OIDC_ISSUER_URL"),

@@ -2,6 +2,16 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-23 — 로그인 유지(0.3.0.3): 슬라이딩 세션, 로그아웃 전에는 만료되지 않음
+
+- 요청: "로그아웃하기 전에는 로그인이 유지되게." 기존에는 로그인 8시간(`AUTH_TOKEN_TTL_MINUTES=480`) 뒤 고정 만료라 작업 중에도 모두 로그아웃됐다.
+- 구현: `SecurityMiddleware`(`app/security.py`)가 인증·계정 상태 검사를 통과한 뒤 마지막 응답에서 `_renew_session_cookie` 한 곳으로 갱신한다. 쿠키로 인증된 요청의 토큰 `iat`이 `min(1시간, 수명/2)` 이상 지났으면 새 토큰과 쿠키(HttpOnly·SameSite=Strict·Path=/·`AUTH_COOKIE_SECURE`)를 응답에 싣는다. 인증 실패·계정 중지·`/api/auth/logout`·Bearer 헤더 호출자·이미 세션 쿠키를 설정하는 응답은 갱신하지 않는다. 쿠키 쓰기는 `set_session_cookie` 하나로 모았다(로그인·OIDC 콜백·갱신). OIDC도 같은 쿠키·토큰이라 같은 갱신이 적용된다. 프런트는 쿠키만 쓰고 `access_token`을 저장하지 않으므로 변경 없음.
+- 설정: `AUTH_SESSION_IDLE_DAYS`(기본 30, 1~365)가 토큰 `exp`·쿠키 `max_age`(마지막 갱신부터). `AUTH_TOKEN_TTL_MINUTES`는 호환용으로 남기고(허용 5~525600분, 비어 있으면 미설정) 설정하면 그 값이 수명을 정한다(우선순위 TTL_MINUTES > IDLE_DAYS). 절대 최대 수명 없음.
+- 폐기는 그대로: 검사 순서상 갱신은 `_load_principal`(서명·exp·계정 상태·`sessions_revoked_at`)을 통과한 요청에서만 일어나고, 갱신 토큰 `iat`은 갱신 시각이라 이후 비밀번호 초기화(`iat <= sessions_revoked_at`)가 항상 이긴다. 로그아웃·중지·`AUTH_SECRET_KEY` 변경도 그대로 로그아웃.
+- Rocky 8 설치 스크립트 기본값이 `AUTH_TOKEN_TTL_MINUTES=480`을 환경 파일에 썼기 때문에 `install.sh`/`install.env.example`을 `AUTH_SESSION_IDLE_DAYS=30`+빈 `AUTH_TOKEN_TTL_MINUTES=`로 바꿨다. 이미 만든 서버의 `/etc/simdashboard/simdashboard.env`·설치 설정 파일에 `AUTH_TOKEN_TTL_MINUTES=480`이 있으면 그 줄을 지우거나 비워야 8시간 유휴 만료가 사라진다.
+- 문서: `.env.example`, `deploy/rocky8/install.env.example`, `docs/deployment-security-backup-guide.md`, `docs/access-control-functional-specification.md` §3.3. `RELEASES.md` 0.3.0.3.
+- 검증: 신규 `backend/tests/test_sliding_session.py` 10건(시계 대체: 59분 미갱신·61분 갱신·쿠키 속성, 20일 뒤 갱신해 45일째도 유효, 만료 401·미갱신, 갱신 뒤 초기화·폐기 토큰 401·미갱신, 계정 중지 403·쿠키 삭제, 로그아웃 삭제·미갱신, Bearer 미갱신, 명시 TTL 60분이 수명·임계값 결정, 설정 범위).
+
 ## 2026-10-22 — 결과 받기 작업(0.3.0.2): 등록·확인은 목록만, 결과 다운로드는 이어 받는 백그라운드 작업 (이슈 #51/#55)
 
 - 실서버 증상(SCX 드라이브, 어댑터 `local_safe`/`download_to` 수정 뒤): [저장 폴더 새로고침]에서 `PROJ-000099_R95J개발과제/WR-00000806_유통 환경 시뮬레이션`은 `DISCOVERY_TIME_BUDGET`, `…/WR-00000804_유통환경시뮬레이션 (유통)`은 `FOLDER_SCHEMA_SCAN_INCOMPLETE "읽지 못한 곳: …/FINAL (list_dir, DRIVE_READ_NOT_PREPARED)"`. 등록 중 드라이브 호출은 약 6초에 1건(결과 CSV·JPG 다운로드, `SIMDASH_SCX_MAX_CONCURRENCY=1`).

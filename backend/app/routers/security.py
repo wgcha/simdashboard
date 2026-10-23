@@ -15,7 +15,7 @@ from ..database import json_value
 from ..database_connection import connect, rows
 from ..schemas.api import LoginPayload
 from ..schemas.auth_accounts import AuthStatusResponse
-from ..security import Principal, SESSION_COOKIE, auth_setup_state, authenticate_credentials, create_access_token, write_audit_event
+from ..security import Principal, SESSION_COOKIE, auth_setup_state, authenticate_credentials, create_access_token, set_session_cookie, write_audit_event
 from ..services.oidc_service import (
     OIDC_FLOW_TTL_SECONDS,
     OidcProtocolError,
@@ -248,15 +248,7 @@ async def oidc_callback(request: Request, code: str | None = None, state: str | 
         principal, _ = _upsert_oidc_user(request, claims)
         token, _ = create_access_token(principal)
         response = RedirectResponse(settings.oidc_login_success_url, status_code=302)
-        response.set_cookie(
-            SESSION_COOKIE,
-            token,
-            max_age=settings.token_ttl_minutes * 60,
-            httponly=True,
-            secure=settings.cookie_secure,
-            samesite="strict",
-            path="/",
-        )
+        set_session_cookie(response, token)
         response.delete_cookie(OIDC_FLOW_COOKIE, path="/api/auth/oidc", httponly=True, samesite="lax")
         return response
     except OidcProtocolError as error:
@@ -274,16 +266,7 @@ def login(payload: LoginPayload, request: Request, response: Response) -> dict[s
         write_audit_event(request=request, principal=None, status_code=401, action="LOGIN_FAILED", detail={"username": payload.username.strip().lower()})
         raise HTTPException(401, "아이디·비밀번호와 계정 승인 상태를 확인해 주세요.", headers={"WWW-Authenticate": "Bearer"})
     token, expires_at = create_access_token(principal)
-    settings = security_settings()
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        max_age=settings.token_ttl_minutes * 60,
-        httponly=True,
-        secure=settings.cookie_secure,
-        samesite="strict",
-        path="/",
-    )
+    set_session_cookie(response, token)
     request.state.principal = principal
     write_audit_event(request=request, principal=principal, status_code=200, action="LOGIN_SUCCEEDED")
     return {
