@@ -84,7 +84,8 @@ jobs:
             tests/test_prepare_account_deployment_diagnostics.py `
             tests/test_deployment_media_backup.py `
             tests/test_windows_web_access.py `
-            tests/test_windows_external_wheels.py
+            tests/test_windows_external_wheels.py `
+            tests/test_blob_store_locked.py
       - name: Verify persistent media and report-template roots
         working-directory: backend
         run: |

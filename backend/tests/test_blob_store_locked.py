@@ -69,3 +69,19 @@ def test_content_still_being_written_is_not_stored(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         store.put(source, hashlib.sha256(b"half and the rest").hexdigest())
     assert not [p for p in (tmp_path / "blobs").rglob("*") if p.is_file()]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows sharing violation (runs in the Windows CI job)")
+def test_real_windows_lock_while_another_handle_is_open(tmp_path):
+    """No mocks: on Windows an open handle (opened without FILE_SHARE_DELETE, as Python and most
+    programs do) makes rename/delete fail with WinError 32 -- exactly the server log of issue #51."""
+    source = tmp_path / "staging" / "LAYER_ALIGN_C15_SIDE_BOT_Stress_P1_(major)_Max.h3d.csv"
+    source.parent.mkdir()
+    data = b"edge,value\n1,2\n" * 1000
+    source.write_bytes(data)
+    sha = hashlib.sha256(data).hexdigest()
+    with source.open("rb"):  # another process still holding the downloaded file
+        with pytest.raises(PermissionError):
+            os.replace(source, tmp_path / "probe")  # proves the lock is real on this runner
+        stored = BlobStore(tmp_path / "blobs", 10 ** 9).put(source, sha)
+    assert stored.read_bytes() == data and stored.name == sha
