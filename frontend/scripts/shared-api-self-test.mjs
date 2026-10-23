@@ -10,6 +10,7 @@ import { normalizePhysicsAiLink, physicsAiNavHref, PHYSICSAI_LINK_OFF } from '..
 import { eslNavHref, ESL_LINK_OFF, normalizeEslLink } from '../src/shared/api/eslLinkModel.ts'
 import { elapsedText, rescanProgressDetail } from '../src/shared/api/storageRescanModel.ts'
 import { buildLine, compareVersion, deploymentKey, isNewVersion, newVersionDeployed, normalizeReleases, versionLabel } from '../src/shared/api/releasesModel.ts'
+import { caseResultState, resultStateChoices } from '../src/shared/api/hierarchyChoiceModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
 const validationMessage = apiErrorMessage(validation, '요청 실패 (422)')
@@ -284,3 +285,22 @@ assert(isNewVersion('0.3.0', null) && isNewVersion('0.3.1', '0.3.0') && !isNewVe
 assert(isNewVersion('0.3.0.1', '0.3.0') && !isNewVersion('0.3.0', '0.3.0.1'), 'releases: new-version dot rule with a fourth part')
 
 console.log('Shared API self-test passed.')
+
+// Case results path: Cases and levels without results stay choices, labelled (not hidden).
+{
+  const cases = [
+    { id: 'a', label: 'CaseA', capture_count: 2 },
+    { id: 'b', label: 'CaseB', capture_count: 0, capture_pending: true },
+    { id: 'c', label: 'CaseC', capture_count: 0, capture_failed: true },
+    { id: 'd', label: 'CaseD', capture_count: 0 },
+  ]
+  const shown = resultStateChoices(cases)
+  const expected = ['CaseA', 'CaseB · 결과 받는 중', 'CaseC · 결과 없음', 'CaseD · 결과 없음']
+  if (JSON.stringify(shown.map((item) => item.label)) !== JSON.stringify(expected)) throw new Error(`case labels: ${JSON.stringify(shown.map((item) => item.label))}`)
+  if (shown[0].reason || !shown[1].reason || !shown[2].reason.includes('다시 시도') || !shown[3].reason) throw new Error('case reasons (tooltips) missing')
+  const levels = [{ id: 'l1', label: 'Drop', case_id: 'b', capture_id: null }, { id: 'l2', label: 'Drop2', case_id: 'a', capture_id: 'x' }]
+  const pending = resultStateChoices(levels, cases[1])
+  if (pending[0].label !== 'Drop · 결과 받는 중' || pending[1].label !== 'Drop2') throw new Error(`level labels: ${JSON.stringify(pending)}`)
+  if (resultStateChoices(levels, cases[0]).some((item) => item.label.includes('·'))) throw new Error('captured Case levels must be plain')
+  if (caseResultState(cases[0]) !== null) throw new Error('captured Case has no result state')
+}

@@ -178,3 +178,50 @@ def test_sync_scan_is_complete_even_when_content_checks_use_up_its_deadline(scx,
     scx.drive.call_delay_s = {}
     final = folder_auto_sync.sync_scope(project_id, request_id, "DISTRIBUTION", "test", force=True)
     assert final["status"] in {"REFRESHED", "UNCHANGED"} and final["drive"]["pending_changes"] == 0, final
+
+
+def test_catalog_offers_the_registered_hierarchy_of_cases_whose_results_are_pending(scx, monkeypatch):
+    """SCX drive, 2026-10-23: with captures pending (or failed) and no readable Folder Schema snapshot the
+    catalog had no Load case / Run case / Run option of the Cases without results, so the Case results
+    page showed one captured Case's levels as fixed text.  The registration's folders now fill them in."""
+    _container_schema()
+    _slow_drive(scx, monkeypatch)
+    project = _project(uuid.uuid4().hex[:6])
+    _slow_request(scx, f"{project}/WR-00000806_유통 환경 시뮬레이션")
+    body = scx.client.post(ENV + "/discover", json={"force": True}).json()
+    request_id = body["created_requests"][0]["id"]
+
+    def catalog():
+        response = scx.client.get("/api/dashboard/catalog", params={"request_id": request_id, "environment": "DISTRIBUTION"})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def levels(data, case):
+        loads = [i for i in data["load_cases"] if i["case_id"] == case["id"]]
+        runs = [i for i in data["execution_runs"] if i["case_id"] == case["id"] and i["load_case_id"] in {x["id"] for x in loads}]
+        options = [i for i in data["run_options"] if i["case_id"] == case["id"] and i["execution_run_id"] in {x["id"] for x in runs}]
+        return loads, runs, options
+
+    data = catalog()
+    assert {case["label"] for case in data["cases"]} == set(CASES)
+    for case in data["cases"]:
+        assert case["capture_pending"] and not case.get("capture_count")
+        loads, runs, options = levels(data, case)
+        assert [i["label"] for i in loads] == ["Drop"] and len(runs) == 1 and len(options) == 1, (loads, runs, options)
+        assert all(i["capture_id"] is None for i in loads + runs + options)
+    # One Case captured, the other still pending: both keep their levels.
+    for _ in range(8):
+        _capture_jobs().run_pending(budget_seconds=3.5, session_seconds=3.0)
+        if any(status == "COMPLETED" for status, _code in _jobs(request_id)):
+            break
+    statuses = [status for status, _code in _jobs(request_id)]
+    assert "COMPLETED" in statuses and "PENDING" in statuses, statuses
+    data = catalog()
+    for case in data["cases"]:
+        loads, runs, options = levels(data, case)
+        assert loads and runs and options, (case["label"], loads, runs, options)
+    # A failed job is told apart from a pending one (결과 없음 vs 결과 받는 중).
+    with connect() as conn:
+        conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='X' WHERE status='PENDING'")
+    failed = [case for case in catalog()["cases"] if case.get("capture_failed")]
+    assert failed and not any(case.get("capture_pending") for case in failed)

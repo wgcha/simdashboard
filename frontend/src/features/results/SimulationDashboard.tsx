@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, Expand, Image as ImageIcon, Info, Layers3, Play, RotateCcw, SlidersHorizontal } from 'lucide-react'
+import { resultStateChoices, caseResultState } from '../../shared/api/hierarchyChoiceModel'
 import { simulationDashboardApi, type DashboardAsset, type DashboardCatalog, type DashboardChoice, type DashboardComparisonMember, type DashboardDistribution, type DashboardEdgePeak, type DashboardEnvironment, type DashboardMember, type DashboardScene, type DashboardSceneDetail, type DashboardValue, type UsageDashboard } from '../../shared/api/simulationDashboard'
 import { Select } from '../../shared/components/Select'
 import { HierarchyChoice, type HierarchyChoiceOption } from '../../shared/components/HierarchyChoice'
@@ -56,7 +57,8 @@ function SelectField({ label, value, choices, onChange, disabled = false }: { la
   const unique = Array.from(new Map(choices.map((choice) => [choice.id, choice])).values())
   return <label className="simulation-dashboard__select"><span>{label}</span><Select controlSize="sm" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>{unique.some((choice) => !choice.id) ? null : <option value="">선택</option>}{unique.map((choice) => <option key={choice.id || 'folder-schema'} value={choice.id} disabled={choice.disabled} title={choice.reason ?? undefined}>{choice.label}</option>)}</Select></label>
 }
-function pathChoices(choices: DashboardChoice[]): HierarchyChoiceOption[] { return choices.map((item) => ({ id: item.id, label: item.capture_pending ? `${item.label} · 결과 받는 중` : item.label, title: item.relative_path ?? item.label, disabled: item.disabled, reason: item.reason })) }
+function pathChoices(choices: DashboardChoice[], owner?: DashboardChoice): HierarchyChoiceOption[] { return resultStateChoices(choices, owner) }
+function plainChoices(choices: DashboardChoice[]): HierarchyChoiceOption[] { return choices.map((item) => ({ id: item.id, label: item.label, title: item.relative_path ?? item.label, disabled: item.disabled, reason: item.reason })) }
 function currentHierarchyChoice(item: DashboardChoice, activeCaptureId: string) {
   return item.capture_id == null || (activeCaptureId !== '' && item.capture_id === activeCaptureId)
 }
@@ -243,16 +245,16 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const pathBar = catalog && !materialsActive ? <HierarchyPath label="Case 경로" className="case-path-bar" trailing={tab === 'distribution' ? <div className="case-scene-chips" role="list" aria-label="Scene 목록">{sceneSummary.length ? sceneSummary.map((item) => <span role="listitem" key={item.label} className={`case-scene-chip${item.hasResult ? ' case-scene-chip--result' : ''}`} title={`${item.title} · ${item.hasResult ? '결과 있음' : '결과 없음'}`}><i aria-hidden="true" />{item.label}<span className="case-sr-only">{item.hasResult ? ' 결과' : ' 결과 없음'}</span></span>) : null}</div> : undefined}>
     {resolvedEnvironment ? <HierarchyChoice label="환경" value={resolvedEnvironment} choices={[{ id: resolvedEnvironment, label: ENVIRONMENT_LABELS[resolvedEnvironment] }]} onChange={() => undefined} /> : null}
     <HierarchyChoice label="Case" value={caseId} choices={pathChoices(catalog.cases)} disabledReason="확정된 Case가 없습니다." onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
-    {tab === 'distribution' ? <HierarchyChoice label="하중경우" value={loadCaseId} choices={pathChoices(loadChoices)} disabled={!caseId} disabledReason={caseId ? '하중경우가 없습니다.' : 'Case를 먼저 선택하세요.'} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} /> : null}
-    {tab === 'distribution' ? <HierarchyChoice label="Run Case" value={runId} choices={pathChoices(runChoices)} disabled={!loadCaseId} disabledReason={loadCaseId ? 'Run Case가 없습니다.' : '하중경우를 먼저 선택하세요.'} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} /> : null}
-    {tab === 'distribution' ? <HierarchyChoice label="Run Option" value={optionId} choices={pathChoices(options)} disabled={!runId} disabledReason={runId ? 'Run Option이 없습니다.' : 'Run Case를 먼저 선택하세요.'} onChange={(value) => { const choice = options.find((item) => item.id === value); setOptionId(value); setMode(choice?.mode ?? ''); setComponentId('') }} /> : null}
+    {tab === 'distribution' ? <HierarchyChoice label="하중경우" value={loadCaseId} choices={pathChoices(loadChoices, selectedCase)} disabled={!caseId} disabledReason={caseId ? '하중경우가 없습니다.' : 'Case를 먼저 선택하세요.'} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} /> : null}
+    {tab === 'distribution' ? <HierarchyChoice label="Run Case" value={runId} choices={pathChoices(runChoices, selectedCase)} disabled={!loadCaseId} disabledReason={loadCaseId ? 'Run Case가 없습니다.' : '하중경우를 먼저 선택하세요.'} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} /> : null}
+    {tab === 'distribution' ? <HierarchyChoice label="Run Option" value={optionId} choices={pathChoices(options, selectedCase)} disabled={!runId} disabledReason={runId ? 'Run Option이 없습니다.' : 'Run Case를 먼저 선택하세요.'} onChange={(value) => { const choice = options.find((item) => item.id === value); setOptionId(value); setMode(choice?.mode ?? ''); setComponentId('') }} /> : null}
   </HierarchyPath> : null
 
   const displayOptions = catalog && !materialsActive ? <details className="case-display-options">
     <summary><SlidersHorizontal aria-hidden="true" />표시 옵션</summary>
     <div className="case-display-options__panel">
       {tab === 'distribution' ? <div className="case-display-options__row">
-        <HierarchyChoice label="Component" value={componentId} choices={pathChoices(componentChoices)} disabled={!activeCaptureId || !mode} disabledReason="결과가 있는 Run Option을 먼저 선택하세요." onChange={setComponentId} />
+        <HierarchyChoice label="Component" value={componentId} choices={plainChoices(componentChoices)} disabled={!activeCaptureId || !mode} disabledReason="결과가 있는 Run Option을 먼저 선택하세요." onChange={setComponentId} />
         <HierarchyChoice label="Basis" value={basis} choices={catalog.bases.map((item) => ({ id: item.id, label: basisLabel(item.id) }))} disabled={!activeCaptureId} disabledReason="결과가 있는 Run Option을 먼저 선택하세요." onChange={(value) => setBasis(value === 'DETAIL' ? 'DETAIL' : value === 'REPORTED_SUMMARY' ? 'REPORTED_SUMMARY' : '')} />
       </div> : null}
       {tab === 'distribution' ? <div className="case-display-options__row"><EdgePicker edges={edges} onChange={setEdges} /><LinePicker lines={lines} onChange={setLines} /></div> : null}
@@ -270,7 +272,8 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
 
   const componentLabel = componentChoices.find((item) => item.id === componentId)?.label
   const viewContext = tab === 'distribution' && !materialsActive && (activeView === 'summary' || activeView === 'compare' || activeView === 'cases') && componentLabel && basis ? `${componentLabel} · ${basisLabel(basis)}` : ''
-  const distributionEmpty = selectedCase?.capture_pending && !selectedCase.capture_count ? '결과 받는 중입니다. 드라이브에서 결과 파일을 받는 대로 자동으로 표시됩니다.' : catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
+  const caseState = caseResultState(selectedCase)
+  const distributionEmpty = caseState && selectedCase?.capture_pending ? '결과 받는 중입니다. 드라이브에서 결과 파일을 받는 대로 자동으로 표시됩니다.' : caseState && selectedCase?.capture_failed ? '결과 파일을 받지 못했습니다. 등록 화면에서 다시 시도하세요.' : catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
   const distribution = (section: 'summary' | 'compare') => <DistributionArea key={`${projectId}:${requestId}`} section={section} compareView={compareView} onCompareView={setCompareView} edges={edges} lines={lines} comparison={comparison} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={distributionEmpty} />
   const optionChoiceForCompare = options.find((item) => item.id === optionId)
   const comparePathReady = Boolean(activeCaptureId && runId && mode && componentId && basis && optionChoiceForCompare && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId))

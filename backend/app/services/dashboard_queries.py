@@ -85,6 +85,66 @@ def _name_warnings(schema, locations, root_key, environment):
         return []
 
 
+def _add_registry_hierarchy(conn, request_id, environment, result, captured_cases) -> None:
+    """Load case / Run case / Run option folders of the live registrations, for Cases without choices.
+
+    ``folder_environment_registry`` keeps every non-Scene folder the registration was made from, so a
+    Case whose capture job is pending or failed (no captured Run yet, Folder Schema unavailable) still
+    offers its known levels.  Cases that already have schema choices or a capture are left alone.
+    """
+    rows = conn.execute(
+        "SELECT g.relative_path,g.role_kind,g.target_id,g.raw_name,g.option_status FROM folder_environment_registry g "
+        "JOIN folder_environment_registrations r ON r.id=g.registration_id "
+        "WHERE r.request_id=? AND r.environment=? AND r.status<>'DELETED' "
+        "AND g.role_kind IN ('LOAD_CASE','EXECUTION_RUN','RUN_OPTION') ORDER BY r.created_at,g.relative_path",
+        [request_id, str(environment).upper()]).fetchall()
+    if not rows:
+        return
+    have = {str(item.get("case_id")) for item in result["load_cases"]} | {str(item) for item in captured_cases}
+    cases = {str(item["relative_path"]).casefold(): item for item in result["cases"]
+             if item.get("relative_path") and str(item["id"]) not in have}
+    if not cases:
+        return
+
+    def parent(path: str, candidates: dict[str, Any]) -> tuple[str, Any] | None:
+        parts = path.casefold().split("/")
+        for size in range(len(parts) - 1, 0, -1):
+            key = "/".join(parts[:size])
+            if key in candidates:
+                return key, candidates[key]
+        return None
+
+    loads: dict[str, Any] = {}
+    runs: dict[str, Any] = {}
+    seen: set[tuple[str, str]] = set()
+    for relative_path, role, target_id, raw_name, option_status in rows:
+        path = str(relative_path)
+        if (role, path.casefold()) in seen:
+            continue
+        seen.add((role, path.casefold()))
+        base = {"id": str(target_id), "label": str(raw_name), "relative_path": path,
+                "capture_id": None, "match_status": "UNCAPTURED"}
+        if role == "LOAD_CASE":
+            found = parent(path, cases)
+            if found:
+                choice = {**base, "case_id": str(found[1]["id"])}
+                loads[path.casefold()] = choice
+                result["load_cases"].append(choice)
+        elif role == "EXECUTION_RUN":
+            found = parent(path, loads)
+            if found:
+                choice = {**base, "case_id": found[1]["case_id"], "load_case_id": found[1]["id"]}
+                runs[path.casefold()] = choice
+                result["execution_runs"].append(choice)
+        else:
+            found = parent(path, runs)
+            if found:
+                result["run_options"].append({
+                    **base, "case_id": found[1]["case_id"], "execution_run_id": found[1]["id"],
+                    "run_option_id": base["id"], "option_label": base["label"],
+                    "option_status": option_status or "PRESENT", "mode": base["label"].upper()})
+
+
 def catalog(conn, request_id, environment, project_id=None):
     from . import folder_discovery, folder_discovery_environment, folder_schema_hierarchy, folder_schema_resolver
 
@@ -187,7 +247,19 @@ def catalog(conn, request_id, environment, project_id=None):
             if current_storage_root_id and case.get("relative_path") else None)
         if dashboard_id in pending:
             case["capture_pending"] = True
+    from .capture_jobs import failed_cases
+    failed = failed_cases(conn, request_id, environment)
+    for case in result["cases"] if failed else []:
+        dashboard_id = case.get("dashboard_case_id") or (
+            _case_id(current_storage_root_id, str(case["relative_path"]))
+            if current_storage_root_id and case.get("relative_path") else None)
+        if dashboard_id in failed and not case.get("capture_pending"):
+            case["capture_failed"] = True
 
+    # A registered Case shows the hierarchy known from its registration even before (or without) a
+    # capture or a readable Folder Schema snapshot (drive busy/auth errors leave captures pending).
+    captured_cases = {dashboard_case_ids.get(str(row[0]), str(row[0])) for row in records if row[4]}
+    _add_registry_hierarchy(conn, request_id, environment, result, captured_cases)
     case_choices = {str(item["id"]): item for item in result["cases"]}
 
     def emit(capture_id, label, dashboard_case_id, canonical_case_id, payload, match_status):

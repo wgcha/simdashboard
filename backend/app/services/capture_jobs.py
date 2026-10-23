@@ -81,6 +81,14 @@ def pending_cases(conn, request_id: str, environment: str) -> set[str]:
         "AND j.status IN ('PENDING','RUNNING')", [request_id, str(environment).upper()]).fetchall()}
 
 
+def failed_cases(conn, request_id: str, environment: str) -> set[str]:
+    """Dashboard Case ids of one request scope whose capture job failed (결과 없음, retry offered)."""
+    return {str(row[0]) for row in conn.execute(
+        "SELECT DISTINCT j.case_id FROM folder_environment_capture_jobs j JOIN folder_environment_registrations r "
+        "ON r.id=j.registration_id WHERE r.request_id=? AND r.environment=? AND r.status<>'DELETED' "
+        "AND j.status='FAILED'", [request_id, str(environment).upper()]).fetchall()}
+
+
 def _pending_registrations(conn, only: list[str] | None, skip: set[str]) -> list[str]:
     marks = ",".join("?" for _ in LIVE_STATES)
     found = [str(row[0]) for row in conn.execute(

@@ -2,6 +2,13 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-23 — Case 결과 경로: 받는 중·실패 Case와 하위 선택지가 사라지지 않게
+
+- 증상(SCX 드라이브 서버, WR-00000806): Case·하중경우·Run Case·Run Option이 모두 고정 글자로만 보여 다른 Case/Run을 고를 수 없었다.
+- 원인: `dashboard_queries.catalog`는 하중경우/Run Case/Run Option을 Folder Schema 스냅샷(`project_schema_hierarchy`) 또는 수집된 결과(`emit`)에서만 만든다. 드라이브 모드(195bc32)에서 수집이 대기/실패이고 스냅샷이 아직 없거나 읽히지 않으면(드라이브 인증/바쁨) 해당 Case의 하위 선택지가 0개이고, 수집된 Case 하나만 후보가 1개씩이라 `HierarchyChoice`가 고정 글자로 그렸다.
+- 수정: `_add_registry_hierarchy`가 등록 때 저장한 `folder_environment_registry`에서 결과 없는 Case의 하중경우·Run Case·Run Option을 채움(`capture_id=null`). 실패 작업은 `cases[].capture_failed`. 프런트 `hierarchyChoiceModel.resultStateChoices`가 결과 없는 Case와 하위 선택지를 `· 결과 받는 중`/`· 결과 없음` + 툴팁 이유로 선택 가능하게 표시하고 선택 시 빈 결과 안내를 보인다. API 스키마 변경 없음(카탈로그 응답은 자유 형식).
+- 검증: `tests/test_capture_jobs_drive.py::test_catalog_offers_the_registered_hierarchy_of_cases_whose_results_are_pending`(Case 2개 등록·수집 대기 → 두 Case 모두 하위 선택지, 한 Case만 수집돼도 유지, 실패는 `capture_failed`), `npm run test:api`, `tsc -b --noEmit`.
+
 ## 2026-10-23 — 로그인 유지(0.3.0.3): 슬라이딩 세션, 로그아웃 전에는 만료되지 않음
 
 - 요청: "로그아웃하기 전에는 로그인이 유지되게." 기존에는 로그인 8시간(`AUTH_TOKEN_TTL_MINUTES=480`) 뒤 고정 만료라 작업 중에도 모두 로그아웃됐다.
