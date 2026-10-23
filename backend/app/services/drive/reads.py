@@ -82,7 +82,7 @@ BLOB_THRESHOLD_BYTES = 32 * 1024 * 1024
 MAX_FILE_BYTES = 512 * 1024 * 1024          # same bound as the local stable reader
 MAX_ROUNDS = 8
 # download_to retries while a scanner holds the freshly written file (issue #51, 2026-10-23).
-DOWNLOAD_LOCK_RETRY_SECONDS = (1.0, 3.0, 6.0)
+DOWNLOAD_LOCK_RETRY_SECONDS = (1.0, 3.0, 6.0, 15.0, 30.0)
 LIST_PREFETCH_DEPTH = 4                     # folder levels listed below a missed folder
 LIST_PREFETCH_MAX = 600                     # listings per miss
 CONTENT_PREFETCH_MAX_FILES = 2000

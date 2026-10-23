@@ -149,9 +149,25 @@ _SHARING_VIOLATION = re.compile(r"WinError 32\b|WinError 33\b|being used by anot
 
 def map_drive_error(error: BaseException) -> DriveErrorMapping:
     code = drive_error_code(error) or ""
-    if code in {"", "INTERNAL"} and _SHARING_VIOLATION.search(str(getattr(error, "message", None) or error)):
+    mapping = DRIVE_ERROR_MAP.get(code, _FALLBACK)
+    # Any non-retryable answer (INTERNAL, an unknown adapter code, ...) whose text is a Windows sharing
+    # violation is a busy file: the 0.3.0.8 check only looked at code INTERNAL and missed the server's
+    # real adapter answer (issue #51, 2026-10-23 18:22 log still showed DRIVE_INTERNAL).
+    if not mapping.retryable and _SHARING_VIOLATION.search(_error_text(error)):
         return DRIVE_ERROR_MAP["BUSY"]
-    return DRIVE_ERROR_MAP.get(code, _FALLBACK)
+    return mapping
+
+
+def _error_text(error: BaseException) -> str:
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen and len(parts) < 6:
+        seen.add(id(current))
+        parts.append(str(getattr(current, "message", None) or ""))
+        parts.append(str(current))
+        current = current.__cause__ or current.__context__
+    return " ".join(parts)
 
 
 _STORAGE_STATUS = {mapping.storage_code: mapping.http_status for mapping in DRIVE_ERROR_MAP.values()}  # duplicates agree

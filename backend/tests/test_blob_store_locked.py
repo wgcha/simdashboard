@@ -100,6 +100,12 @@ def test_adapter_sharing_violation_is_a_retryable_busy_file():
     assert gateway.to_storage_error(locked).code == "SPDM_FILE_BUSY"
     assert gateway.map_drive_error(locked).retryable is True
     assert gateway.to_storage_error(AdapterError("INTERNAL", "boom")).code == "DRIVE_INTERNAL"
+    # 2026-10-23 18:22 server log: still DRIVE_INTERNAL -> the adapter's code was not INTERNAL.
+    for code in ("", "IO_ERROR", "LOCAL_IO", "FORBIDDEN", "UNKNOWN"):
+        assert gateway.to_storage_error(AdapterError(code, locked.message)).code == "SPDM_FILE_BUSY", code
+    wrapped = AdapterError("IO_ERROR", "download failed")
+    wrapped.__cause__ = PermissionError("[WinError 32] 다른 프로세스가 파일을 사용 중이기 때문에")
+    assert gateway.to_storage_error(wrapped).code == "SPDM_FILE_BUSY"
 
 
 def test_download_is_retried_while_the_scanner_holds_the_new_file(monkeypatch, tmp_path):
