@@ -239,6 +239,12 @@ def reset_for_tests() -> None:
         _exclusion_cache.clear()
 
 
+def forget_all() -> None:
+    """Forget every in-memory result of this process (folder registration reset, 2026-10-23): the last
+    discovery result, needs-review memos, retry backoffs and the exclusion cache."""
+    reset_for_tests()
+
+
 def clear_review_memos() -> None:
     """Forget remembered needs-review results and retry backoffs (manual full rescan)."""
     with _state_lock:
@@ -419,8 +425,12 @@ def _linked_state(conn, root_key: str) -> dict[str, Any]:
             projects.setdefault(_node_key(str(path)), set()).add(str(target))
             project_paths.setdefault(_node_key(str(path)), str(path))
             project_spellings.setdefault(_node_key(str(path)), set()).add(str(path))
+    # Legacy links (SPDM parent bindings, the old folder registry) count only while their request exists
+    # (2026-10-23): an orphan row of a deleted request kept its folder "linked", and a folder respelled
+    # since (``PROJ-…_R95J 개발 과제`` -> ``PROJ-…_R95J개발과제``) was then skipped silently forever.
     for project_folder, request_folder, project_id in conn.execute(
-            "SELECT project_folder,request_folder,project_id FROM spdm_storage_request_parents").fetchall():
+            "SELECT p.project_folder,p.request_folder,p.project_id FROM spdm_storage_request_parents p "
+            "WHERE EXISTS (SELECT 1 FROM analysis_requests a WHERE a.id=p.request_id)").fetchall():
         requests.add(_node_key(str(request_folder)))
         request_paths.add(str(request_folder))
         request_projects.setdefault(_node_key(str(request_folder)), set()).add(str(project_id))
@@ -429,8 +439,9 @@ def _linked_state(conn, root_key: str) -> dict[str, Any]:
         project_spellings.setdefault(_node_key(str(project_folder)), set()).add(str(project_folder))
     try:
         legacy_rows = conn.execute(
-            "SELECT relative_path,role_kind,target_id,parent_target_id FROM folder_discovery_registry "
-            "WHERE root_key=? AND role_kind IN ('PROJECT','REQUEST')", [root_key]).fetchall()
+            "SELECT g.relative_path,g.role_kind,g.target_id,g.parent_target_id FROM folder_discovery_registry g "
+            "WHERE g.root_key=? AND (g.role_kind='PROJECT' OR (g.role_kind='REQUEST' AND EXISTS "
+            "(SELECT 1 FROM analysis_requests a WHERE a.id=g.target_id)))", [root_key]).fetchall()
     except Exception:  # pragma: no cover - legacy table missing on a minimal schema
         legacy_rows = []
     for path, role, target, parent_target in legacy_rows:
@@ -891,6 +902,8 @@ def _superseded_registrations(conn, root_key: str, holder: dict[str, Any]) -> tu
 
 _RENAME_AMBIGUOUS = ("이전 의뢰 폴더가 없어졌고 같은 의뢰번호·환경의 새 폴더가 여러 개입니다. "
                      "하나만 남기거나 폴더 조사에서 기존 의뢰에 연결하세요.")
+_RESPELLED_UNSUPPORTED = ("공백만 다른 이름의 폴더가 이미 다른 방식(SPDM 폴더 연결·구 폴더 등록 또는 둘 이상의 등록)으로 연결되어 있어 "
+                          "자동으로 옮기지 않았습니다. 폴더 조사에서 기존 의뢰에 연결하거나 관리자가 [폴더 등록 전체 초기화] 후 다시 확인하세요.")
 _RENAME_UNSUPPORTED = ("이전 의뢰 폴더가 없어졌지만 이 의뢰의 연결은 자동으로 옮길 수 없습니다. "
                        "폴더 조사에서 기존 의뢰에 연결하세요.")
 
@@ -1316,7 +1329,11 @@ def _discover_project(conn, root, root_key: str, lister: _Lister, linked: dict[s
         folded = _node_key(request_path)
         respace = respace_plans.get(request_path)
         if request_path in respaced_paths and respace is None:
-            continue   # linked via SPDM parent tables / legacy registry or in conflict: left as before
+            # Linked via SPDM parent tables / legacy registry or in conflict: left as before, but reported
+            # (2026-10-23: it used to be skipped without a word and the folder was never registered).
+            needs_review.append(_review(request_path, "WR_ALREADY_LINKED", _RESPELLED_UNSUPPORTED,
+                                        request_identity(name)[1]))
+            continue
         if _is_excluded(request_path, linked["excluded"]):
             needs_review.append(_excluded_review(request_path, linked))
             continue

@@ -2,6 +2,14 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-23 — 삭제 뒤 옛 폴더 경로가 되살아나던 원인 수정과 「폴더 등록 전체 초기화」
+
+- 증상(운영 SCX 드라이브, PG18): 등록 이력 전체 삭제 + 프로젝트 정리 강제 삭제 뒤에도 새로고침에 `PROJ-000099_R95J 개발 과제`(드라이브는 `…R95J개발과제`)·`SPDM_NOT_FOUND:list_dir:…`·`…/Drop/85qn80h_ref_organized/INDIVIDUAL`(드라이브는 `completed_Drop`)이 나오고 `WR-00000800_유통환경시뮬레이션`이 등록되지 않음.
+- 전수 조사(깊이 스키마 계약 §16.8 표): 두 삭제 뒤 남는 경로 상태 중 탐색·동기화가 경로로 읽는 것은 ① `drive_source_versions`(두 삭제 모두 유지, 정리는 KEEP) — `sources.load_overlay`가 저장소 전체 MISSING 행을 읽고 `storage/drive.py::_children`이 그 상위 폴더를 목록에 합성 → 옛 철자 프로젝트 폴더 부활(공백 쌍둥이 병합 시 첫 철자가 이름), 지운 의뢰의 PRESENT 행은 재등록 때 경로로 다시 묶여 옛 경로 MISSING, ② `_linked_state`가 의뢰 존재 확인 없이 읽던 `spdm_storage_request_parents`·`folder_discovery_registry` → respaced 새 폴더를 보고 없이 건너뜀. 묘비·조사 이력·스냅샷은 id로만 읽혀 부활 원인 아님.
+- 수정: 오버레이는 존재하는 의뢰 행만; 등록 삭제·프로젝트 정리가 지운 의뢰·프로젝트의 원본 현재 행을 닫고(superseded, 이력 유지) 표시 NULL; `classify_request`가 드라이브에 없는 다른 철자 행도 실제 철자로 옮김; `_linked_state` 예전 연결은 의뢰가 있을 때만, 옮길 수 없는 respaced 폴더는 `WR_ALREADY_LINKED`로 보고.
+- 신규 「폴더 등록 전체 초기화」(`folder_registration_reset.py`, POST `…/registration-reset/preview`·`…/registration-reset`, 전역 관리자, 프로젝트 정리 탭 위험 영역 카드, `초기화` 입력): 폴더 유래 프로젝트와 하위 전부 + 폴더 경로 표 전체(묘비 포함)를 한 트랜잭션(DuckDB 단계 커밋)으로 지우고 메모리 상태를 비움. 관리자 제외 목록은 선택(기본 유지). 계정·권한·깊이 스키마·드라이브 설정·감사·업로드 대기열·Final 기록·blob 유지, 드라이브 파일 무변경. 새로고침·탐색·결과 받기·업로드·Final 실행 중이면 409 `FOLDER_RESET_BUSY`. 감사 `FOLDER_REGISTRATION_RESET`.
+- 남은 점: 다중 워커 프로세스면 다른 프로세스의 메모리 memo는 다음 실행 때 갱신(결정은 DB 재조회). 실제 PG18·운영 드라이브 검증은 하지 않음(DuckDB + 가짜 드라이브).
+
 ## 2026-10-23 — SCX 드라이브 결과 받기·Final 확정: 실패하던 백엔드 테스트 2건의 원인과 수정
 
 - `test_capture_jobs_drive.py::test_discovery_registration_lists_only_and_the_cases_wait_as_pending_jobs`("a pass downloaded nothing", 밑에 `DASHBOARD_PATH_ESCAPE`): 195bc32 코드에서도 이 환경에서 실패(커밋 회귀 아님, 실행 속도 의존). ① 실제 버그: `dashboard_capture._safe_target`이 `fs.resolve()`의 `ValueError`를 모두 `DASHBOARD_PATH_ESCAPE`로 바꿨는데, 드라이브 provider의 `stat`이 내는 `SpdmStorageError`(→`StorageError`→`ValueError`)도 여기 걸렸다. 경로 이탈이 아니라 읽기 세션 마지막 회차의 `DRIVE_READ_NOT_PREPARED`(또는 `DRIVE_UNAVAILABLE`·`SPDM_FILE_BUSY` 등)다. blob store·staging·capture root 경로와 무관하고 Windows 전용도 아니다(드라이브 provider 도입 이후 계속). 운영 영향: 세션 deadline 전이면 `_interrupted()`가 `DASHBOARD_PATH_ESCAPE`를 중단 코드로 보지 않아 결과 받기 작업이 다시 받을 수 있는데도 `FAILED(DASHBOARD_PATH_ESCAPE)`가 될 수 있었다(deadline 뒤에는 `stop_reason`으로 PENDING 유지). 수정: `SpdmStorageError`는 원래 코드로 전달. ② 테스트 시간 가정: 폴더 확인이 없는 등록의 첫 세션은 `_ensure_snapshot`(목록만)부터 하는데, 가짜 드라이브가 호출마다 토큰 행을 DuckDB로 읽어(연결 1회 약 50 ms × 33회) 3초 세션을 거의 다 쓰면 첫 회차는 다운로드 0건이 된다. 다음 회차부터는 스냅샷이 있어 다운로드한다. 테스트가 이 경우(첫 회차만) 허용하도록 `first_pass_lists`를 추가.

@@ -113,9 +113,18 @@ def _accepted(row: dict[str, Any], *, scoped: bool = True) -> Accepted:
 
 
 def load_overlay(conn: ConnectionLike, root_key: str) -> dict[str, Accepted]:
+    """Rows whose live drive state is not applied (review PENDING/IGNORED, source MISSING) of existing requests.
+
+    Only rows labelled with a request that still exists count (2026-10-23): a MISSING row makes the drive
+    provider show its folders although they are gone (``storage.drive._children``), so a row left by a
+    deleted registration/project (scope cleared by the delete) or of an unregistered folder would bring a
+    renamed or deleted folder back into every discovery listing (``PROJ-…_R95J 개발 과제`` next to
+    ``PROJ-…_R95J개발과제``).
+    """
     found = rows(conn.execute(
         f"SELECT {_ACCEPTED_COLUMNS} FROM drive_source_versions WHERE root_key=? AND superseded_at IS NULL "
-        "AND (review_state<>'NONE' OR source_state='MISSING')", [root_key]))
+        "AND (review_state<>'NONE' OR source_state='MISSING') AND request_id IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM analysis_requests a WHERE a.id=drive_source_versions.request_id)", [root_key]))
     return {str(row["rel_path"]): _accepted(row) for row in found}
 
 
@@ -347,6 +356,22 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
             respelled[rel] = candidates[0]
         elif len(candidates) == 1:
             twins.append(str(registered.pop(rel)["id"]))   # both spellings are registered: the listed one wins
+    # Rows that are not on the drive any more but were registered under another spelling of the request
+    # folder (or its project folder) move to the actual spelling too (2026-10-23): a MISSING row keeps its
+    # path, and the drive provider shows its folders, so the old spelling would come back in every listing.
+    prefix_parts = [part for part in request_path.split("/") if part]
+    for rel in list(registered):
+        if rel in files or rel in respelled or rel.startswith(request_path.rstrip("/") + "/"):
+            continue
+        if path_ambiguous and _under_stored(rel, stored_path):
+            continue
+        moved = "/".join([*prefix_parts, *[part for part in rel.split("/") if part][len(prefix_parts):]])
+        if reads.path_key(moved) != reads.path_key(rel):
+            continue
+        if moved in registered or moved in respelled.values():
+            twins.append(str(registered.pop(rel)["id"]))   # the actual spelling has its own row: it wins
+        else:
+            respelled[rel] = moved
     registered = {respelled.get(rel, rel): row for rel, row in registered.items()}
 
     now = _now()

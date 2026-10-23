@@ -9,7 +9,7 @@ from ..security import write_audit_event
 from ..services.drive import reads as drive_reads
 from ..services import (environment_folder_profiles as service, folder_discovery as legacy,
                         folder_discovery_environment as environment_service, folder_environment_deletion as deletion,
-                        project_cleanup as cleanup)
+                        folder_registration_reset as registration_reset, project_cleanup as cleanup)
 from ..services.semantic_mapping import semantic_transaction
 from .folder_discovery_environment import admin
 from .semantic_body_limit import SemanticBodyLimitRoute
@@ -55,6 +55,17 @@ class CleanupConfirm(CleanupTargets):
     confirm_token: str = Field(min_length=1, max_length=128)
     # Projects whose name the administrator typed (preview `requires_acknowledgement`).
     acknowledge_data_project_ids: list[str] = Field(default_factory=list, max_length=cleanup.MAX_IDS)
+
+
+class RegistrationResetPreview(BaseModel):
+    # Administrator exclusions (folder_discovery_exclusions) survive the reset unless this is false.
+    keep_exclusions: bool = True
+
+
+class RegistrationResetConfirm(RegistrationResetPreview):
+    confirm_token: str = Field(min_length=1, max_length=128)
+    # The administrator types 초기화 (folder_registration_reset.CONFIRM_TEXT).
+    confirmation_text: str = Field(min_length=1, max_length=32)
 
 
 def _invalid(exc: ValueError) -> HTTPException:
@@ -208,6 +219,34 @@ def project_cleanup_delete(payload: CleanupConfirm, request: Request):
                                   force_project_ids=payload.force_project_ids, actor=principal.user_id)
         except ValueError as exc:
             raise HTTPException(422, {"code": "PROJECT_CLEANUP_INVALID", "message": str(exc)}) from exc
+
+
+# ---- reset all folder registrations (§16.8, user request 2026-10-23) --------------
+
+@router.post("/registration-reset/preview")
+def registration_reset_preview(request: Request, payload: RegistrationResetPreview | None = None):
+    """「폴더 등록 전체 초기화」 preview: folder-derived projects, rows per table, running work, confirm token."""
+    with connect() as conn:
+        admin(request, conn)
+        return registration_reset.preview(conn, keep_exclusions=(payload or RegistrationResetPreview()).keep_exclusions)
+
+
+@router.post("/registration-reset")
+def registration_reset_run(payload: RegistrationResetConfirm, request: Request):
+    """Delete every folder registration and folder-derived row (drive/SPDM files are never touched)."""
+    principal = request.state.principal
+    with connect() as conn:
+        admin(request, conn)
+
+        def audit(connection, detail):
+            write_audit_event(request=request, principal=principal, status_code=200,
+                              action="FOLDER_REGISTRATION_RESET", detail=detail, connection=connection)
+
+        try:
+            return registration_reset.reset(conn, payload.confirm_token, payload.confirmation_text,
+                                             keep_exclusions=payload.keep_exclusions, audit=audit)
+        except ValueError as exc:
+            raise HTTPException(422, {"code": "FOLDER_RESET_INVALID", "message": str(exc)}) from exc
 
 
 # ---- request reinterpret (§6, D9) --------------------------------------------------

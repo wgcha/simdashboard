@@ -219,6 +219,14 @@ def token_observation() -> dict[str, Any]:
         return dict(_observed)
 
 
+def forget_spellings() -> None:
+    """Forget the remembered drive spellings and failure-log throttle (folder registration reset, 2026-10-23)."""
+    with _call_log_lock:
+        _call_logged.clear()
+    with _spelling_lock:
+        _spellings.clear()
+
+
 def reset_for_tests() -> None:
     with _observed_lock:
         _observed.update(sha1=0, size_mtime=0, last_kind=None, last_at=None)

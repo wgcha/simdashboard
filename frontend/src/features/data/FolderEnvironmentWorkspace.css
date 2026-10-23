@@ -160,6 +160,10 @@
 .folder-cleanup-forced code{word-break:break-all}
 .folder-cleanup-acknowledge-item label{display:grid;gap:4px}
 .folder-cleanup-acknowledge-item input{max-width:420px}
+.folder-reset{border-color:var(--color-danger-border,var(--color-danger,#c0392b))}
+.folder-reset-preview{display:grid;gap:8px}
+.folder-reset-confirm{display:grid;gap:4px}
+.folder-reset-confirm input{max-width:240px}
 .folder-review-bulk{display:flex;flex-wrap:wrap;gap:8px}
 .folder-node-subtree{justify-self:start}
 .depth-schema-apply{display:flex;flex-wrap:wrap;align-items:center;gap:8px}

@@ -9,6 +9,7 @@ import { FolderRegistrationResults, roleLabel } from './FolderEnvironmentPanels'
 import { DepthSchemaEditor } from './DepthSchemaEditor'
 import { FolderRegistrationHistory } from './FolderRegistrationHistory'
 import { FolderProjectCleanup } from './FolderProjectCleanup'
+import { FolderRegistrationReset } from './FolderRegistrationReset'
 import { defaultUsageReviewDraft, UsageSourceReviewPanel, type UsageReviewDraft } from './UsageSourceReviewPanel'
 import './FolderEnvironmentWorkspace.css'
 
@@ -109,6 +110,7 @@ export function FolderEnvironmentWorkspace({ selectedProjectId = '', selectedReq
     {tab === 'profiles' && <DepthSchemaEditor onSaved={() => invalidate()} />}
     {tab === 'history' && <FolderRegistrationHistory isAdmin={isGlobalAdmin} busy={Boolean(busy)} onOpen={(item) => void execute('이력 조회 중…', () => service.registration(item.registration_id), showRegistration)} onDeleted={refreshAfterDelete} />}
     {tab === 'cleanup' && isGlobalAdmin && <FolderProjectCleanup busy={Boolean(busy)} onDeleted={refreshAfterDelete} />}
+    {tab === 'cleanup' && isGlobalAdmin && <FolderRegistrationReset busy={Boolean(busy)} onReset={refreshAfterDelete} />}
     {tab === 'connect' && <>
       <nav className="folder-steps" aria-label="폴더 연결 단계">{['폴더 선택', '구조 확인', '등록·결과 확인'].map((title, i) => <button type="button" key={title} disabled={Boolean(busy) || (i === 1 && !scan) || (i === 2 && !preview && !registration)} aria-current={step === i + 1 ? 'step' : undefined} className={step === i + 1 ? 'active' : ''} onClick={() => setStep(i + 1)}><b>{i + 1}</b>{title}</button>)}</nav>
       {step === 1 && <article className="folder-environment-card"><div className="folder-environment-form">

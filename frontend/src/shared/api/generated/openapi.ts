@@ -2557,6 +2557,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/registration-reset/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Registration Reset Preview
+         * @description 「폴더 등록 전체 초기화」 preview: folder-derived projects, rows per table, running work, confirm token.
+         */
+        post: operations["registration_reset_preview_api_folder_discovery_environments_registration_reset_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/registration-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Registration Reset Run
+         * @description Delete every folder registration and folder-derived row (drive/SPDM files are never touched).
+         */
+        post: operations["registration_reset_run_api_folder_discovery_environments_registration_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requests/{request_id}/reinterpret": {
         parameters: {
             query?: never;
@@ -7554,6 +7594,26 @@ export interface components {
             display_name: string;
             /** Password */
             password: string;
+        };
+        /** RegistrationResetConfirm */
+        RegistrationResetConfirm: {
+            /**
+             * Keep Exclusions
+             * @default true
+             */
+            keep_exclusions: boolean;
+            /** Confirm Token */
+            confirm_token: string;
+            /** Confirmation Text */
+            confirmation_text: string;
+        };
+        /** RegistrationResetPreview */
+        RegistrationResetPreview: {
+            /**
+             * Keep Exclusions
+             * @default true
+             */
+            keep_exclusions: boolean;
         };
         /** RegistrationResponse */
         RegistrationResponse: {
@@ -14257,6 +14317,72 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["CleanupConfirm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    registration_reset_preview_api_folder_discovery_environments_registration_reset_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RegistrationResetPreview"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    registration_reset_run_api_folder_discovery_environments_registration_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistrationResetConfirm"];
             };
         };
         responses: {

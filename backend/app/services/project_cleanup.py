@@ -55,7 +55,7 @@ from typing import Any, Callable
 from fastapi import HTTPException
 
 from . import folder_discovery as legacy
-from .folder_environment_deletion import _Schema, _marks, _postgres, _select
+from .folder_environment_deletion import DRIVE_CURRENT as _DRIVE_CURRENT, _Schema, _marks, _postgres, _select, supersede_sources
 
 MAX_IDS = 200
 MAX_PARAMS = 30000
@@ -152,6 +152,12 @@ _STAGE_LEAVES = (
     # Project folders linked without a registered request (migration 0045, issue #55). The next discovery
     # adds the project again while its folder exists (the cleanup never touches SPDM folders, D14).
     ("folder_project_links", (("project_id", "project"),)),
+    # SCX drive source versions (migration 0037) of deleted requests (2026-10-23): a current row would come back
+    # as MISSING at its old path when the folder is registered again, and a MISSING row shows its folders
+    # through the drive provider (``drive.sources.load_overlay``); current rows are superseded, every row loses
+    # its project/request label. The version history itself is kept (folder_environment_deletion.supersede_sources).
+    ("*drive_sources", ()),
+    ("*null:drive_sources", ()),
 )
 _STAGES = (
     _STAGE_LEAVES,
@@ -167,9 +173,15 @@ _NULLS = {
     "work_item_demo_run": ("request_work_items", "demo_run_id", (("demo_run_id", "workflow_run"),), ""),
     "scans": [("folder_environment_scans", "project_id", (("project_id", "project"),), ""),
               ("folder_environment_scans", "request_id", (("request_id", "request"),), "")],
+    "drive_sources": [("drive_source_versions", "request_id", (("request_id", "request"),), ""),
+                      ("drive_source_versions", "project_id", (("project_id", "project"),), "")],
     "tombstones": [("folder_environment_registrations", "project_id", (("project_id", "project"),), "status='DELETED'"),
                    ("folder_environment_registrations", "request_id", (("request_id", "request"),), "status='DELETED'")],
 }
+
+# Current drive source rows of deleted requests/projects are superseded (see _STAGE_LEAVES).
+_DRIVE_SCOPE_MATCH = (("request_id", "request"), ("project_id", "project"))
+
 
 # Reference columns (project/request/load-case/run/case/target ids) that cleanup deliberately leaves alone.
 KEEP_COLUMNS = {
@@ -190,8 +202,6 @@ KEEP_COLUMNS = {
     ("workflow_runs", "request_type_version"): "catalog reference of a deleted run row",
     ("analysis_requests", "requested_at"): "timestamp column",
     ("folder_environment_registrations", "created_targets"): "tombstone JSON history (D16); ids there are not live links",
-    ("drive_source_versions", "project_id"): "SCX drive file version history keyed by root_key+path; scope label re-assigned by the next sync",
-    ("drive_source_versions", "request_id"): "SCX drive file version history keyed by root_key+path; scope label re-assigned by the next sync",
     ("drive_upload_queue", "project_id"): "SCX drive write log (D3); the drive files it wrote are never deleted (W4), so the record stays",
     ("drive_upload_queue", "request_id"): "SCX drive write log (D3); the drive files it wrote are never deleted (W4), so the record stays",
     ("scx_relay_submissions", "request_id"): "PhysicsAI relay request id (pai-…), not a dashboard request; submission record is never deleted",
@@ -690,6 +700,14 @@ def _counts(conn, schema: _Schema, e: dict[str, set[str]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for stage in _STAGES:
         for table, pairs in stage:
+            if table == "*drive_sources":
+                where, args = _where(_DRIVE_SCOPE_MATCH, e, schema, "drive_source_versions")
+                if where:
+                    n = conn.execute(f"SELECT count(*) FROM drive_source_versions WHERE ({where}) AND {_DRIVE_CURRENT}",
+                                     args).fetchone()[0]
+                    if n:
+                        counts["drive_source_versions.superseded_at"] = int(n)
+                continue
             if table.startswith("*null:"):
                 for target, column, match, extra in _null_specs(table[6:]):
                     where, args = _where(match, e, schema, target)
@@ -731,6 +749,9 @@ _CHUNK = 500
 
 def _execute(conn, schema: _Schema, stage, e: dict[str, set[str]]) -> None:
     for table, pairs in stage:
+        if table == "*drive_sources":
+            supersede_sources(conn, schema, sorted(e.get("request", set())), sorted(e.get("project", set())))
+            continue
         if table.startswith("*null:"):
             for target, column, match, extra in _null_specs(table[6:]):
                 if not schema.has(target, column):

@@ -455,6 +455,54 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 6. 결과를 가져온 예전 프로젝트·Orion은 이름 확인 없이 409 `PROJECT_CLEANUP_CONFIRM_REQUIRED`, 확인하면 삭제. 미리보기 후 프로젝트가 사라지면 `DELETE_PREVIEW_STALE`, IN 목록을 잘게 나눠도 같은 계획, 과대 선택은 422
 7. 외래 키 전수 조사 통과(DuckDB·PostgreSQL)
 
+### 16.8 폴더 경로 상태 전수 조사와 「폴더 등록 전체 초기화」 (2026-10-23)
+
+증상(운영 SCX 드라이브, PostgreSQL 18): 등록 이력 전체 삭제(§13)와 프로젝트 정리 강제 삭제(§16) 뒤 [저장 폴더 새로고침]에 드라이브에 없는 `PROJ-000099_R95J 개발 과제`(드라이브는 `PROJ-000099_R95J개발과제`)가 계속 나오고(`current=PROJ-000099_R95J 개발 과제 / WR-00000806_…`, `SPDM_NOT_FOUND:list_dir:PROJ-000099_R95J 개발 과제`), `…/Drop/85qn80h_ref_organized/INDIVIDUAL`(드라이브는 `completed_Drop`)이 남고, `PROJ-000099_R95J개발과제/WR-00000800_유통환경시뮬레이션`은 등록되지 않았다.
+
+**두 삭제 뒤에 남는 경로·폴더 유래 상태와 읽는 곳**
+
+| 상태 | 등록 삭제(§13) | 프로젝트 정리(§16) | 탐색·동기화가 읽는가 |
+|---|---|---|---|
+| `folder_environment_registrations` 묘비(DELETED) + `created_targets` | 남음 | 남음(링크 NULL) | 멱등 키 세대(`deleted_keys`)만. 경로 부활 없음 |
+| 묘비의 `folder_environment_registry` | 지움 | 대상이 지워진 행 지움 | 살아 있는 등록만 읽음 |
+| `folder_environment_scans`/`previews`(새로고침 스냅샷 `folder-refresh-%` 포함) | 남음(링크 NULL) | 남음(링크 NULL) | `_request_path`·`active_refresh_snapshot`은 프로젝트·의뢰 id로 찾으므로 NULL 행은 안 읽힘 |
+| `folder_environment_capture_jobs` | 지움 | 지움 | 살아 있는 등록만 |
+| **`drive_source_versions`(SCX 원본 버전)** | **남았음(원인 1)** | **남았음(KEEP)** | **`sources.load_overlay`가 저장소 전체의 MISSING 행을 읽고 `storage/drive.py::_children`이 그 경로의 폴더를 목록에 다시 만들어 넣는다** |
+| `folder_project_links`(0045), `folder_link_reservations`(0041) | 남음(프로젝트 없으면 무시) | 지움 | 프로젝트가 있을 때만 |
+| `folder_discovery_exclusions` | 남음 | 남음 | 관리자 결정(초기화에서 선택) |
+| `folder_discovery_registry`(예전), `spdm_storage_request_parents` | 차단 사유 | 대상 프로젝트 것만 지움 | **`_linked_state`가 대상 존재 확인 없이 읽었다(원인 2)** |
+| `spdm_storage_bindings/files/project_parents`, `semantic_folder_bindings` | 차단 사유 | 지움 | `_request_path`(프로젝트·의뢰 id) |
+| `result_registration_paths`·`location_links`·초안 | 소유 의뢰 것 지움 | 지움 | 의뢰 id |
+| `notifications` | 남음 | 지움 | 아니오 |
+| `drive_upload_queue`, `finalization_operations` | 남음 | 남음(KEEP, D3) | 아니오(쓰기 기록) |
+| 메모리: 탐색 `_memo`·`_review_memo`·`_retry_memo`·`_exclusion_cache`, 자동 동기화 `_memo`, 진행 `_memo`, 드라이브 철자 `_spellings`, 마지막 새로고침 결과 | 남음 | 남음 | 실행 간 억제·표시만(결정은 DB를 다시 읽음) |
+| blob 저장소 | 남음 | 미디어 blob만 | 내용 주소 캐시, 경로 없음 |
+
+- **원인 1(부활):** 등록된 Scene이 드라이브에서 사라지면 그 파일 행은 `MISSING`(현재 행)으로 남고, 드라이브 provider는 MISSING 행의 상위 폴더를 목록에 합성한다(05 §4 "등록 버전은 계속 보임"). 그 오버레이가 저장소 단위(`root_key`)라 의뢰가 지워져도 루트 목록에 옛 철자 `PROJ-…_R95J 개발 과제`가 다시 나타났고, 공백만 다른 프로젝트 폴더는 하나로 합쳐지므로(§8, 이슈 #55) 첫 철자(공백 있는 쪽)로 프로젝트 이름이 정해지고 그 아래를 `list_dir`하다 `SPDM_NOT_FOUND`가 났다. 또 지운 의뢰의 PRESENT 행은 폴더가 다시 등록되면 경로로 다시 묶여(`_scope_rows`) 옮겨진 파일(`Drop`→`completed_Drop`)이 옛 경로의 MISSING이 되었다.
+- **원인 2(미발견):** `_linked_state`가 `spdm_storage_request_parents`·`folder_discovery_registry`의 REQUEST 행을 의뢰가 있는지 보지 않고 "연결됨"으로 셌고, 공백만 다른 새 철자 폴더는 "살아 있는 등록이 없는 respaced 폴더"로 **아무 보고 없이** 건너뛰었다.
+
+**수정(일반 삭제도 경로를 남기지 않게)**
+
+- `drive.sources.load_overlay`: 현재 존재하는 의뢰로 표시된 행만 오버레이한다.
+- 등록 삭제·프로젝트 정리: 지운 의뢰·프로젝트의 `drive_source_versions` 현재 행을 superseded로 닫고(이력은 유지) `project_id/request_id`를 NULL로(`folder_environment_deletion.supersede_sources`, 정리 `KEEP_COLUMNS`에서 제외).
+- `classify_request`: 다른 철자(공백)로 등록된 행 중 드라이브에 없는 행도 실제 철자로 옮긴 뒤 MISSING으로 둔다(옛 철자가 목록에 남지 않음).
+- `_linked_state`: 예전 연결은 의뢰가 있을 때만 센다. respaced 폴더를 옮길 수 없으면 `WR_ALREADY_LINKED`로 보고한다.
+- 묘비·조사 이력은 그대로 둔다(D16 이력, 위 표처럼 탐색이 경로로 읽지 않음).
+
+**「폴더 등록 전체 초기화」 (`folder_registration_reset.py`, 전역 관리자, 프로젝트 정리 탭 아래 위험 영역 카드)**
+
+| 메서드 | 경로 | 요청 | 응답 |
+|---|---|---|---|
+| POST | `…/environments/registration-reset/preview` | `{keep_exclusions=true}` | `{projects:[{project_id,name}], counts:{표: 건수}, counts_approximate, exclusions, keep_exclusions, kept, blockers, busy:[{code,message}], confirm_token, confirm_text:"초기화"}` |
+| POST | `…/environments/registration-reset` | `{confirm_token, confirmation_text:"초기화", keep_exclusions}` | `{deleted_projects, counts, counts_approximate, keep_exclusions}` |
+
+- 지움: 폴더 유래 프로젝트(어떤 등록·묘비의 `created_targets`·registry·프로젝트 폴더 연결·예약·조사·SPDM 연결·예전 연결·Case·결과 등록 경로가 참조하거나 id가 `environment-project-…`)와 그 아래 전부(§16.2와 같은 단계), 그리고 표 전체: 등록(묘비 포함)·registry·capture job·조사/미리보기/스냅샷·프로젝트 폴더 연결·예약·결과 등록 초안/파일/이벤트/경로/위치 연결·`drive_source_versions`·예전 폴더 registry/조사/미리보기·`spdm_storage_bindings/files/parents`·`semantic_folder_bindings`(검토 항목 포함). 선택 시 `folder_discovery_exclusions`.
+- 남김: 계정·역할·권한, 깊이 스키마(`folder_environment_profiles`), 드라이브 인증·설정, `spdm_storage_settings`, 예전 폴더 규칙·카탈로그, 감사 기록, 드라이브 업로드 대기열(쓰기 기록), Final 작업 기록, blob 파일, 폴더와 무관한 프로젝트(수동·데모). **드라이브·SPDM 파일은 건드리지 않는다.**
+- 거부: 새로고침·탐색·결과 받기 실행 중, 업로드 대기열에 PENDING/RUNNING/BLOCKED, Final 작업 실행 중 → 409 `FOLDER_RESET_BUSY`(탐색·결과 받기 실행 잠금은 삭제 내내 잡는다). 지우지 않는 결과 프로필이 쓰는 프로젝트 템플릿 → 409 `FOLDER_RESET_BLOCKED`. 실행 중으로 남은 작업은 강제 정리처럼 무시. 확인 문구 불일치 409 `FOLDER_RESET_CONFIRM_REQUIRED`, 미리보기 후 변경 409 `DELETE_PREVIEW_STALE`.
+- PostgreSQL 한 트랜잭션(주요 표 SHARE ROW EXCLUSIVE 잠금), DuckDB는 FK 단계마다 커밋. 커밋 뒤 이 프로세스의 메모리 상태를 비운다. 감사 이벤트 `FOLDER_REGISTRATION_RESET`(프로젝트 id, 표별 건수).
+- 화면: 미리보기(합계·프로젝트·표별 건수·실행 중 작업) → `초기화` 입력 → [전체 초기화] → "[저장 폴더 새로고침]을 누르세요" 안내.
+- 검증: `tests/test_folder_registration_reset.py`(공백 프로젝트 폴더 등록 → Scene 삭제(MISSING) → 드라이브에서 철자 변경·`Drop`→`completed_Drop`·새 의뢰 → 일반 삭제 또는 초기화 → 새로고침이 현재 철자만 등록, `WR-00000800` 발견, 폴더 표에 옛 경로 0건).
+
 ## 17. 깊이 스키마 화면의 무한 로딩·일괄 제외·저장 후 적용 (이슈 #55, 2026-10-20)
 
 ### 17.1 무한 로딩 원인과 수정

@@ -286,6 +286,8 @@ def test_non_admin_is_forbidden_everywhere(viewer_client):
         ("post", ENV + "/registrations/delete-preview", {"registration_ids": ["x"]}),
         ("post", ENV + "/registrations/delete", {"registration_ids": ["x"], "confirm_token": "t"}),
         ("get", ENV + "/history", None),
+        ("post", ENV + "/registration-reset/preview", {}),
+        ("post", ENV + "/registration-reset", {"confirm_token": "t", "confirmation_text": "초기화"}),
     ]
     for method, path, body in calls:
         response = getattr(viewer, method)(path, **({"json": body} if body is not None else {}))

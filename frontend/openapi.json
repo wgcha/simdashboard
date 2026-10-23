@@ -7214,6 +7214,93 @@
         }
       }
     },
+    "/api/folder-discovery/environments/registration-reset/preview": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Registration Reset Preview",
+        "description": "「폴더 등록 전체 초기화」 preview: folder-derived projects, rows per table, running work, confirm token.",
+        "operationId": "registration_reset_preview_api_folder_discovery_environments_registration_reset_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RegistrationResetPreview"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/registration-reset": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Registration Reset Run",
+        "description": "Delete every folder registration and folder-derived row (drive/SPDM files are never touched).",
+        "operationId": "registration_reset_run_api_folder_discovery_environments_registration_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationResetConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/requests/{request_id}/reinterpret": {
       "post": {
         "tags": [
@@ -22481,6 +22568,44 @@
           "password"
         ],
         "title": "RegistrationPayload"
+      },
+      "RegistrationResetConfirm": {
+        "properties": {
+          "keep_exclusions": {
+            "type": "boolean",
+            "title": "Keep Exclusions",
+            "default": true
+          },
+          "confirm_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Confirm Token"
+          },
+          "confirmation_text": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Confirmation Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "confirm_token",
+          "confirmation_text"
+        ],
+        "title": "RegistrationResetConfirm"
+      },
+      "RegistrationResetPreview": {
+        "properties": {
+          "keep_exclusions": {
+            "type": "boolean",
+            "title": "Keep Exclusions",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "RegistrationResetPreview"
       },
       "RegistrationResponse": {
         "properties": {

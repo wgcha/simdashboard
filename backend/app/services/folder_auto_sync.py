@@ -451,6 +451,13 @@ def sync_request(project_id: str, request_id: str, actor: str, *, force: bool = 
             "environments": results}
 
 
+def forget_all() -> None:
+    """Forget every coalesced check result and log throttle (folder registration reset, 2026-10-23)."""
+    with _state_lock:
+        _memo.clear()
+        _logged.clear()
+
+
 def reset_for_tests() -> None:
     with _state_lock:
         _memo.clear()

@@ -231,6 +231,14 @@ def reset_for_tests() -> None:
     _cancel.clear()
 
 
+def forget() -> None:
+    """Forget the last finished rescan (its folder paths) unless one runs (folder registration reset, 2026-10-23)."""
+    with _lock:
+        if _state.get("status") != "RUNNING":
+            _state.clear()
+            _clock.clear()
+
+
 def cancel(actor: str | None = None) -> tuple[dict[str, Any], bool]:
     """[중지]: the running rescan stops at its next check point; returns (state, requested)."""
     with _lock:

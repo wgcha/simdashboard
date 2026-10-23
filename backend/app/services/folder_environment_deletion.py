@@ -97,6 +97,27 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+# SCX drive source rows (migration 0037) of deleted requests/projects (2026-10-23). A current MISSING row makes
+# the drive provider show its folders although they are gone (``drive.sources.load_overlay``), and a current
+# row of a file that moved since became MISSING -- at its old path -- as soon as the folder was registered
+# again (``classify_request`` picks rows by path). So every current row of a deleted request/project is
+# superseded (its version history stays) and every row of it loses its project/request label.
+DRIVE_CURRENT = "superseded_at IS NULL"
+
+
+def supersede_sources(conn, schema: "_Schema", request_ids, project_ids) -> None:
+    """Supersede the current drive source rows of deleted requests/projects (registration delete, project
+    cleanup); a later registration of the folder starts its sources from the drive as it is then."""
+    if not schema.has("drive_source_versions", "request_id", "project_id", "superseded_at"):
+        return
+    stamp = _now()
+    for column, values in (("request_id", sorted(request_ids)), ("project_id", sorted(project_ids))):
+        for start in range(0, len(values), _CHUNK):
+            chunk = values[start:start + _CHUNK]
+            conn.execute(f"UPDATE drive_source_versions SET superseded_at=? WHERE {DRIVE_CURRENT} "
+                         f"AND {column} IN ({_marks(chunk)})", [stamp, *chunk])
+
+
 def _postgres(conn) -> bool:
     return getattr(conn, "backend", "duckdb") == "postgresql"
 
@@ -159,6 +180,7 @@ class _Plan:
         self.deletes: dict[str, set[tuple]] = {}      # table -> identity tuples (for the token and counts)
         self.by_parent: list[tuple[str, str, tuple]] = []  # (table, column, ids) bulk deletes
         self.nulls: list[tuple[str, str, tuple]] = []  # (table, column, ids) set to NULL
+        self.sources: tuple[tuple, tuple] = ((), ())   # (request ids, project ids) of drive source rows to settle
 
     def add(self, table: str, identities) -> None:
         self.deletes.setdefault(table, set()).update(identities)
@@ -445,6 +467,14 @@ def _plan(conn, ids: list[str], *, lock: bool = False) -> dict:
             plan.nulls.append(("folder_environment_scans", column, tuple(values)))
             plan.add(f"folder_environment_scans.{column}", {(str(r[0]),) for r in _select(
                 conn, f"SELECT id FROM folder_environment_scans WHERE {column} IN ({_marks(values)})", list(values))})
+    # SCX drive source rows of deleted requests/projects: current ones superseded, every one unlabelled (2026-10-23).
+    if schema.has("drive_source_versions", "request_id", "project_id"):
+        plan.sources = (tuple(request_list), tuple(project_list))
+        for column, values in (("request_id", request_list), ("project_id", project_list)):
+            if values:
+                plan.nulls.append(("drive_source_versions", column, tuple(values)))
+                plan.add(f"drive_source_versions.{column}", {(str(r[0]),) for r in _select(
+                    conn, f"SELECT id FROM drive_source_versions WHERE {column} IN ({_marks(values)})", list(values))})
     # Per-item counts.
     counted = {"dashboard_cases", "dashboard_captures", "dashboard_assets", "analysis_requests", "projects"}
     other_total = sum(len(rows) for table, rows in plan.deletes.items() if table not in counted and "." not in table)
@@ -542,6 +572,8 @@ def _execute_stage(conn, stage: tuple, plan: _Plan) -> None:
             for table, column, parents in plan.by_parent:
                 _delete_ids(conn, table, column, list(parents))
         elif step == "*nulls":
+            if plan.sources[0] or plan.sources[1]:
+                supersede_sources(conn, _Schema(conn), plan.sources[0], plan.sources[1])
             for table, column, values in plan.nulls:
                 for start in range(0, len(values), _CHUNK):
                     chunk = list(values[start:start + _CHUNK])

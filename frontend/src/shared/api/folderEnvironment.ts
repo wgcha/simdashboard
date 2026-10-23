@@ -155,6 +155,25 @@ export type ProjectCleanupPreviewItem = ProjectCleanupDataSummary & { project_id
 export type ProjectCleanupPreview = { items: ProjectCleanupPreviewItem[]; totals: Record<string, number>; confirm_token: string }
 export type ProjectCleanupResult = { deleted: string[]; counts: Record<string, number> }
 
+// ---- 폴더 등록 전체 초기화 (contract depth-schema §16.8, 2026-10-23) ----
+export type RegistrationResetBusy = { code: string; message: string }
+export type RegistrationResetBlocker = { table: string; id: string; project_id?: string | null; reason: string }
+export type RegistrationResetPreview = {
+  projects: Array<{ project_id: string; name: string }>
+  /** Rows deleted per table; `table.column` keys are NULL updates. */
+  counts: Record<string, number>
+  counts_approximate: boolean
+  exclusions: number
+  keep_exclusions: boolean
+  kept: string[]
+  blockers: RegistrationResetBlocker[]
+  busy: RegistrationResetBusy[]
+  confirm_token: string
+  /** The text the administrator types (초기화). */
+  confirm_text: string
+}
+export type RegistrationResetResult = { deleted_projects: string[]; counts: Record<string, number>; counts_approximate: boolean; keep_exclusions: boolean }
+
 /** [새 결과 확인] summary: every registered environment of one request (2026-10-14). */
 export type RequestResultsCheck = {
   checked_at: string
@@ -221,6 +240,9 @@ export const folderEnvironmentApi = {
   projectCleanupPreview: (projectIds: string[], forceProjectIds: string[] = []) => requestJson<ProjectCleanupPreview>(apiUrl('/api/folder-discovery/environments/project-cleanup/preview' as never), jsonBody('POST', { project_ids: projectIds, force_project_ids: forceProjectIds })),
   /** 409 `PROJECT_CLEANUP_BLOCKED` (detail carries preview items), `PROJECT_CLEANUP_CONFIRM_REQUIRED` or `DELETE_PREVIEW_STALE`. */
   deleteProjects: (projectIds: string[], confirmToken: string, acknowledgedProjectIds: string[] = [], forceProjectIds: string[] = []) => requestJson<ProjectCleanupResult>(apiUrl('/api/folder-discovery/environments/project-cleanup/delete' as never), jsonBody('POST', { project_ids: projectIds, confirm_token: confirmToken, acknowledge_data_project_ids: acknowledgedProjectIds, force_project_ids: forceProjectIds })),
+  registrationResetPreview: (keepExclusions = true) => requestJson<RegistrationResetPreview>(apiUrl('/api/folder-discovery/environments/registration-reset/preview' as never), jsonBody('POST', { keep_exclusions: keepExclusions })),
+  /** 409 `FOLDER_RESET_BUSY`, `FOLDER_RESET_BLOCKED`, `FOLDER_RESET_CONFIRM_REQUIRED` or `DELETE_PREVIEW_STALE`. */
+  resetRegistrations: (confirmToken: string, confirmationText: string, keepExclusions = true) => requestJson<RegistrationResetResult>(apiUrl('/api/folder-discovery/environments/registration-reset' as never), jsonBody('POST', { confirm_token: confirmToken, confirmation_text: confirmationText, keep_exclusions: keepExclusions })),
   scan: async (body: { environment: FolderEnvironment; relative_path: string; project_id?: string; request_id?: string }, signal?: AbortSignal) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/scan', { body, signal })) as FolderEnvironmentScan,
   preview: async (body: { scan_id: string; assignments: FolderAssignment[]; require_usage_review: boolean }, signal?: AbortSignal) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/previews', { body, signal })) as FolderEnvironmentPreview,
   usageReview: async (previewId: string, body: { case_relative_path: string; selection: { json: boolean; video: boolean; image: boolean; csv: boolean }; selected_sources?: Record<string, string>; metric_paths?: Record<string, string[]>; excludes?: Record<string, string>; acknowledge_partial: boolean }) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/previews/{preview_id}/usage-review', { params: { path: { preview_id: previewId } }, body })) as UsageSourceReview,
