@@ -77,8 +77,15 @@ def _catalog_cases(scx, request_id: str) -> list[dict]:
     return response.json()["cases"]
 
 
-def _passes_until_done(scx, request_id: str, files: list[str], *, limit: int = 12) -> int:
-    """Successive bounded capture passes (the worker's): progress accumulates, every file is read once."""
+def _passes_until_done(scx, request_id: str, files: list[str], *, limit: int = 12,
+                       first_pass_lists: bool = False) -> int:
+    """Successive bounded capture passes (the worker's): progress accumulates, every file is read once.
+
+    ``first_pass_lists``: the registration has no folder check yet, so the first session starts with one
+    (``capture_jobs._ensure_snapshot``, listings only).  On a slow test host (every fake drive call reads
+    the token row: one DuckDB connect each) that check can use the whole 3 s session; that pass may then
+    download nothing (its jobs stay PENDING, interrupted).  Every later pass must download.
+    """
     capture_jobs = _capture_jobs()
     done_before, passes = -1, 0
     while any(status == "PENDING" for status, _code in _jobs(request_id)):
@@ -87,7 +94,8 @@ def _passes_until_done(scx, request_id: str, files: list[str], *, limit: int = 1
         downloads_before = len(scx.drive.downloads())
         result = capture_jobs.run_pending(budget_seconds=3.5, session_seconds=3.0)
         assert result["failed_now"] == 0, result
-        assert len(scx.drive.downloads()) > downloads_before or result["completed_now"], "a pass downloaded nothing"
+        assert len(scx.drive.downloads()) > downloads_before or result["completed_now"] \
+            or (first_pass_lists and passes == 1), f"a pass downloaded nothing: {result}"
         done = sum(status == "COMPLETED" for status, _code in _jobs(request_id))
         assert done >= done_before
         done_before = done
@@ -147,7 +155,7 @@ def test_discovery_registration_lists_only_and_the_cases_wait_as_pending_jobs(sc
     status = scx.client.get(f"{ENV}/registrations/{registration}").json()
     assert status["status"] == "CAPTURING", status
     assert {case["label"] for case in _catalog_cases(scx, request_id) if case.get("capture_pending")} == set(CASES)
-    _passes_until_done(scx, request_id, files)
+    _passes_until_done(scx, request_id, files, first_pass_lists=True)
     assert scx.client.get(f"{ENV}/registrations/{registration}").json()["status"] == "COMPLETED"
 
 

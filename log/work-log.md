@@ -2,6 +2,12 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-23 — SCX 드라이브 결과 받기·Final 확정: 실패하던 백엔드 테스트 2건의 원인과 수정
+
+- `test_capture_jobs_drive.py::test_discovery_registration_lists_only_and_the_cases_wait_as_pending_jobs`("a pass downloaded nothing", 밑에 `DASHBOARD_PATH_ESCAPE`): 195bc32 코드에서도 이 환경에서 실패(커밋 회귀 아님, 실행 속도 의존). ① 실제 버그: `dashboard_capture._safe_target`이 `fs.resolve()`의 `ValueError`를 모두 `DASHBOARD_PATH_ESCAPE`로 바꿨는데, 드라이브 provider의 `stat`이 내는 `SpdmStorageError`(→`StorageError`→`ValueError`)도 여기 걸렸다. 경로 이탈이 아니라 읽기 세션 마지막 회차의 `DRIVE_READ_NOT_PREPARED`(또는 `DRIVE_UNAVAILABLE`·`SPDM_FILE_BUSY` 등)다. blob store·staging·capture root 경로와 무관하고 Windows 전용도 아니다(드라이브 provider 도입 이후 계속). 운영 영향: 세션 deadline 전이면 `_interrupted()`가 `DASHBOARD_PATH_ESCAPE`를 중단 코드로 보지 않아 결과 받기 작업이 다시 받을 수 있는데도 `FAILED(DASHBOARD_PATH_ESCAPE)`가 될 수 있었다(deadline 뒤에는 `stop_reason`으로 PENDING 유지). 수정: `SpdmStorageError`는 원래 코드로 전달. ② 테스트 시간 가정: 폴더 확인이 없는 등록의 첫 세션은 `_ensure_snapshot`(목록만)부터 하는데, 가짜 드라이브가 호출마다 토큰 행을 DuckDB로 읽어(연결 1회 약 50 ms × 33회) 3초 세션을 거의 다 쓰면 첫 회차는 다운로드 0건이 된다. 다음 회차부터는 스냅샷이 있어 다운로드한다. 테스트가 이 경우(첫 회차만) 허용하도록 `first_pass_lists`를 추가.
+- `test_drive_writes.py::test_source_change_after_preview_refuses_confirm`(`DRIVE_SOURCE_CHANGED`): 195bc32부터 실패(b93f905 통과). 195bc32의 결과 받기 작업이 `_ensure_snapshot`→`sync_scope`로 요청 폴더를 분류(`scoped`)하므로, 확정의 덱 include 확인(`cf._include_closure`)이 미리보기 뒤 바뀐 `model.rad`의 등록 버전을 읽으려 하고, 그 바이트(미리보기 세션 staging에만 있던 작은 파일)는 blob store·DB에 없어 `DRIVE_SOURCE_CHANGED`가 됐다. 문서 계약(scx-drive.md 확정 순서, case-finalization.md)은 409 `FINALIZATION_SOURCE_STALE`이고 프런트는 두 코드를 메시지로만 구분한다(분기 없음). 테스트가 맞고 코드가 틀림. 수정: `case_finalization_drive.confirm`의 범위·원본 재확인에서 `DRIVE_SOURCE_CHANGED`를 `FINALIZATION_SOURCE_STALE`로 바꿈(미리보기는 그대로).
+- 검증: 아래 보고 참조(두 파일 전체 + test_drive_reads·test_dashboard_capture_acceptance·test_case_finalization_current·test_environment_capture_projection_recovery). `test_catalog_offers_the_registered_hierarchy_of_cases_whose_results_are_pending`은 병렬 부하에서 한 번 실패, 단독 2회 통과(같은 3초 세션 시간 의존).
+
 ## 2026-10-23 — Case 결과 경로: 받는 중·실패 Case와 하위 선택지가 사라지지 않게
 
 - 증상(SCX 드라이브 서버, WR-00000806): Case·하중경우·Run Case·Run Option이 모두 고정 글자로만 보여 다른 Case/Run을 고를 수 없었다.

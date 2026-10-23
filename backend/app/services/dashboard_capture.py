@@ -72,6 +72,10 @@ def _safe_target(root: Path, relative: str) -> str:
         raise
     try:
         target = fs.resolve(lexical)
+    except spdm_storage.SpdmStorageError as exc:
+        # A ValueError subclass: the drive provider's stat raises it (e.g. DRIVE_READ_NOT_PREPARED on a read
+        # session's last round, DRIVE_UNAVAILABLE).  Keep its code; it is not a path escape.
+        raise DashboardCaptureError(exc.code, str(exc)) from exc
     except FileNotFoundError as exc:
         raise DashboardCaptureError("DASHBOARD_SOURCE_MISSING", "원본 폴더를 찾을 수 없습니다.") from exc
     except OSError as exc:

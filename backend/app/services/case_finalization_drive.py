@@ -454,8 +454,18 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         conn.execute("UPDATE finalization_operations SET status='PUBLISHING', error_code=NULL, error_message=NULL, "
                      "confirmed_by=?, updated_at=? WHERE operation_id=?", [actor, _now_db(), operation_id])
         return job_view(conn, _operation(conn, operation_id))
-    scope = cf._scope(conn, project_id, request_id, environment, case_id, capture_id)
-    expected_files, expected_excluded, expected_unchecked = _drive_files(scope)
+    try:
+        scope = cf._scope(conn, project_id, request_id, environment, case_id, capture_id)
+        expected_files, expected_excluded, expected_unchecked = _drive_files(scope)
+    except (spdm_storage.SpdmStorageError, Error) as exc:
+        # A classified request serves the registered version of a file the drive changed since the preview
+        # (deck include check, cf._include_closure re-raises it as a CaseFinalizationError with the same
+        # code); when those bytes are no longer kept (a small deck the preview only staged) the read fails
+        # with DRIVE_SOURCE_CHANGED.  For the confirm that is "changed since preview" (scx-drive.md: 409
+        # FINALIZATION_SOURCE_STALE).
+        if exc.code == drive_reads.SOURCE_CHANGED:
+            raise Error("FINALIZATION_SOURCE_STALE", f"미리보기 이후 드라이브 원본이 바뀌었습니다: {exc}") from exc
+        raise
     planned_tokens = {str(item["source_relative_path"]).casefold(): item.get("version_token") for item in plan["files"]}
     for item in expected_files:
         token = planned_tokens.get(str(item["source_relative_path"]).casefold())
