@@ -1093,7 +1093,13 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
     copy = LocalCopy(path=local, sha256=sha256, size=size)
     session.staged_bytes += size
     if size > BLOB_THRESHOLD_BYTES or session.resumable:
-        blob = blob_store().put(local, sha256)
+        try:
+            blob = blob_store().put(local, sha256)
+        except OSError as exc:
+            # Windows: the staging file was still locked/being written (issue #51); one file's problem,
+            # retried on the next pass, never the end of the whole capture session.
+            _log_call_failure("store", rel, "SPDM_FILE_BUSY", f"{type(exc).__name__}: {exc}")
+            raise SpdmStorageError("SPDM_FILE_BUSY", "받은 파일을 아직 옮길 수 없습니다(다른 프로그램이 사용 중). 다음 확인에서 다시 받습니다.") from exc
         session.staged_bytes -= size   # moved out of the session folder into the blob store
         copy = LocalCopy(path=blob, sha256=sha256, size=size, blob=True)
         stored = str(blob)

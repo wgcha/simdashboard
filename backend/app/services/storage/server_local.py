@@ -281,19 +281,25 @@ class BlobStore:
             self._verified[path.name] = (info.st_size, info.st_mtime_ns)
 
     def put(self, source: Path, sha256: str) -> Path:
-        """Move ``source`` (a staging file whose sha256 is known) into the store."""
+        """Move ``source`` (a staging file whose sha256 is known) into the store.
+
+        Windows (issue #51, 2026-10-23): right after a download the staging file can still be held
+        open by another process -- the adapter worker that wrote it or the virus scanner -- so it
+        cannot be moved or deleted for a moment (``WinError 32``) although it can be read.  The move
+        is retried briefly; then the content is copied (and its sha256 checked, so a file still
+        being written is never stored), and a staging file that cannot be deleted yet is left for
+        the session/orphan cleanup instead of failing the capture.
+        """
         path = self._path(sha256)
         with self._lock:
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.is_file():
-                source.unlink(missing_ok=True)
+                _unlink_quietly(source)
                 os.utime(path)
                 return path
-            try:
-                os.replace(source, path)
-            except OSError:
-                shutil.copyfile(source, path)
-                source.unlink(missing_ok=True)
+            if not _replace_with_retry(source, path):
+                _copy_verified(source, path, sha256)
+                _unlink_quietly(source)
             self._evict()
         self._touch(path)
         return path
@@ -338,3 +344,52 @@ class BlobStore:
 __all__ = ["BlobStore", "blob_dir_conflict", "discard_file", "disk_free", "ensure_dir", "file_exists", "file_sha1", "write_stream", "file_sha256", "file_size",
            "install_file", "is_regular_file_inside", "make_child_dir", "new_dir", "old_dirs", "open_file", "read_file",
            "remove_old_dirs", "remove_old_files", "remove_tree", "write_at", "write_file"]
+
+
+# Windows sharing violations right after a download (issue #51): short retries, then copy.
+_LOCK_RETRY_SECONDS = (0.2, 0.5, 1.0)
+
+
+def _replace_with_retry(source: Path, target: Path) -> bool:
+    """``os.replace`` with short retries while another process holds ``source``; False if it never worked."""
+    for delay in (*_LOCK_RETRY_SECONDS, None):
+        try:
+            os.replace(source, target)
+            return True
+        except PermissionError:
+            if delay is None:
+                return False
+            time.sleep(delay)
+        except OSError:
+            return False
+    return False
+
+
+def _copy_verified(source: Path, target: Path, sha256: str) -> None:
+    """Copy ``source`` to ``target`` through a temporary file, refusing content whose sha256 differs."""
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
+    digest = hashlib.sha256()
+    try:
+        with source.open("rb") as reader, temporary.open("wb") as writer:
+            while chunk := reader.read(1024 * 1024):
+                digest.update(chunk)
+                writer.write(chunk)
+        if digest.hexdigest() != str(sha256).lower():
+            raise OSError("staging file content does not match its sha256 (still being written)")
+        os.replace(temporary, target)
+    finally:
+        _unlink_quietly(temporary)
+
+
+def _unlink_quietly(path: Path) -> None:
+    """Delete ``path`` with the same short retries; a file still locked is left for the staging cleanup."""
+    for delay in (*_LOCK_RETRY_SECONDS, None):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if delay is None:
+                return
+            time.sleep(delay)
+        except OSError:
+            return

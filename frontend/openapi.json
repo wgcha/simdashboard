@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Analysis Canvas API",
-    "version": "0.3.0.3"
+    "version": "0.3.0.4"
   },
   "paths": {
     "/api/auth/status": {
