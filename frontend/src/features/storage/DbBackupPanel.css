@@ -1,0 +1,31 @@
+/* Administrator DB backup dialog (docs/deployment-security-backup-guide.md §5.1). Desktop only. */
+.db-backup-entry { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); padding-top:var(--space-2); border-top:1px solid var(--color-border); color:var(--color-text-muted); font-size:13px; }
+.db-backup-backdrop { position:fixed; inset:0; z-index:60; display:flex; align-items:flex-start; justify-content:center; padding:48px 24px; overflow:auto; background:var(--color-overlay); }
+.db-backup-dialog { width:min(1040px, 100%); display:grid; gap:var(--space-3); padding:var(--space-5); border:1px solid var(--color-border); border-radius:var(--radius-lg); color:var(--color-text); background:var(--color-surface-raised); box-shadow:0 18px 44px var(--color-shadow); }
+.db-backup-heading { display:flex; align-items:center; gap:var(--space-2); }
+.db-backup-heading h2 { display:flex; align-items:center; gap:var(--space-2); margin:0; flex:1; font-size:18px; color:var(--color-text-strong); }
+.db-backup-heading h2 svg, .db-backup-dialog .shared-button svg { width:16px; height:16px; }
+.db-backup-facts { display:grid; gap:var(--space-2); margin:0; }
+.db-backup-facts div { display:grid; grid-template-columns:90px minmax(0, 1fr); gap:var(--space-2); }
+.db-backup-facts dt { color:var(--color-text-muted); font-size:13px; }
+.db-backup-facts dd { margin:0; overflow-wrap:anywhere; font-size:14px; }
+.db-backup-actions { display:flex; align-items:flex-end; flex-wrap:wrap; gap:var(--space-2); }
+.db-backup-memo { display:grid; gap:4px; min-width:320px; color:var(--color-text-muted); font-size:13px; }
+.db-backup-memo input, .db-backup-confirm input { min-height:var(--control-h-md); padding:0 10px; border:1px solid var(--color-border); border-radius:var(--radius-sm); color:var(--color-text); background:var(--color-surface-raised); font:inherit; }
+.db-backup-result { display:grid; gap:4px; margin:0; padding:var(--space-2) var(--space-3); border:1px solid var(--color-border); border-radius:var(--radius-sm); font-size:13px; }
+.db-backup-result.ok { color:var(--color-success); border-color:var(--color-success-border); background:var(--color-success-surface); }
+.db-backup-result.bad { color:var(--color-danger); border-color:var(--color-danger-border); background:var(--color-danger-surface); }
+.db-backup-result small { overflow-wrap:anywhere; color:var(--color-text-muted); }
+.db-backup-table { width:100%; border-collapse:collapse; font-size:13px; }
+.db-backup-table th, .db-backup-table td { padding:6px 8px; border-bottom:1px solid var(--color-border); text-align:left; vertical-align:top; }
+.db-backup-table th { color:var(--color-text-muted); font-weight:600; }
+.db-backup-table .db-backup-number { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.db-backup-table .db-backup-warn { color:var(--color-warning); }
+.db-backup-table a.shared-button { display:inline-flex; align-items:center; gap:4px; text-decoration:none; }
+.db-backup-confirm { display:grid; gap:var(--space-2); min-width:260px; }
+.db-backup-confirm p { margin:0; color:var(--color-text-muted); }
+.db-backup-help { display:grid; gap:var(--space-2); padding-top:var(--space-3); border-top:1px solid var(--color-border); color:var(--color-text-muted); font-size:13px; }
+.db-backup-help h3 { margin:0; font-size:15px; color:var(--color-text-strong); }
+.db-backup-help p { margin:0; }
+.db-backup-help pre { margin:0; padding:var(--space-2); overflow:auto; border:1px solid var(--color-border); border-radius:var(--radius-sm); background:var(--color-surface); }
+.db-backup-dialog code { overflow-wrap:anywhere; }

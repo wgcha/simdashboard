@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchStorageConfig, saveStorageConfig } from '../../shared/api/storage'
 import { folderEnvironmentApi, type FolderDiscoveryReview, type StorageRescanReinterpret, type StorageRescanState } from '../../shared/api/folderEnvironment'
 import { rescanProgressDetail } from '../../shared/api/storageRescanModel'
+import { DbBackupSettingsEntry } from './DbBackupPanel'
 import { DriveSettingsEntry } from './DriveAdminPanel'
 
 const POLL_MS = 2000
@@ -173,7 +174,7 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
   const excluded = report ? report.needs_review.filter((item) => item.code === 'ADMIN_EXCLUDED') : []
   const excludable = pending.filter(isExcludable)
   return <div className="storage-global-actions">
-    <details className="storage-global-settings" onToggle={(event) => { if (event.currentTarget.open) void loadRoot() }}><summary aria-label="고정 결과 원본 폴더 설정">저장소 설정</summary><div><label><span>고정 결과 원본 폴더</span><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="서버 결과 원본 root 경로" disabled={rootBusy || rootLocked} /></label><button type="button" onClick={() => void saveRoot()} disabled={rootBusy || rootLocked || !rootPath.trim()}>저장</button>{rootLocked ? <small role="status">환경 설정이 사용하는 경로라 여기서 바꿀 수 없습니다.</small> : rootMessage ? <small role="status">{rootMessage}</small> : null}<DriveSettingsEntry /></div></details>
+    <details className="storage-global-settings" onToggle={(event) => { if (event.currentTarget.open) void loadRoot() }}><summary aria-label="고정 결과 원본 폴더 설정">저장소 설정</summary><div><label><span>고정 결과 원본 폴더</span><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="서버 결과 원본 root 경로" disabled={rootBusy || rootLocked} /></label><button type="button" onClick={() => void saveRoot()} disabled={rootBusy || rootLocked || !rootPath.trim()}>저장</button>{rootLocked ? <small role="status">환경 설정이 사용하는 경로라 여기서 바꿀 수 없습니다.</small> : rootMessage ? <small role="status">{rootMessage}</small> : null}<DriveSettingsEntry /><DbBackupSettingsEntry /></div></details>
     <button type="button" className="ghost-button" data-testid="storage-global-refresh" disabled={busy} title="현재 깊이 스키마로 저장소 전체를 다시 확인해 새 프로젝트·의뢰를 등록하고 등록된 의뢰를 갱신합니다." onClick={() => void run()}><RefreshCw className={busy ? 'storage-spin' : undefined} /> {busy ? progressLabel(rescan) : '저장 폴더 새로고침'}</button>
     {busy && rescan?.status === 'RUNNING' && <>
       <small className="storage-rescan-progress" role="status" data-testid="storage-rescan-progress" title={rescanProgressDetail(rescan)}>{rescanProgressDetail(rescan)}</small>

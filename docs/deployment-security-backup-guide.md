@@ -126,6 +126,25 @@ inventory를 app-role exact comparison하고 database-only verifier까지 실행
 
 권장 운영 주기는 일 1회, 배포 직전 1회이며 백업 파일과 manifest를 DB 서버와 다른 저장소에 함께 보관한다.
 
+### 5.1 관리자 화면 DB 백업 (2026-10-23)
+
+전체 관리자는 화면의 `저장소 설정` → `DB 백업` → `백업 관리`에서 [지금 백업](메모 선택)으로 즉시 백업을 만들고,
+목록에서 내려받기·삭제(파일 이름 입력 확인)를 할 수 있다. 복구는 웹 화면에서 하지 않는다(§6).
+
+| 항목 | 내용 |
+| --- | --- |
+| API(전체 관리자만, 그 외 403) | `POST /api/admin/db-backups`(백그라운드 1건, 진행 중이면 409 `DB_BACKUP_RUNNING`), `GET /api/admin/db-backups`(폴더·목록·진행 작업), `GET /api/admin/db-backups/{id}/download`, `DELETE /api/admin/db-backups/{id}` |
+| 방식 | PostgreSQL: `pg_dump --format=custom --compress=6 --no-owner --no-privileges` → `pg_restore --list` 검증 후에만 보관. 계정은 `POSTGRES_OWNER_URL`(환경 또는 `.postgres-owner.env`, 같은 DB일 때)을 우선하고 없으면 `DATABASE_URL`. 비밀번호는 `PGPASSWORD` 환경 변수로만 전달하며 인자·로그·오류에 남기지 않는다. DuckDB 개발 모드: CHECKPOINT 후 파일 복사(`.duckdb`). |
+| 파일 | `<UTC 시각>_<사유>.dump`(예 `20261023T101500Z_manual.dump`) + `<같은 이름>.manifest.json`(앱 버전, 커밋, DB 이름, 크기, sha256, 사유, 메모, 만든 사람) |
+| 폴더 | `SIMDASH_DB_BACKUP_DIR`. 미설정 시 오프라인 설치 배치(`<설치 폴더>\releases\<id>` 옆 `state`)면 `<설치 폴더>\state\backups`(예 `C:\ProgramData\SimulationWorkbench\state\backups`), 아니면 `backend/data/db-backups`. 웹 공개 폴더(`frontend`, `backend/public_assets`, `backend/assets`) 안은 거부한다. 소스 배포(`E:\VD_SIMULATION_WEB\simdashboard`)는 `E:\VD_SIMULATION_BACKUPS\db` 같은 저장소 밖 폴더를 지정하는 것을 권한다. |
+| 보관 | `SIMDASH_DB_BACKUP_KEEP`(기본 20, 1~1000): 자동(사유가 `manual`이 아닌, 예: 삭제 전 안전 백업) 백업 최근 N개만 유지. 직접(`manual`) 백업과 목록 파일이 없는 파일은 자동으로 지우지 않는다. |
+| pg_dump 찾기 | `POSTGRES_BIN` → PATH → Windows PostgreSQL 설치 폴더(`backup_postgres.py`와 같은 `postgres_cli.executable`). 서버(예 18, 포트 5434)와 메이저 버전이 다르면 시작 전에 `DB_BACKUP_VERSION_MISMATCH`로 알린다. 점검: `backend\scripts\check_postgres_backup_tools.py`. |
+| 감사 | `BACKUP_CREATED`(성공·실패, 오류 코드 포함), `BACKUP_DOWNLOADED`, `BACKUP_DELETED` |
+| 코드 호출 | 삭제 같은 위험 작업 앞의 안전 백업: `app.services.db_backup.create_backup(reason, actor) -> {id, path, size, created_at}`(동기, 다른 백업이 있으면 끝날 때까지 기다림, 실패 시 `BackupError`). |
+
+내려받은 dump에는 모든 데이터와 계정 해시가 들어 있으므로 DB 서버와 다른 저장소에 안전하게 보관한다.
+이 백업은 DB만 포함한다. `dual-read` 미디어 파일은 §5의 배포 백업(`--deployment-assets-root`)을 사용한다.
+
 ## 6. 복구
 
 기본 복구는 빈 DB만 허용한다. 대상 DB명이 `--confirm-database`와 정확히 일치해야 한다.
@@ -148,6 +167,17 @@ export SIMDASH_APP_DATABASE_URL='postgresql+psycopg://simdashboard_app:APP_PASSW
   simulation_dashboard_restore \
   --verify-database-url "$SIMDASH_APP_DATABASE_URL"
 ```
+
+화면의 DB 백업(§5.1)으로 만든 `.dump`를 직접 복구하려면 서비스를 멈춘 뒤 서버에서 소유자 계정으로 **빈 DB**에 실행한다.
+
+```powershell
+$env:PGPASSWORD = '<소유자 비밀번호>'      # 명령줄에 비밀번호를 쓰지 않는다
+& 'E:\PostgreSQL\18\bin\pg_restore.exe' --host 127.0.0.1 --port 5434 --username <소유자 계정> `
+  --dbname <빈 DB 이름> --no-owner --single-transaction --exit-on-error `
+  'C:\ProgramData\SimulationWorkbench\state\backups\20261023T101500Z_manual.dump'
+```
+
+복구 후에는 아래 확인 목록과 `harden_postgres_privileges.py`(앱 계정 권한 재적용)를 실행한다. 위 `restore-postgres.ps1`은 manifest·미디어 inventory 검증까지 하므로 DB 백업 도구(`backup_postgres.py`)로 만든 파일에 권장한다.
 
 기존 DB를 덮어쓰는 복구는 사전 백업 후에만 `-Clean`을 명시한다. 복구 후 다음을 확인한다.
 

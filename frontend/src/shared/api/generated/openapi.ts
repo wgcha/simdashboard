@@ -2968,6 +2968,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/db-backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Db Backups */
+        get: operations["list_db_backups_api_admin_db_backups_get"];
+        put?: never;
+        /** Start Db Backup */
+        post: operations["start_db_backup_api_admin_db_backups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/db-backups/{backup_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Db Backup */
+        get: operations["download_db_backup_api_admin_db_backups__backup_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/db-backups/{backup_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Db Backup */
+        delete: operations["delete_db_backup_api_admin_db_backups__backup_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drive/status": {
         parameters: {
             query?: never;
@@ -5631,6 +5683,109 @@ export interface components {
             /** Widgets */
             widgets: components["schemas"]["Widget"][];
             page?: components["schemas"]["AnalysisPageMeta"] | null;
+        };
+        /** DbBackupBackup */
+        DbBackupBackup: {
+            /** Id */
+            id: string;
+            /** Path */
+            path: string;
+            /** Size */
+            size: number;
+            /** Created At */
+            created_at: string;
+        };
+        /** DbBackupDeleted */
+        DbBackupDeleted: {
+            /** Id */
+            id: string;
+            /**
+             * Deleted
+             * @default true
+             */
+            deleted: boolean;
+        };
+        /** DbBackupError */
+        DbBackupError: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Stage */
+            stage?: string | null;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
+        /** DbBackupItem */
+        DbBackupItem: {
+            /** Id */
+            id: string;
+            /** File */
+            file: string;
+            /** Size */
+            size: number;
+            /** Created At */
+            created_at: string;
+            /** Reason */
+            reason?: string | null;
+            /** Kind */
+            kind?: string | null;
+            /** Memo */
+            memo?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Status */
+            status: string;
+            /** App Version */
+            app_version?: string | null;
+            /** Commit */
+            commit?: string | null;
+            /** Database */
+            database?: string | null;
+            /** Sha256 */
+            sha256?: string | null;
+            /** Format */
+            format?: string | null;
+        };
+        /** DbBackupJob */
+        DbBackupJob: {
+            /** Status */
+            status: string;
+            /** Reason */
+            reason: string;
+            /** Actor */
+            actor?: string | null;
+            /** Memo */
+            memo?: string | null;
+            /** Started At */
+            started_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Stage */
+            stage?: string | null;
+            backup?: components["schemas"]["DbBackupBackup"] | null;
+            error?: components["schemas"]["DbBackupError"] | null;
+        };
+        /** DbBackupOverview */
+        DbBackupOverview: {
+            /** Directory */
+            directory: string;
+            /** Keep Automatic */
+            keep_automatic: number;
+            /** Backend */
+            backend: string;
+            /** Backups */
+            backups: components["schemas"]["DbBackupItem"][];
+            job?: components["schemas"]["DbBackupJob"] | null;
+            /** Restore Command */
+            restore_command: string;
+        };
+        /** DbBackupStart */
+        DbBackupStart: {
+            /** Memo */
+            memo?: string | null;
         };
         /** DefinitionSave */
         DefinitionSave: {
@@ -15031,6 +15186,121 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriveDeviceLogin"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_db_backups_api_admin_db_backups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DbBackupOverview"];
+                };
+            };
+        };
+    };
+    start_db_backup_api_admin_db_backups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DbBackupStart"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DbBackupJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_db_backup_api_admin_db_backups__backup_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backup_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_db_backup_api_admin_db_backups__backup_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                backup_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DbBackupDeleted"];
                 };
             };
             /** @description Validation Error */
