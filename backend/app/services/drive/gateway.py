@@ -141,8 +141,17 @@ def drive_error_code(error: BaseException) -> str | None:
     return str(value) if isinstance(value, str) else None
 
 
+# Windows sharing violation inside the adapter's own download (it renames its ``.scx…`` part file in the
+# target folder): the virus scanner / DLP agent still holds the new file.  Transient -> retry later
+# (issue #51, 2026-10-23), never a permanent DRIVE_INTERNAL failure of the capture.
+_SHARING_VIOLATION = re.compile(r"WinError 32\b|WinError 33\b|being used by another process|다른 프로세스가 파일을 사용 중")
+
+
 def map_drive_error(error: BaseException) -> DriveErrorMapping:
-    return DRIVE_ERROR_MAP.get(drive_error_code(error) or "", _FALLBACK)
+    code = drive_error_code(error) or ""
+    if code in {"", "INTERNAL"} and _SHARING_VIOLATION.search(str(getattr(error, "message", None) or error)):
+        return DRIVE_ERROR_MAP["BUSY"]
+    return DRIVE_ERROR_MAP.get(code, _FALLBACK)
 
 
 _STORAGE_STATUS = {mapping.storage_code: mapping.http_status for mapping in DRIVE_ERROR_MAP.values()}  # duplicates agree

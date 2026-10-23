@@ -85,3 +85,18 @@ def test_real_windows_lock_while_another_handle_is_open(tmp_path):
             os.replace(source, tmp_path / "probe")  # proves the lock is real on this runner
         stored = BlobStore(tmp_path / "blobs", 10 ** 9).put(source, sha)
     assert stored.read_bytes() == data and stored.name == sha
+
+
+def test_adapter_sharing_violation_is_a_retryable_busy_file():
+    """Issue #51: the adapter's own download_to failed with WinError 32 (DRIVE_INTERNAL) -> retry later."""
+    from app.services.drive import gateway
+
+    class AdapterError(Exception):
+        def __init__(self, code, message):
+            super().__init__(message)
+            self.code, self.message = code, message
+
+    locked = AdapterError("INTERNAL", "PermissionError: [WinError 32] 다른 프로세스가 파일을 사용 중이기 때문에 프로세스가 액세스 할 수 없습니다: 'E:\\\\x\\\\.scx-part'")
+    assert gateway.to_storage_error(locked).code == "SPDM_FILE_BUSY"
+    assert gateway.map_drive_error(locked).retryable is True
+    assert gateway.to_storage_error(AdapterError("INTERNAL", "boom")).code == "DRIVE_INTERNAL"
