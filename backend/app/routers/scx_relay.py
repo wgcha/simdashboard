@@ -32,7 +32,12 @@ def _json(status: int, body: Any) -> JSONResponse:
     return JSONResponse(body, status_code=status, headers=dict(NO_STORE))
 
 
-def _error(error: relay.RelayError) -> JSONResponse:
+def _error(error: relay.RelayError, request: Request | None = None) -> JSONResponse:
+    # Every refused relay call leaves a line in uvicorn-error.log (a refused PhysicsAI submission used to
+    # leave none, 2026-10-26): method, path, status, code and the dashboard's own (secret-free) message.
+    if request is not None:
+        logger.warning("SCX relay refused: %s %s status=%s code=%s message=%s", request.method, request.url.path,
+                       error.status, error.code, error.message)
     headers = dict(NO_STORE)
     if error.retry_after:
         headers["Retry-After"] = str(error.retry_after)
@@ -48,7 +53,7 @@ def _guarded(request: Request, body: Callable[[str], tuple[int, Any]]) -> Respon
         client = relay.guard(_host(request), request.headers)
         status, payload = body(client)
     except relay.RelayError as error:
-        return _error(error)
+        return _error(error, request)
     return _json(status, payload)
 
 
@@ -71,7 +76,7 @@ async def _guarded_json(request: Request, body: Callable[[Any, str], tuple[int, 
         payload = await _json_body(request)
         status, result = await run_in_threadpool(body, payload, client)
     except relay.RelayError as error:
-        return _error(error)
+        return _error(error, request)
     return _json(status, result)
 
 
@@ -103,7 +108,7 @@ async def upload_file(request: Request) -> Response:
         status, payload = await run_in_threadpool(relay.commit_upload, plan, writer)
         plan = None
     except relay.RelayError as error:
-        return _error(error)
+        return _error(error, request)
     finally:
         if plan is not None:              # failed or interrupted before the batch was queued
             relay.abort_upload(plan, writer)
@@ -144,7 +149,7 @@ def download_file(request: Request) -> Response:
         relay.guard(_host(request), request.headers)
         download = relay.prepare_download(request.query_params)
     except relay.RelayError as error:
-        return _error(error)
+        return _error(error, request)
     return _DownloadResponse(download)
 
 

@@ -959,6 +959,14 @@ def submit(payload: Any, client: str) -> tuple[int, dict[str, Any]]:
                      request.input_path, request.job_dir, now, now])
         if row is not None:
             return _replay(row, digest)
+    # What is handed to SCX, one line per submission (2026-10-26: PhysicsAI's Radioss submissions left no
+    # record of the command).  Drive-relative paths and job options only; no token or credential.
+    logger.info("SCX relay submission %s request: client=%s input=%s engines=%s additional=%d version=%s "
+                "appliance=%s ncpu=%s memory_gb=%s queue=%s run_type=%s mpi=%s single_precision=%s ref=%s",
+                request.request_id, client, job_path(request.input_path),
+                [job_path(path) for path in request.engine_paths], len(request.additional_paths), request.version,
+                request.appliance, request.ncpu, request.memory_gb, request.queue_type, request.run_type,
+                request.mpi, request.single_precision, request.client_ref)
     # The adapter call: never retried, no DB connection held.
     if connection_held():
         raise RuntimeError("SCX relay submit while the thread holds a database connection")
@@ -968,11 +976,12 @@ def submit(payload: Any, client: str) -> tuple[int, dict[str, Any]]:
         code = drive_gateway.drive_error_code(error)
         message = drive_gateway.safe_error_message(error)
         if code is None or code == "SUBMISSION_UNKNOWN":
-            logger.warning("SCX relay submission %s outcome unknown (%s)", request.request_id, code or type(error).__name__)
+            logger.warning("SCX relay submission %s outcome unknown (%s): %s", request.request_id,
+                           code or type(error).__name__, message)
             _record(request.request_id, "UNKNOWN", code="SUBMISSION_UNKNOWN", message=message)
             raise RelayError(409, "SUBMISSION_UNKNOWN", "SCX 제출 결과를 알 수 없습니다. SCX 화면에서 확인한 뒤 정리하세요.",
                              adapter_code=code) from None
-        logger.warning("SCX relay submission %s failed: code=%s", request.request_id, code)
+        logger.warning("SCX relay submission %s failed: code=%s message=%s", request.request_id, code, message)
         _record(request.request_id, "FAILED", code=code, message=message)
         raise _mapped(code, message, job=True) from None
     _record(request.request_id, "SUBMITTED", info=info)

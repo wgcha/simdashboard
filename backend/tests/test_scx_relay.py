@@ -872,3 +872,17 @@ def test_secret_file_open_to_others_logs_a_warning(start, tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         relay.startup()
     assert "SIMDASH_SCX_RELAY_SECRET_FILE is readable by group/others" in caplog.text and SECRET not in caplog.text
+
+
+def test_submission_and_refusal_leave_a_log_line(start, caplog):
+    """2026-10-26: a PhysicsAI Radioss submission must leave what was handed to SCX (or why it was refused)."""
+    caplog.set_level(logging.INFO)
+    env = start()
+    missing = env.post("/jobs/radioss", json=_submit_body("pai-log-m"))
+    assert missing.status_code == 404
+    assert "SCX relay refused: POST" in caplog.text and "code=NOT_FOUND" in caplog.text
+    _stage_inputs(env)
+    assert env.post("/jobs/radioss", json=_submit_body("pai-log")).status_code == 201
+    line = next(r.getMessage() for r in caplog.records if "pai-log request:" in r.getMessage())
+    assert "ncpu=16" in line and "version=2026.1" in line and "appliance=radioss-appliance" in line
+    assert SECRET not in caplog.text
