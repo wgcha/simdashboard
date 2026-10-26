@@ -48,7 +48,15 @@ def _host(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def _received(request: Request) -> None:
+    """One line per state-changing relay call as it arrives (before any check), so a PhysicsAI call that
+    reached the dashboard is always visible in uvicorn-error.log (WARNING: INFO is not written there)."""
+    if request.method != "GET":
+        logger.warning("SCX relay received: %s %s from=%s", request.method, request.url.path, _host(request))
+
+
 def _guarded(request: Request, body: Callable[[str], tuple[int, Any]]) -> Response:
+    _received(request)
     try:
         client = relay.guard(_host(request), request.headers)
         status, payload = body(client)
@@ -71,6 +79,7 @@ async def _json_body(request: Request) -> Any:
 
 
 async def _guarded_json(request: Request, body: Callable[[Any, str], tuple[int, Any]]) -> Response:
+    _received(request)
     try:
         client = relay.guard(_host(request), request.headers)
         payload = await _json_body(request)
@@ -93,6 +102,7 @@ async def mkdirs(request: Request) -> Response:
 @router.post("/files")
 async def upload_file(request: Request) -> Response:
     """Streaming body → server staging (sha256 checked) → one queue batch ``[MKDIR, FILE]`` (202)."""
+    _received(request)
     plan: relay.UploadPlan | None = None
     writer: relay.StagingWriter | None = None
     try:

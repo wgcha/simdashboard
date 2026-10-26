@@ -876,13 +876,15 @@ def test_secret_file_open_to_others_logs_a_warning(start, tmp_path, caplog):
 
 def test_submission_and_refusal_leave_a_log_line(start, caplog):
     """2026-10-26: a PhysicsAI Radioss submission must leave what was handed to SCX (or why it was refused)."""
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.WARNING)   # the server file gets WARNING and above only
     env = start()
     missing = env.post("/jobs/radioss", json=_submit_body("pai-log-m"))
     assert missing.status_code == 404
+    assert "SCX relay received: POST" in caplog.text
     assert "SCX relay refused: POST" in caplog.text and "code=NOT_FOUND" in caplog.text
     _stage_inputs(env)
     assert env.post("/jobs/radioss", json=_submit_body("pai-log")).status_code == 201
     line = next(r.getMessage() for r in caplog.records if "pai-log request:" in r.getMessage())
     assert "ncpu=16" in line and "version=2026.1" in line and "appliance=radioss-appliance" in line
+    assert "pai-log submitted: job=" in caplog.text
     assert SECRET not in caplog.text

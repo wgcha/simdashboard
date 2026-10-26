@@ -570,7 +570,7 @@ def mkdirs(payload: Any, client: str) -> tuple[int, dict[str, Any]]:
                                             items=[{"kind": "MKDIR", "dst_rel_dir": rel}])
             items = upload_queue.batch_items(conn, batch_id)
     upload_queue.wake()
-    logger.info("SCX relay mkdirs queued: batch=%s client=%s", batch_id, client)
+    logger.warning("SCX relay mkdirs queued: batch=%s client=%s", batch_id, client)
     return 202, batch_view(items)
 
 
@@ -680,7 +680,7 @@ def commit_upload(plan: UploadPlan, writer: StagingWriter) -> tuple[int, dict[st
                                  items=[{"kind": "MKDIR", "dst_rel_dir": plan.rel_dir}, file_item])
             items = upload_queue.batch_items(conn, plan.batch_id)
     upload_queue.wake()
-    logger.info("SCX relay upload queued: batch=%s client=%s size=%d", plan.batch_id, plan.client, plan.size)
+    logger.warning("SCX relay upload queued: batch=%s client=%s size=%d", plan.batch_id, plan.client, plan.size)
     return 202, batch_view(items)
 
 
@@ -961,7 +961,9 @@ def submit(payload: Any, client: str) -> tuple[int, dict[str, Any]]:
             return _replay(row, digest)
     # What is handed to SCX, one line per submission (2026-10-26: PhysicsAI's Radioss submissions left no
     # record of the command).  Drive-relative paths and job options only; no token or credential.
-    logger.info("SCX relay submission %s request: client=%s input=%s engines=%s additional=%d version=%s "
+    # WARNING, not INFO: the server writes only WARNING and above to uvicorn-error.log (no logging config),
+    # so the 0.3.1.4 INFO lines never reached the file.
+    logger.warning("SCX relay submission %s request: client=%s input=%s engines=%s additional=%d version=%s "
                 "appliance=%s ncpu=%s memory_gb=%s queue=%s run_type=%s mpi=%s single_precision=%s ref=%s",
                 request.request_id, client, job_path(request.input_path),
                 [job_path(path) for path in request.engine_paths], len(request.additional_paths), request.version,
@@ -985,7 +987,7 @@ def submit(payload: Any, client: str) -> tuple[int, dict[str, Any]]:
         _record(request.request_id, "FAILED", code=code, message=message)
         raise _mapped(code, message, job=True) from None
     _record(request.request_id, "SUBMITTED", info=info)
-    logger.info("SCX relay submission %s submitted: job=%s client=%s", request.request_id,
+    logger.warning("SCX relay submission %s submitted: job=%s client=%s", request.request_id,
                 _bounded(getattr(info, "job_id", None), 128), client)
     with connect() as conn:
         row = _row(conn, request.request_id)
@@ -1038,7 +1040,7 @@ def terminate_job(job_id: str) -> dict[str, Any]:
     except Exception as error:  # noqa: BLE001
         logger.warning("SCX relay terminate %s failed: code=%s", job_id, drive_gateway.drive_error_code(error))
         raise adapter_error(error, job=True, job_lookup=True) from None
-    logger.info("SCX relay terminate requested: job=%s", job_id)
+    logger.warning("SCX relay terminate requested: job=%s", job_id)
     return {"job_id": job_id, "requested": True}
 
 
@@ -1065,7 +1067,7 @@ def resolve(request_id: str, payload: Any) -> dict[str, Any]:
                                 [now, now, request_id]).fetchone()
         if done is None:
             raise not_unknown
-        logger.info("SCX relay submission %s abandoned after a manual check", request_id)
+        logger.warning("SCX relay submission %s abandoned after a manual check", request_id)
         return {"request_id": request_id, "state": "ABANDONED"}
     job_id = payload.get("job_id")
     if not isinstance(job_id, str) or not 1 <= len(job_id) <= 128 or any(ord(ch) < 32 or ord(ch) == 127 for ch in job_id):
@@ -1091,7 +1093,7 @@ def resolve(request_id: str, payload: Any) -> dict[str, Any]:
                  now, now, request_id]).fetchone()
         if done is None:
             raise not_unknown
-    logger.info("SCX relay submission %s attached to job %s after a manual check", request_id, job_id)
+    logger.warning("SCX relay submission %s attached to job %s after a manual check", request_id, job_id)
     return {"request_id": request_id, "state": "ATTACHED", "job": view}
 
 
