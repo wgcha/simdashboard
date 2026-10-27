@@ -1169,6 +1169,21 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
         raise SpdmStorageError("SPDM_FILE_BUSY", "드라이브 원본이 조회 이후 바뀌었습니다. 다음 확인에서 다시 읽습니다.")
     size = int(result.size)
     sha256 = str(result.sha256).lower()
+    # Check the downloaded file itself (2026-10-27): its size and sha256 must be what the adapter reported,
+    # and the size what the drive listed.  A short or changed file (a scanner or an interrupted write) is
+    # thrown away and read again on the next pass instead of being registered.
+    try:
+        local_size, local_sha256 = server_local.file_sha256(local)
+    except OSError as exc:
+        _log_call_failure("verify", rel, "SPDM_FILE_BUSY", f"{type(exc).__name__}: {exc}")
+        raise SpdmStorageError("SPDM_FILE_BUSY", "받은 파일을 아직 읽을 수 없습니다(다른 프로그램이 사용 중). "
+                               "다음 확인에서 다시 받습니다.") from exc
+    expected_size = version.size if version.size is not None else size
+    if local_size != size or local_size != expected_size or local_sha256 != sha256:
+        _log_call_failure("verify", rel, "DOWNLOAD_INCOMPLETE",
+                          f"size={local_size} reported={size} listed={version.size} sha256_match={local_sha256 == sha256}")
+        server_local.remove_tree(target)
+        raise SpdmStorageError("SPDM_FILE_BUSY", "받은 파일의 크기·내용이 원본과 달라 버렸습니다. 다음 확인에서 다시 받습니다.")
     stored: str | None = None
     copy = LocalCopy(path=local, sha256=sha256, size=size)
     session.staged_bytes += size
