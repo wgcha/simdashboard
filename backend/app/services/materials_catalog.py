@@ -485,7 +485,10 @@ def _resolve_optistruct_include(request_relative_path: str, including_relative: 
 
 def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
                    scope: dict[str, Any], schema: dict[str, Any],
-                   conflicts: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
+                   conflicts: list[dict[str, str]] | None = None, *,
+                   deck_lookup: Any = None) -> list[dict[str, Any]]:
+    """Catalog entries of the request's Scenes.  ``deck_lookup(entry)`` (SCX drive: the prepared rows in the
+    DB, ``materials_preparation``) replaces the live search of the deck folders; it sets ``has_deck`` itself."""
     budget = {
         "started": time.monotonic(), "entries": 0, "sniff_bytes": 0,
         "owned_directories": {}, "ownership_checks": 0,
@@ -549,6 +552,10 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
             "input_paths": list(location.get("input_paths") or []),
             "result_paths": list(location.get("result_paths") or []),
         }
+        if deck_lookup is not None:
+            deck_lookup(entry)
+            items.append(entry)
+            continue
         if scope["environment"] == "USAGE":
             _, candidate_files, _ = _usage_candidates(
                 entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key,
@@ -567,6 +574,12 @@ def catalog(conn: ConnectionLike, request_id: str, environment: str) -> dict[str
     project_id, scope, root, root_id, root_key, schema = _request_scope(conn, request_id, environment)
     conflicts: list[dict[str, str]] = []
     items = _catalog_items(conn, root, root_id, root_key, scope, schema, conflicts)
+    return catalog_payload(request_id, scope, schema, root_key, items, conflicts)
+
+
+def catalog_payload(request_id: str, scope: dict[str, Any], schema: dict[str, Any], root_key: str,
+                    items: list[dict[str, Any]], conflicts: list[dict[str, str]]) -> dict[str, Any]:
+    """Catalog response: the entries with their shared hierarchy ids (no storage reads)."""
     # Case results and materials share one hierarchy projection, so the same URL
     # selection (case/case_load/case_run/case_option) means the same folders.
     projected = folder_schema_hierarchy.project_schema_hierarchy(schema, scope["locations"], root_key)
@@ -602,6 +615,23 @@ def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,
         raise MaterialsCatalogError("MATERIALS_SCENE_REQUIRED", "scene_id 또는 relative_path를 선택하세요.")
     project_id, scope, root, root_id, root_key, schema = _request_scope(conn, request_id, environment)
     catalog_items = _catalog_items(conn, root, root_id, root_key, scope, schema)
+    selected = select_scene(catalog_items, scene_id, relative_path)
+    try:
+        scene_relative = result_registration_paths._safe_existing(root, selected["relative_path"])
+    except result_registration_paths.ResultRegistrationError as exc:
+        raise MaterialsCatalogError(exc.code, str(exc)) from exc
+    fs = provider_for_root(root)
+    scene_path = fs.path(scene_relative)
+    if not fs.is_dir(scene_relative):
+        raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 Scene 폴더를 찾을 수 없습니다.", 404)
+    return selected, scene_path, scope
+
+
+def select_scene(catalog_items: list[dict[str, Any]], scene_id: str | None,
+                 relative_path: str | None) -> dict[str, Any]:
+    """The catalog entry named by ``scene_id`` and/or ``relative_path`` (no storage reads)."""
+    if not scene_id and not relative_path:
+        raise MaterialsCatalogError("MATERIALS_SCENE_REQUIRED", "scene_id 또는 relative_path를 선택하세요.")
     by_id = {item["scene_id"]: item for item in catalog_items}
     by_path = {item["relative_path"].casefold(): item for item in catalog_items}
     by_id_entry = by_id.get(scene_id) if scene_id else None
@@ -622,15 +652,7 @@ def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,
         raise MaterialsCatalogError("MATERIALS_SCENE_MISMATCH", "scene_id와 relative_path가 서로 다른 씬을 가리킵니다.")
     selected = by_id_entry or by_path_entry
     assert selected is not None
-    try:
-        scene_relative = result_registration_paths._safe_existing(root, selected["relative_path"])
-    except result_registration_paths.ResultRegistrationError as exc:
-        raise MaterialsCatalogError(exc.code, str(exc)) from exc
-    fs = provider_for_root(root)
-    scene_path = fs.path(scene_relative)
-    if not fs.is_dir(scene_relative):
-        raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 Scene 폴더를 찾을 수 없습니다.", 404)
-    return selected, scene_path, scope
+    return selected
 
 
 class _ParseBudget:

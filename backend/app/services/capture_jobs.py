@@ -389,7 +389,13 @@ def _loop(idle: int) -> None:
         if storage_rescan.running():
             continue   # the rescan runs the jobs in its CAPTURE phase
         try:
-            run_pending(cancel=storage_rescan.yield_signal(_stop), should_stop=storage_rescan.running)
+            cancel = storage_rescan.yield_signal(_stop)
+            result = run_pending(cancel=cancel, should_stop=storage_rescan.running)
+            if result.get("status") == "DONE":
+                # Case results first; then the 소재물성 decks of the registered requests (issue #55).
+                from . import materials_preparation
+
+                materials_preparation.run_pending(cancel=cancel, should_stop=storage_rescan.running)
         except Exception:  # noqa: BLE001 - the thread never dies
             logger.warning("Capture worker pass failed", exc_info=True)
 

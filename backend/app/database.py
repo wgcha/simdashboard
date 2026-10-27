@@ -89,6 +89,7 @@ def initialize_database() -> None:
                 "scx_relay_submissions",
                 "folder_project_links",
                 "folder_discovery_exclusions",
+                "materials_preparations",
             )
             missing = [
                 table_name
@@ -153,6 +154,11 @@ def initialize_database() -> None:
                                           "resolved_at"},
                 "folder_project_links": {"root_key", "relative_path", "path_key", "project_id", "created_by", "created_at"},
                 "folder_discovery_exclusions": {"root_key", "path_key", "relative_path", "excluded_by", "excluded_at"},
+                "materials_preparations": {"id", "root_key", "project_id", "request_id", "environment", "scene_key",
+                                           "relative_path", "status", "needs_check", "fingerprint", "parser_version",
+                                           "source_rel_path", "files_json", "warnings_json", "deck_json", "error_code",
+                                           "error_message", "attempts", "checked_at", "prepared_at", "created_at",
+                                           "updated_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }
             incompatible = []
@@ -1290,6 +1296,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_drive_connected_account_schema(conn)
         ensure_scx_relay_schema(conn)
         ensure_folder_discovery_links_schema(conn)
+        ensure_materials_preparations_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1673,6 +1680,22 @@ def ensure_folder_discovery_links_schema(conn: duckdb.DuckDBPyConnection) -> Non
         root_key VARCHAR NOT NULL, path_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, excluded_by VARCHAR NOT NULL,
         excluded_at TIMESTAMP NOT NULL, PRIMARY KEY (root_key, path_key)
     )""")
+
+
+def ensure_materials_preparations_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0046 (materials prepared per request Scene)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS materials_preparations (
+        id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, project_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL,
+        environment VARCHAR NOT NULL CHECK (environment IN ('DISTRIBUTION', 'USAGE')), scene_key VARCHAR NOT NULL,
+        relative_path VARCHAR NOT NULL,
+        status VARCHAR NOT NULL CHECK (status IN ('PENDING', 'READY', 'NO_DECK', 'FAILED')),
+        needs_check BOOLEAN NOT NULL DEFAULT FALSE, fingerprint VARCHAR, parser_version VARCHAR, source_rel_path VARCHAR,
+        files_json VARCHAR NOT NULL, warnings_json VARCHAR NOT NULL, deck_json VARCHAR, error_code VARCHAR,
+        error_message VARCHAR, attempts INTEGER NOT NULL DEFAULT 0, checked_at TIMESTAMP, prepared_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
+        UNIQUE (root_key, request_id, environment, scene_key)
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS materials_preparations_work ON materials_preparations (status, needs_check)")
 
 
 def ensure_folder_registration_delete_schema(conn: duckdb.DuckDBPyConnection) -> None:

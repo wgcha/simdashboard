@@ -55,6 +55,14 @@
 - 추가만 하는 migration(기존 표·행 불변). PostgreSQL 앱 역할에 SELECT/INSERT/UPDATE/DELETE 부여, 개발용 DuckDB는 `ensure_materials_deck_cache_schema`, 앱 기동 필수 표·열 검사에 포함.
 - 파생 자료다(원본은 SPDM 파일). 프로젝트·의뢰 id가 없어 프로젝트 정리 대상이 아니며 언제 지워도 다음 조회가 다시 분석한다. 배포 패키지에 포함하지 않는다.
 
+### 5.1 SCX 드라이브: 미리 준비해 DB에서 보여 주기 (`materials_preparations`, migration `0046_materials_preparations`, 이슈 #55)
+
+- 증상: 소재물성을 열면 화면 요청이 Scene마다 덱 폴더를 드라이브에서 나열·내용 확인해 `DRIVE_READ_NOT_PREPARED: 드라이브 자료를 준비하지 못했습니다(조회 횟수 한도)`로 실패.
+- 지금(드라이브 모드만, 유통·사용 모두): `/api/materials/catalog`·`/deck`은 읽기 세션 없이 **DB만** 읽는다(`services/materials_preparation.py`). Scene 목록은 등록된 폴더 스냅샷, 덱 상태는 `materials_preparations` 행(Scene당 1행: `PENDING`=준비 중, `READY`, `NO_DECK`, `FAILED`+코드·메시지). 스냅샷이 아직 없으면 `preparation.status=PREPARING`(`MATERIALS_FOLDERS_PREPARING`), 행이 없는 Scene은 `PENDING` 행을 만들고 워커를 깨운다. 카탈로그 Scene에 `materials_status`·`materials_error_code`·`materials_error_message`, 응답에 `preparation`이 추가됐다. 덱: 준비 중이면 `analysis.status=QUEUED`(유통은 `solver=RADIOSS`), 실패면 `FAILED`(`retry=true`가 다시 `PENDING`), 덱 없음은 기존처럼 404 `MATERIALS_DECK_NOT_FOUND`.
+- 준비: 결과 받기 워커(`capture_jobs`)가 결과 받기 패스가 끝나면(`DONE`) `materials_preparation.run_pending`을 돈다. 의뢰마다 BACKGROUND·resumable 읽기 세션 하나(300 s)로 덱 폴더 목록 → 덱 다운로드(유통: 기존 `.rad`/`.inc` 규칙·`/INCLUDE`·크기 한도 그대로) → 파싱 → 행 저장. 사용환경 `.fem`은 세션 뒤 `optistruct_materials.run_job`(blob 재사용·크기/시간 한도 그대로)으로 하나씩 분석해 `materials_deck_cache`에 두고 행은 그 파일과 버전을 가리킨다.
+- 버전: `fingerprint` = 덱 폴더 목록(이름+버전 토큰)과 읽은 모든 파일의 버전 토큰. 폴더 새로고침(`refresh_scope`가 바뀐 경우)과 `RECHECK_SECONDS`(600 s)보다 오래된 행의 조회, 파서 버전 변경이 `needs_check`를 켜고, 다음 패스는 목록만 다시 읽어 같으면 그대로(다운로드 없음), 다르면 다시 준비한다. 그동안 화면은 이전 덱을 보여 준다. 등록 원본이 바뀐 덱 파일은 대시보드 규칙대로 [변경 반영] 뒤 버전으로 읽는다.
+- 일시 오류(드라이브·세션 마감)는 `PENDING`을 유지하고 마지막 오류를 남기며 5회 뒤 `FAILED`. 로컬 SPDM 루트는 예전처럼 직접 읽는다.
+
 ## 6. 남은 일·확인할 점
 
 - 예시 덱의 `TABLEMD`(`MATS1`이 참조)는 한 줄에 값 3개(1열 응력, 2열 소성 변형률, 3열 0)로 보고 x=2열, y=1열로 그렸다. 3열 의미(변형률 속도·온도)와 축 정의는 사용자 확인이 필요하다. 3열 값이 여러 개면 알림을 남긴다.

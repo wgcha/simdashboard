@@ -360,11 +360,13 @@ def _is_transient(error: BaseException) -> bool:
     return isinstance(error, OSError)
 
 
-def run_job(state: JobState) -> None:
+def run_job(state: JobState) -> str:
     """Parse ``state.spec`` without a DB connection, then store READY or FAILED (one short connection).
 
     Transient storage/drive failures are not stored: they are kept in memory for
     ``TRANSIENT_BACKOFF_SECONDS`` (shown as FAILED, then re-queued by the next view).
+    Returns the outcome: ``READY``, ``FAILED`` (stored), ``TRANSIENT`` (not stored, see
+    :func:`transient_error`) or ``CHANGED`` (the file changed before it was read; nothing stored).
     """
     spec = state.spec
     started = time.monotonic()
@@ -383,7 +385,7 @@ def run_job(state: JobState) -> None:
     except (OptiStructParseError, SpdmStorageError, OSError) as error:
         code = getattr(error, "code", None) or "MATERIALS_SCAN_INCOMPLETE"
         if code == "MATERIALS_FILE_CHANGED":
-            return   # the next view sees the new fingerprint and queues a fresh parse
+            return "CHANGED"   # the next view sees the new fingerprint and queues a fresh parse
         if _is_transient(error):
             message = (str(error) if isinstance(error, SpdmStorageError)
                        else f"입력 파일을 읽을 수 없습니다: {error.__class__.__name__}")
@@ -392,13 +394,13 @@ def run_job(state: JobState) -> None:
                 _transient[file_key(spec.root_key, spec.rel_path)] = {
                     "fingerprint": spec.fingerprint, "error_code": code, "error_message": message[:_ERROR_MESSAGE_LIMIT],
                     "until": time.monotonic() + TRANSIENT_BACKOFF_SECONDS}
-            return
+            return "TRANSIENT"
         failed(code, str(error))
-        return
+        return "FAILED"
     except Exception as error:  # noqa: BLE001 - recorded so the screen does not poll forever
         _LOG.exception("OptiStruct parse failed: %s", spec.rel_path)
         failed("MATERIALS_PARSE_FAILED", f"입력 파일 분석 중 오류가 발생했습니다: {error.__class__.__name__}")
-        return
+        return "FAILED"
     seconds = round(time.monotonic() - started, 3)
     try:
         _store(root_key=spec.root_key, rel_path=spec.rel_path, fp=spec.fingerprint, size=spec.size, status="READY",
@@ -407,10 +409,18 @@ def run_job(state: JobState) -> None:
     except ValueError:   # not JSON-serialisable (e.g. a non-finite number that slipped through)
         _LOG.exception("OptiStruct parse result not storable: %s", spec.rel_path)
         failed("MATERIALS_PARSE_FAILED", "분석 결과를 저장할 수 없습니다(잘못된 수치).")
-        return
+        return "FAILED"
     with _lock:
         _transient.pop(file_key(spec.root_key, spec.rel_path), None)
     _LOG.info("OptiStruct materials parsed: %s (%d bytes, %.1f s)", spec.rel_path, spec.size, seconds)
+    return "READY"
+
+
+def transient_error(root_key: str, rel_path: str) -> dict[str, Any] | None:
+    """The last transient (not stored) failure of a file: ``{"error_code", "error_message"}`` or None."""
+    with _lock:
+        found = _transient.get(file_key(root_key, rel_path))
+        return {"error_code": found["error_code"], "error_message": found["error_message"]} if found else None
 
 
 # --- request side ---------------------------------------------------------------------------
@@ -532,4 +542,4 @@ def is_input_name(name: str) -> bool:
 
 __all__ = ["DEFAULT_MAX_INPUT_BYTES", "INPUT_SUFFIXES", "JobSpec", "SOLVER", "deck_status", "file_key", "fingerprint",
            "is_input_name", "job_state", "load_row", "max_input_bytes", "max_parse_seconds", "reset_for_tests",
-           "run_job", "submit", "wait_idle"]
+           "run_job", "submit", "transient_error", "wait_idle"]

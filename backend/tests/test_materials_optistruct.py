@@ -617,10 +617,24 @@ def test_drive_usage_materials_download_once_and_reuse_the_blob(scx, parse_count
                           {"preview_id": preview["id"], "idempotency_key": f"os-{uuid.uuid4()}", "capture": False})
     request_id = registered["request_id"]
 
+    # Issue #55 (2026-10-27): the screen reads only the DB; the capture worker's materials pass prepares the deck.
+    from app.services import materials_preparation
+
+    def prepare():
+        result = materials_preparation.run_pending(budget_seconds=120.0, session_seconds=110.0)
+        assert result["status"] == "DONE", result
+        return result
+
+    calls = len(scx.drive.calls)
     catalog = _catalog(scx.client, request_id)
-    scene = next(item for item in catalog["scenes"] if item["label"] == "Settle")
-    assert scene["has_deck"]
-    body = _ready(scx.client, request_id, scene["scene_id"])
+    # Registered without a capture: no folder snapshot in the DB yet -> 준비 중, not a drive read error.
+    assert catalog["scenes"] == [] and catalog["preparation"]["code"] == "MATERIALS_FOLDERS_PREPARING", catalog
+    assert len(scx.drive.calls) == calls, "a page view never reads the drive"
+    prepare()
+    scene = next(item for item in _catalog(scx.client, request_id)["scenes"] if item["label"] == "Settle")
+    assert scene["materials_status"] == "READY" and scene["has_deck"]
+    body = _deck(scx.client, request_id, scene["scene_id"])
+    assert body["analysis"]["status"] == "READY"
     assert len(body["deck"]["parts"]) == 30
     downloads = [rel for op, rel in scx.drive.calls if op == "download_to" and rel.endswith("model.fem")]
     assert len(downloads) == 1
@@ -630,17 +644,25 @@ def test_drive_usage_materials_download_once_and_reuse_the_blob(scx, parse_count
     assert blob[0] and blob[1].startswith("drive:")
     assert drive_reads.blob_store().find(blob[0]) is not None
 
-    # Cache hit: no download, no parse.
+    # Cache hit: no download, no parse, no drive read.
+    calls = len(scx.drive.calls)
     assert _deck(scx.client, request_id, scene["scene_id"])["analysis"]["cached"] is True
+    assert len(scx.drive.calls) == calls and len(parse_counter) == 1
     # A parser upgrade re-parses from the blob of the unchanged version (no second download).
     monkeypatch.setattr(optistruct_materials, "PARSER_VERSION", "optistruct-test-next")
-    again = _ready(scx.client, request_id, scene["scene_id"])
+    stale = _deck(scx.client, request_id, scene["scene_id"])          # the prepared deck stays visible meanwhile
+    assert stale["analysis"]["status"] == "READY" and stale["preparation"]["checking"] is True
+    prepare()
+    again = _deck(scx.client, request_id, scene["scene_id"])
     assert again["analysis"]["status"] == "READY" and len(parse_counter) == 2
     assert len([rel for op, rel in scx.drive.calls if op == "download_to" and rel.endswith("model.fem")]) == 1
 
-    # A new drive version is downloaded and parsed again.
+    # A new drive version (found by the next check of a viewed Scene) is downloaded and parsed again.
     scx.drive.add_file(scx.path(f"{case}/Settle/model.fem"), model.replace(b"ENDDATA", b"MAT1         901  1.0\nENDDATA"))
-    changed = _ready(scx.client, request_id, scene["scene_id"])
+    monkeypatch.setattr(materials_preparation, "RECHECK_SECONDS", 0.0)
+    _catalog(scx.client, request_id)
+    prepare()
+    changed = _deck(scx.client, request_id, scene["scene_id"])
     assert "901" in {item["id"] for item in changed["deck"]["materials"]}
     assert len([rel for op, rel in scx.drive.calls if op == "download_to" and rel.endswith("model.fem")]) == 2
 
