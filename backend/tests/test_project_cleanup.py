@@ -428,6 +428,10 @@ _ALL_COLUMNS = sorted({
     # SCX relay submissions (migration 0044)
     "request_sha256", "client", "client_ref", "input_rel", "job_dir_rel", "job_id", "last_status", "output_path",
     "output_rel", "resolved_at",
+    # discovery exclusions (migration 0045)
+    "excluded_by", "excluded_at",
+    # materials prepared per request Scene (migration 0046)
+    "scene_key", "needs_check", "source_rel_path", "files_json", "warnings_json", "checked_at", "prepared_at",
 })
 
 

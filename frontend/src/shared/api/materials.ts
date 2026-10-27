@@ -11,6 +11,10 @@ export type MaterialsScene = {
   hierarchy: Record<string, Record<string, unknown>>
   kind: 'SCENE' | 'RESULTS'
   has_deck: boolean
+  /** SCX drive: decks are prepared in the background and served from the server DB (null on local roots). */
+  materials_status: MaterialsPreparationStatus | null
+  materials_error_code: string | null
+  materials_error_message: string | null
   /** Shared Folder Schema hierarchy ids; '' when the Scene could not be placed. */
   case_id: string
   load_case_id: string
@@ -39,7 +43,10 @@ export type MaterialsHierarchy = {
   run_options: MaterialsHierarchyOption[]
 }
 export type MaterialsCatalogConflict = { relative_path: string; code: string; message: string }
-export type MaterialsCatalog = { request_id: string | null; environment: string | null; scenes: MaterialsScene[]; hierarchy: MaterialsHierarchy; conflicts: MaterialsCatalogConflict[] }
+export type MaterialsPreparationStatus = 'READY' | 'PREPARING' | 'FAILED' | 'NO_DECK'
+/** SCX drive: PREPARING while the folder structure or some Scene decks are not in the server DB yet. */
+export type MaterialsCatalogPreparation = { status: 'READY' | 'PREPARING'; code: string | null; message: string | null; preparing: number; failed: number }
+export type MaterialsCatalog = { request_id: string | null; environment: string | null; scenes: MaterialsScene[]; hierarchy: MaterialsHierarchy; conflicts: MaterialsCatalogConflict[]; preparation: MaterialsCatalogPreparation | null }
 export type MaterialsPart = {
   id: string
   title: string | null
@@ -120,6 +127,8 @@ export type MaterialsDeck = {
 export type MaterialsAnalysisStatus = 'QUEUED' | 'RUNNING' | 'READY' | 'FAILED'
 export type MaterialsAnalysis = {
   status: MaterialsAnalysisStatus
+  /** RADIOSS: SCX drive distribution decks prepared on the server (QUEUED = 준비 중). */
+  solver: MaterialsSolver
   relative_path: string
   size_bytes: number | null
   bytes_done: number
@@ -191,6 +200,9 @@ function scene(value: unknown): MaterialsScene | null {
       return parsed ? [[key, parsed]] : []
     })),
     has_deck: item.has_deck === true,
+    materials_status: item.materials_status === 'READY' || item.materials_status === 'PREPARING' || item.materials_status === 'FAILED' || item.materials_status === 'NO_DECK' ? item.materials_status : null,
+    materials_error_code: optionalText(item.materials_error_code),
+    materials_error_message: optionalText(item.materials_error_message),
     case_id: idText(item.case_id),
     load_case_id: idText(item.load_case_id),
     execution_run_id: idText(item.execution_run_id),
@@ -250,7 +262,11 @@ function parseCatalog(value: unknown): MaterialsCatalog {
     const path = optionalText(item?.relative_path)
     return item && path ? [{ relative_path: path, code: optionalText(item.code) ?? '', message: optionalText(item.message) ?? '' }] : []
   })
-  return { request_id: optionalText(payload.request_id), environment: optionalText(payload.environment), scenes, hierarchy: hierarchy(payload.hierarchy), conflicts }
+  const preparationRecord = record(payload.preparation)
+  const preparation: MaterialsCatalogPreparation | null = preparationRecord && (preparationRecord.status === 'READY' || preparationRecord.status === 'PREPARING')
+    ? { status: preparationRecord.status, code: optionalText(preparationRecord.code), message: optionalText(preparationRecord.message), preparing: finite(preparationRecord.preparing) ?? 0, failed: finite(preparationRecord.failed) ?? 0 }
+    : null
+  return { request_id: optionalText(payload.request_id), environment: optionalText(payload.environment), scenes, hierarchy: hierarchy(payload.hierarchy), conflicts, preparation }
 }
 
 function analysis(value: unknown): MaterialsAnalysis | null {
@@ -258,7 +274,7 @@ function analysis(value: unknown): MaterialsAnalysis | null {
   const status = item?.status
   if (!item || (status !== 'QUEUED' && status !== 'RUNNING' && status !== 'READY' && status !== 'FAILED')) return null
   return {
-    status, relative_path: optionalText(item.relative_path) ?? '', size_bytes: finite(item.size_bytes),
+    status, solver: item.solver === 'RADIOSS' ? 'RADIOSS' : 'OPTISTRUCT', relative_path: optionalText(item.relative_path) ?? '', size_bytes: finite(item.size_bytes),
     bytes_done: finite(item.bytes_done) ?? 0, bytes_total: finite(item.bytes_total) ?? 0, progress: finite(item.progress) ?? 0,
     queue_position: finite(item.queue_position) ?? 0, parse_seconds: finite(item.parse_seconds), parsed_at: optionalText(item.parsed_at),
     error_code: optionalText(item.error_code), error_message: optionalText(item.error_message), cached: item.cached === true,

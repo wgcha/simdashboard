@@ -711,6 +711,11 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
             cases, scenes = _new_result_nodes(diff_baseline_nodes, scoped_nodes, resolver)
             notifications.new_results(conn, project_id, request_id, environment, cases=cases, scenes=scenes,
                                       snapshot_id=snapshot_id)
+        if not revision_only_unchanged:
+            from . import materials_preparation
+
+            # SCX drive: the prepared 소재물성 decks of this request are checked against the drive again.
+            materials_preparation.request_check(conn, project_id, request_id, environment)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

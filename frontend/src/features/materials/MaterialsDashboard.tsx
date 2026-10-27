@@ -34,6 +34,14 @@ type Props = {
 
 const ENVIRONMENT_LABEL: Record<MaterialsEnvironment, string> = { USAGE: '사용환경', DISTRIBUTION: '유통환경' }
 const ANALYSIS_POLL_MS = 1500
+/** SCX drive: the catalog is asked again while decks are being prepared on the server. */
+const PREPARATION_POLL_MS = 5000
+
+function sceneSuffix(scene: MaterialsScene): string {
+  if (scene.materials_status === 'PREPARING') return ' · 준비 중'
+  if (scene.materials_status === 'FAILED') return ' · 준비 실패'
+  return scene.has_deck ? '' : ' · 덱 없음'
+}
 
 function megabytes(value: number | null | undefined): string {
   return value == null ? '—' : `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 }).format(value / 1024 / 1024)} MB`
@@ -43,7 +51,7 @@ function AnalysisState({ analysis, onRetry }: { analysis: MaterialsAnalysis; onR
   const file = analysis.relative_path.split('/').pop() ?? analysis.relative_path
   if (analysis.status === 'FAILED') {
     return <div className="materials-table-state materials-analysis materials-analysis--failed" role="alert">
-      <AlertTriangle /><strong>입력 파일을 분석하지 못했습니다.</strong>
+      <AlertTriangle /><strong>소재 덱을 분석하지 못했습니다.</strong>
       <span title={analysis.relative_path}>{file} · {analysis.error_message ?? analysis.error_code ?? '원인 미상'}</span>
       <button type="button" onClick={onRetry}><RotateCw /> 다시 분석</button>
       {analysis.retry_after_seconds ? <small>다시 분석은 파일마다 1분에 한 번입니다. {analysis.retry_after_seconds}초 뒤에 다시 누르세요.</small>
@@ -52,10 +60,10 @@ function AnalysisState({ analysis, onRetry }: { analysis: MaterialsAnalysis; onR
   }
   const percent = Math.round(Math.min(1, Math.max(0, analysis.progress)) * 100)
   return <div className="materials-table-state materials-analysis" role="status" aria-live="polite">
-    <strong>{analysis.status === 'QUEUED' ? `분석 대기 중${analysis.queue_position ? ` · ${analysis.queue_position}번째` : ''}` : `분석 중 · ${percent}%`}</strong>
+    <strong>{analysis.status === 'QUEUED' ? `${analysis.solver === 'RADIOSS' ? '소재 자료 준비 중' : '분석 대기 중'}${analysis.queue_position ? ` · ${analysis.queue_position}번째` : ''}` : `분석 중 · ${percent}%`}</strong>
     <progress max={100} value={analysis.status === 'QUEUED' ? undefined : percent} aria-label="입력 파일 분석 진행률" />
-    <span title={analysis.relative_path}>{file} · {megabytes(analysis.bytes_done)} / {megabytes(analysis.bytes_total || analysis.size_bytes)}</span>
-    <small>큰 OptiStruct 입력 파일은 처음 한 번만 분석하고, 파일이 바뀌기 전까지 저장된 결과를 사용합니다.</small>
+    <span title={analysis.relative_path}>{analysis.solver === 'RADIOSS' ? file : `${file} · ${megabytes(analysis.bytes_done)} / ${megabytes(analysis.bytes_total || analysis.size_bytes)}`}</span>
+    <small>{analysis.solver === 'RADIOSS' ? '드라이브에서 덱을 받아 서버에 준비하는 중입니다. 준비되면 자동으로 표시됩니다.' : '큰 OptiStruct 입력 파일은 처음 한 번만 분석하고, 파일이 바뀌기 전까지 저장된 결과를 사용합니다.'}</small>
   </div>
 }
 
@@ -267,6 +275,7 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
   const [deck, setDeck] = useState<MaterialsDeck | null>(null)
   const [analysis, setAnalysis] = useState<MaterialsAnalysis | null>(null)
   const [pollToken, setPollToken] = useState(0)
+  const [catalogPollToken, setCatalogPollToken] = useState(0)
   const retryNext = useRef(false)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [loadingDeck, setLoadingDeck] = useState(false)
@@ -311,7 +320,15 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '소재 덱 위치를 불러오지 못했습니다.')
     }).finally(() => { if (!controller.signal.aborted) setLoadingCatalog(false) })
     return () => controller.abort()
-  }, [requestId, environment, refreshToken, manualRefresh])
+  }, [requestId, environment, refreshToken, manualRefresh, catalogPollToken])
+
+  // SCX drive: while the server prepares decks, ask for the catalog again (states change to 준비됨/실패).
+  const catalogPreparing = catalog?.preparation?.status === 'PREPARING'
+  useEffect(() => {
+    if (!catalogPreparing) return
+    const timer = window.setTimeout(() => setCatalogPollToken((token) => token + 1), PREPARATION_POLL_MS)
+    return () => window.clearTimeout(timer)
+  }, [catalogPreparing, catalog])
 
   // URL repair: restore parents of an old `scene`-only link, drop stale ids
   // (with their children) and auto-select single candidates. It never moves
@@ -460,11 +477,11 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
             {path.flat ? null : <HierarchyChoice key="하중경우" label="하중경우" value={loadCaseId} choices={path.loads.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} disabled={!caseId} disabledReason={caseId ? '이 Case에 하중경우 폴더가 없습니다.' : 'Case를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_load', value)} />}
             {path.flat ? null : <HierarchyChoice key="Run Case" label="Run Case" value={runId} choices={path.runs.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} disabled={!loadCaseId} disabledReason={loadCaseId ? '이 하중경우에 Run Case가 없습니다.' : '하중경우를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_run', value)} />}
             {path.flat ? null : <HierarchyChoice key="Run Option" label="Run Option" value={optionId} choices={path.options.map((item) => ({ id: item.id, label: item.label, title: item.relative_path || item.label }))} disabled={!runId} disabledReason={runId ? '이 Run Case에 Run Option이 없습니다.' : 'Run Case를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_option', value)} />}
-          <HierarchyChoice label="Scene" value={selectedSceneId} choices={path.scenes.map((item) => ({ id: item.scene_id, label: `${item.label}${item.has_deck ? '' : ' · 덱 없음'}`, title: item.relative_path }))} disabled={!path.ready} disabledReason={path.ready ? '선택한 경로에 Scene이 없습니다.' : '상위 경로를 먼저 선택하세요.'} onChange={(value) => updateQuery({ scene: value || null, part: null }, false)} />
+          <HierarchyChoice label="Scene" value={selectedSceneId} choices={path.scenes.map((item) => ({ id: item.scene_id, label: `${item.label}${sceneSuffix(item)}`, title: item.relative_path }))} disabled={!path.ready} disabledReason={path.ready ? '선택한 경로에 Scene이 없습니다.' : '상위 경로를 먼저 선택하세요.'} onChange={(value) => updateQuery({ scene: value || null, part: null }, false)} />
         </HierarchyPath>
         {selectedScene ? <div className="materials-scene-location">
           <span title={selectedScene.relative_path}>{selectedScene.relative_path}</span>
-          <b className={selectedScene.has_deck ? 'present' : 'absent'}>{selectedScene.has_deck ? '덱 있음' : '덱 없음'}</b>
+          <b className={selectedScene.materials_status === 'READY' || (selectedScene.has_deck && !selectedScene.materials_status) ? 'present' : 'absent'}>{selectedScene.materials_status === 'PREPARING' ? '준비 중' : selectedScene.materials_status === 'FAILED' ? '준비 실패' : selectedScene.has_deck ? '덱 있음' : '덱 없음'}</b>
         </div> : null}
       </div> : null
   return <div className={`materials-dashboard${embedded ? ' materials-dashboard--embedded' : ''}`} data-ui-density="v1">
@@ -474,7 +491,7 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
     </header>}
 
     {error && <div className="materials-error" role="alert"><AlertTriangle /><span>{error}</span><button type="button" onClick={() => setManualRefresh((value) => value + 1)}><RotateCw /> 다시 불러오기</button></div>}
-    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog && !catalog ? <div className="materials-empty-state" role="status">{environmentLabel} 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length && catalog.conflicts.length ? <div className="materials-empty-state"><AlertTriangle /><strong>Scene 폴더 {catalog.conflicts.length}개가 다른 의뢰에도 연결되어 소재를 읽지 않았습니다.</strong><span title={catalog.conflicts.map((item) => item.relative_path).join('\n')}>같은 폴더를 두 의뢰에 등록했는지 관리자 폴더 조사에서 확인하세요. {catalog.conflicts[0].message}</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 {environmentLabel} 결과 폴더를 확인하세요.</span></div> : !selectedScene ? <div className="materials-empty-state"><Layers /><strong>{path.ready && !path.scenes.length ? '선택한 경로에 Scene이 없습니다.' : '경로와 Scene을 선택하면 소재 덱을 조회합니다.'}</strong><span>{environment === 'USAGE' ? 'Case → Scene 순서로 선택하세요.' : 'Case → 하중경우 → Run Case → Run Option → Scene 순서로 선택하세요.'}</span></div> : !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>{environment === 'USAGE' ? '선택한 Scene·Case 폴더 바로 아래에서 OptiStruct 입력 파일(.fem)을 찾지 못했습니다.' : '선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.'}</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
+    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog && !catalog ? <div className="materials-empty-state" role="status">{environmentLabel} 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length && catalog.conflicts.length ? <div className="materials-empty-state"><AlertTriangle /><strong>Scene 폴더 {catalog.conflicts.length}개가 다른 의뢰에도 연결되어 소재를 읽지 않았습니다.</strong><span title={catalog.conflicts.map((item) => item.relative_path).join('\n')}>같은 폴더를 두 의뢰에 등록했는지 관리자 폴더 조사에서 확인하세요. {catalog.conflicts[0].message}</span></div> : catalog && !catalog.scenes.length && catalogPreparing ? <div className="materials-empty-state" role="status"><Layers /><strong>{environmentLabel} 소재 자료를 서버에 준비하고 있습니다.</strong><span>{catalog.preparation?.message ?? '준비되면 자동으로 표시됩니다.'}</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 {environmentLabel} 결과 폴더를 확인하세요.</span></div> : !selectedScene ? <div className="materials-empty-state"><Layers /><strong>{path.ready && !path.scenes.length ? '선택한 경로에 Scene이 없습니다.' : '경로와 Scene을 선택하면 소재 덱을 조회합니다.'}</strong><span>{environment === 'USAGE' ? 'Case → Scene 순서로 선택하세요.' : 'Case → 하중경우 → Run Case → Run Option → Scene 순서로 선택하세요.'}</span></div> : !selectedScene.has_deck && selectedScene.materials_status === 'PREPARING' ? <div className="materials-empty-state" role="status"><Box /><strong>선택한 Scene의 소재 덱을 서버에 준비하고 있습니다.</strong><span title={selectedScene.relative_path}>드라이브에서 덱을 받아 분석하는 중입니다. 준비되면 자동으로 표시됩니다.{selectedScene.materials_error_message ? ` (직전 시도: ${selectedScene.materials_error_message})` : ''}</span></div> : !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>{environment === 'USAGE' ? '선택한 Scene·Case 폴더 바로 아래에서 OptiStruct 입력 파일(.fem)을 찾지 못했습니다.' : '선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.'}</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
       <section className="materials-list-panel" aria-label="Part 목록">
         <div className="materials-list-toolbar">
           <label className="materials-search"><Search /><input aria-label="Part 검색" placeholder="Part, Material, Property 검색" value={filter} onChange={(event) => updateQuery({ filter: event.target.value || null }, true)} /></label>

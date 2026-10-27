@@ -64,7 +64,7 @@ WIPED_TABLES: tuple[tuple[str, ...], ...] = (
      "result_registration_files", "result_registration_drafts", "result_registration_location_links",
      "result_registration_paths", "drive_source_versions", "folder_link_reservations", "folder_project_links",
      "folder_discovery_registry", "folder_discovery_previews", "spdm_storage_files", "spdm_storage_bindings",
-     "spdm_storage_request_parents"),
+     "spdm_storage_request_parents", "materials_preparations"),
     ("folder_environment_registrations", "spdm_storage_project_parents", "folder_discovery_scans"),
     ("folder_environment_previews",),
 )

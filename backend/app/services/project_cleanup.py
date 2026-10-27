@@ -152,6 +152,8 @@ _STAGE_LEAVES = (
     # Project folders linked without a registered request (migration 0045, issue #55). The next discovery
     # adds the project again while its folder exists (the cleanup never touches SPDM folders, D14).
     ("folder_project_links", (("project_id", "project"),)),
+    # Materials prepared per request Scene (migration 0046, derived data) go with their project/request.
+    ("materials_preparations", (("project_id", "project"), ("request_id", "request"))),
     # SCX drive source versions (migration 0037) of deleted requests (2026-10-23): a current row would come back
     # as MISSING at its old path when the folder is registered again, and a MISSING row shows its folders
     # through the drive provider (``drive.sources.load_overlay``); current rows are superseded, every row loses

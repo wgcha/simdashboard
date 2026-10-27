@@ -2,6 +2,14 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-27 — 소재물성: 드라이브에서 미리 받아 DB에서 보여 주기 (이슈 #55)
+
+- 증상: 소재물성 열기 → `DRIVE_READ_NOT_PREPARED(조회 횟수 한도)`. 화면 요청마다 Scene 덱 폴더를 드라이브에서 나열·내용 확인했다.
+- 변경: 드라이브 모드의 `/api/materials/catalog`·`/deck`은 DB만 읽음(읽기 세션 제거, `materials_preparation.py`). 결과 받기 워커가 결과 패스 뒤 Scene 덱을 받아 파싱해 `materials_preparations`(migration 0046, 추가만)에 저장, 드라이브 버전 지문이 바뀌면 다시 준비. 상태 READY/준비 중/실패(코드·메시지)를 카탈로그·덱 응답과 화면에 표시. 상세: `docs/features/materials-optistruct.md` §5.1.
+- DB: 0046 + DuckDB `ensure_materials_preparations_schema`, 기동 필수 표·열 검사, 프로젝트 정리·폴더 등록 초기화 대상에 추가.
+- 검증: 새 `test_materials_preparation_drive.py`(DB에서 제공·드라이브 호출 0, 백그라운드 다운로드·파싱·저장, 버전 변경 재준비, 실패 상태·재시도, DuckDB 기존 DB 보강), 수정한 `test_materials_optistruct.py` 드라이브 시나리오, test_materials_api·test_drive_reads·test_capture_jobs_drive·test_project_cleanup·test_folder_registration_reset·test_run_identity_migration·test_postgres_startup 통과. OpenAPI 계약 확인·프런트 타입 검사 통과.
+- 남은 점: 실제 PG18 migration(빈 DB·기존 DB)·운영 드라이브·Windows 서버 검증은 하지 않음(DuckDB + 가짜 드라이브). 큰 `.fem` 분석이 일시 오류로 끝나면 다음 패스가 다시 받는다(그 다운로드의 blob은 기록되지 않음). `.fem` 분석은 워커 스레드에서 차례로 돌아 그동안 다음 결과 받기 패스가 늦어진다.
+
 ## 2026-10-27 — 결과 받기 상태 화면과 새로고침 CAPTURE 단계 상한 (이슈 #55)
 
 - 증상: [저장 폴더 새로고침]이 CAPTURE 단계(`captures_pending=2/7`)에서 17분 넘게 머묾. 결과 받기(캡처 작업)가 오래 걸려도 진행·성공·실패를 볼 수 없었음.

@@ -101,6 +101,11 @@ class _PostgresStartupConnection:
                                           "resolved_at"},
                 "folder_project_links": {"root_key", "relative_path", "path_key", "project_id", "created_by", "created_at"},
                 "folder_discovery_exclusions": {"root_key", "path_key", "relative_path", "excluded_by", "excluded_at"},
+                "materials_preparations": {"id", "root_key", "project_id", "request_id", "environment", "scene_key",
+                                           "relative_path", "status", "needs_check", "fingerprint", "parser_version",
+                                           "source_rel_path", "files_json", "warnings_json", "deck_json", "error_code",
+                                           "error_message", "attempts", "checked_at", "prepared_at", "created_at",
+                                           "updated_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
