@@ -16,6 +16,8 @@ type Props = { projectId: string; requestId: string; /** Request (folder) name; 
 function syncLabel(sync: ReturnType<typeof useFolderAutoSync>, now: number): { text: string; title?: string; tone: 'ok' | 'busy' | 'wait' | 'warn' } {
   if (sync.busy) return { text: '확인 중…', tone: 'busy' }
   if (sync.code === FOLDER_SCHEMA_FILE_BUSY) return { text: '파일 복사 중 · 잠시 후 다시 확인', title: sync.message ?? undefined, tone: 'wait' }
+  // Issue #55: the drive was busy (a capture or the rescan held the worker) — retried later, not a folder problem.
+  if (sync.code === 'DRIVE_BUSY' || sync.code === 'DRIVE_READ_NOT_PREPARED' || sync.code === 'DRIVE_READ_DEADLINE') return { text: '드라이브 사용 중 · 잠시 후 다시 확인', title: sync.message ?? undefined, tone: 'wait' }
   if (sync.status === 'CONFLICT' || sync.status === 'FAILED' || sync.error) return { text: '폴더 확인 필요', title: sync.error || sync.message || undefined, tone: 'warn' }
   if (sync.lastCheckedAt === null) return { text: '확인 중…', tone: 'busy' }
   const minutes = Math.floor(Math.max(0, now - sync.lastCheckedAt) / 60_000)

@@ -257,3 +257,25 @@ def test_server_auto_sync_interval_setting(monkeypatch):
         assert result_auto_sync.interval_seconds() == expected
     monkeypatch.setenv("SIMDASH_RESULT_AUTO_SYNC_SECONDS", "0")
     assert result_auto_sync.start() is False
+
+
+def test_scan_incomplete_only_from_not_ready_reads_is_drive_busy_not_a_folder_failure():
+    """Issue #55 (2026-10-27): every scan issue was DRIVE_READ_NOT_PREPARED while a capture held the worker."""
+    from app.services import folder_auto_sync as sync_service
+
+    class ScanError(Exception):
+        code = "FOLDER_SCHEMA_SCAN_INCOMPLETE"
+
+    busy = ScanError("incomplete")
+    busy.issues = [{"operation": "list_dir", "error_code": "DRIVE_READ_NOT_PREPARED"}] * 3
+    result = sync_service._failed(busy, None)
+    assert result["code"] == "DRIVE_BUSY" and result["retry"] is True
+    real = ScanError("incomplete")
+    real.issues = [{"operation": "list_dir", "error_code": "DRIVE_READ_NOT_PREPARED"},
+                   {"operation": "list_dir", "error_code": "SPDM_FORBIDDEN"}]
+    assert sync_service._failed(real, None)["code"] == "FOLDER_SCHEMA_SCAN_INCOMPLETE"
+
+    class Deadline(Exception):
+        code = "DRIVE_READ_DEADLINE"
+
+    assert sync_service._failed(Deadline("late"), None)["code"] == "DRIVE_BUSY"

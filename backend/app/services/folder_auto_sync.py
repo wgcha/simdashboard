@@ -226,6 +226,8 @@ def _check_scope(conn, root, root_key: str, key, project_id: str, request_id: st
 DRIVE_BUSY = "DRIVE_BUSY"
 DRIVE_BUSY_MESSAGE = "드라이브 요청이 많아 지금은 폴더를 확인하지 못했습니다. 잠시 후 다시 확인합니다."
 SYNC_ACTIVITY_WAIT_SECONDS = 20.0
+# Drive read answers that only mean "not now" (slot held, read rounds or time used up): retried later.
+_TRANSIENT_READ_CODES = frozenset({DRIVE_BUSY, "DRIVE_READ_NOT_PREPARED", "DRIVE_READ_DEADLINE"})
 _BUSY_SCAN_CODES = frozenset({"FOLDER_SCHEMA_SCAN_UNAVAILABLE", "FOLDER_SCHEMA_SCAN_INCOMPLETE",
                               "DRIVE_READ_NOT_PREPARED", "DRIVE_READ_DEADLINE", DRIVE_BUSY})
 
@@ -237,11 +239,18 @@ def _drive_busy(exc: BaseException) -> bool:
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if str(getattr(current, "code", "")) == DRIVE_BUSY:
+        if str(getattr(current, "code", "")) in _TRANSIENT_READ_CODES:
             return True
         current = current.__cause__ or current.__context__
     if str(getattr(exc, "code", "")) not in _BUSY_SCAN_CODES:
         return False
+    # Issue #55 (2026-10-27): an incomplete scan whose every issue is a read that was not ready in time
+    # (the worker slot was held by a capture or the rescan) is "try again later", not "확인 필요".
+    issues = getattr(exc, "issues", None)
+    codes = {str((item or {}).get("error_code") or (item or {}).get("code") or "")
+             for item in issues if isinstance(item, dict)} if isinstance(issues, (list, tuple)) else set()
+    if codes and codes <= _TRANSIENT_READ_CODES:
+        return True
     from .drive import reads as drive_reads
 
     watched = drive_reads._busy_var.get()
