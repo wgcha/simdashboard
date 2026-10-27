@@ -1,11 +1,11 @@
 """Separate API so legacy folder-discovery clients retain their contract."""
 from typing import Literal
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..security import write_audit_event
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
-from ..services import (dashboard_capture, folder_auto_discovery, folder_auto_sync, folder_discovery as legacy,
+from ..services import (capture_jobs, dashboard_capture, folder_auto_discovery, folder_auto_sync, folder_discovery as legacy,
                         folder_discovery_environment as service, result_registration, storage_rescan)
 from ..services.drive import gateway as drive_gateway
 from ..services.drive import reads as drive_reads
@@ -169,6 +169,19 @@ def rescan_status(request: Request):
     with connect() as conn:
         admin(request, conn)
     return storage_rescan.state()
+@router.get("/capture-jobs")
+def capture_jobs_status(request: Request, status: Literal["PENDING", "RUNNING", "COMPLETED", "FAILED"] | None = None,
+                        limit: int = Query(300, ge=1, le=1000)):
+    """[결과 받기 상태] (global administrators, issue #55): download status of the SCX drive capture jobs.
+
+    Per job: request/Case, status (PENDING 대기 · RUNNING 받는 중 · COMPLETED · FAILED), error code with a
+    plain Korean message, times and, while RUNNING, the live progress (files / bytes of the current run,
+    current file; in memory of the server process). ``totals`` count all jobs, whatever ``status``/``limit``.
+    Failed jobs are retried with ``POST /registrations/{registration_id}/capture/retry``. Read only.
+    """
+    with connect() as conn:
+        admin(request, conn)
+        return capture_jobs.list_jobs(conn, status=status, limit=limit)
 @router.post("/rescan/cancel")
 def rescan_cancel(request: Request):
     """[중지]: stop the running full rescan at its next check point (global administrators only, issue #55).

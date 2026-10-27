@@ -73,6 +73,21 @@ export type StorageRescanReinterpret = {
 }
 export type FolderExclusionResult = { excluded?: string[]; restored?: string[]; skipped: Array<{ relative_path: string; code: string; message: string }> }
 export type StorageRescanFailure = { project_id: string; project_name: string; request_id: string; request_name: string; environment: string; code: string; message: string }
+/** One SCX drive capture job (결과 받기) of GET /api/folder-discovery/environments/capture-jobs (global administrators, issue #55). */
+export type CaptureJobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+export type CaptureJobItem = {
+  job_id: string; registration_id: string; case_id: string; status: CaptureJobStatus
+  error_code: string | null; error_message: string | null
+  created_at: string | null; updated_at: string | null
+  project_id: string | null; request_id: string | null; environment: FolderEnvironment | null
+  project_name: string | null; request_name: string | null; case_relative_path: string | null
+  /** RUNNING only: this run's downloaded files and bytes (in the server's memory) and the file being downloaded. */
+  progress: { files: number; bytes: number; reused_files: number; current_file: string | null; current_size: number | null; started_at: string } | null
+}
+export type CaptureJobsState = {
+  totals: { total: number; pending: number; running: number; completed: number; failed: number }
+  items: CaptureJobItem[]; truncated: boolean; worker_running: boolean
+}
 /** [저장 폴더 새로고침] full rescan (POST/GET /api/folder-discovery/environments/rescan, 2026-10-17). */
 export type StorageRescanState = {
   status: 'IDLE' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED'
@@ -94,6 +109,8 @@ export type StorageRescanState = {
   sync_deferred?: number
   /** SCX drive capture jobs after the CAPTURE phase: pending = 결과 받는 중 (the background worker continues them). */
   captures?: { total: number; pending: number; completed: number; failed: number; completed_now?: number; interrupted?: number }
+  /** Korean note when the CAPTURE phase left downloads to the background worker ("결과 받기 N건은 백그라운드에서 계속 받습니다"). */
+  captures_note?: string | null
   created_projects: Array<{ id: string; name: string }>
   created_requests: Array<{ id: string; name: string; environment: FolderEnvironment; project_id: string }>
   needs_review: FolderDiscoveryReview[]
@@ -219,6 +236,8 @@ export const folderEnvironmentApi = {
   rescanStart: async (): Promise<StorageRescanState> => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/rescan', {})) as StorageRescanState,
   rescanStatus: async (signal?: AbortSignal): Promise<StorageRescanState> => unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments/rescan', { signal })) as StorageRescanState,
   /** [중지]: the running rescan stops at its next check point and ends CANCELLED (issue #55). */
+  /** [결과 받기 상태]: download status of the capture jobs, newest state first (issue #55). */
+  captureJobs: (signal?: AbortSignal) => requestJson<CaptureJobsState>(apiUrl('/api/folder-discovery/environments/capture-jobs' as never), { signal }),
   rescanCancel: () => requestJson<StorageRescanState>(apiUrl('/api/folder-discovery/environments/rescan/cancel' as never), jsonBody('POST', {})),
   /** [제외] / [모두 제외] in the rescan result: request folders the discovery never registers (issue #55). */
   excludeFolders: (relativePaths: string[]) => requestJson<FolderExclusionResult>(apiUrl('/api/folder-discovery/environments/exclusions' as never), jsonBody('POST', { relative_paths: relativePaths })),
@@ -248,5 +267,5 @@ export const folderEnvironmentApi = {
   usageReview: async (previewId: string, body: { case_relative_path: string; selection: { json: boolean; video: boolean; image: boolean; csv: boolean }; selected_sources?: Record<string, string>; metric_paths?: Record<string, string[]>; excludes?: Record<string, string>; acknowledge_partial: boolean }) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/previews/{preview_id}/usage-review', { params: { path: { preview_id: previewId } }, body })) as UsageSourceReview,
   register: async (body: { preview_id: string; idempotency_key: string; capture: boolean; review_acknowledged?: string[] }) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/registrations', { body })) as FolderEnvironmentRegistration,
   registration: async (id: string) => unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments/registrations/{registration_id}', { params: { path: { registration_id: id } } })) as FolderEnvironmentRegistration,
-  retryCapture: async (id: string) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/registrations/{registration_id}/capture/retry', { params: { path: { registration_id: id } }, body: {} })) as FolderEnvironmentRegistration,
+  retryCapture: async (id: string, jobIds?: string[]) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/registrations/{registration_id}/capture/retry', { params: { path: { registration_id: id } }, body: jobIds ? { job_ids: jobIds } : {} })) as FolderEnvironmentRegistration,
 }

@@ -1136,6 +1136,21 @@ def _recorded_blob(session: DriveReadSession, rel: str, version: Version) -> Loc
     return LocalCopy(path=path, sha256=str(row["sha256"]), size=int(row.get("size_bytes") or server_local.file_size(path)), blob=True)
 
 
+# Progress listener of the capture worker (``capture_jobs``): called as ``listener(event, rel, size)`` with
+# ``event`` "start" / "done" / "reused" around every download.  In-memory only; it must never raise.
+download_listener: Callable[[str, str, int | None], None] | None = None
+
+
+def _notify_download(event: str, rel: str, size: int | None) -> None:
+    listener = download_listener
+    if listener is None:
+        return
+    try:
+        listener(event, rel, size)
+    except Exception:  # noqa: BLE001 - progress display never disturbs a download
+        pass
+
+
 def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Version, max_bytes: int) -> LocalCopy:
     key = (rel, version.token)
     if session.resumable or (version.size is not None and version.size > BLOB_THRESHOLD_BYTES):
@@ -1143,8 +1158,10 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
         reused = _recorded_blob(session, rel, version)
         if reused is not None:
             session.files[key] = reused
+            _notify_download("reused", rel, reused.size)
             return reused
     _reserve_staging(session, int(version.size or 0))
+    _notify_download("start", rel, version.size)
     result = None
     for attempt, pause in enumerate((*DOWNLOAD_LOCK_RETRY_SECONDS, None)):
         target = session.next_dir()   # a fresh folder: the locked part file of the last try stays behind
@@ -1200,6 +1217,7 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
         stored = str(blob)
     session.files[key] = copy
     session.downloads.append(DownloadRecord(rel_path=rel, version=version, sha256=sha256, size=size, stored_path=stored))
+    _notify_download("done", rel, size)
     return copy
 
 

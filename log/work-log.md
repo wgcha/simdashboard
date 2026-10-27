@@ -2,6 +2,13 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-27 — 결과 받기 상태 화면과 새로고침 CAPTURE 단계 상한 (이슈 #55)
+
+- 증상: [저장 폴더 새로고침]이 CAPTURE 단계(`captures_pending=2/7`)에서 17분 넘게 머묾. 결과 받기(캡처 작업)가 오래 걸려도 진행·성공·실패를 볼 수 없었음.
+- 수정: CAPTURE 단계 예산 900 s → 120 s(`SIMDASH_RESCAN_CAPTURE_SECONDS`로 조정). 예산 뒤 새로고침은 DONE으로 끝나고 남은 작업은 PENDING으로 두며 `captures_note`("결과 받기 N건은 백그라운드에서 계속 받습니다")를 알리고 캡처 워커를 깨운다(새로고침 중 워커는 건너뛰므로 종료 시 wake 추가).
+- 신규 `GET /api/folder-discovery/environments/capture-jobs`(전역 관리자): 작업별 의뢰·Case 경로·상태·오류 코드/한글 설명·시각, 받는 중 작업의 파일 수·바이트·현재 파일(서버 메모리, `drive.reads.download_listener`), 상태별 합계. 화면 [결과 받기 상태](저장 폴더 새로고침 옆): 4초 자동 갱신, 실패 작업 [다시 시도](기존 `capture/retry`). DB 변경 없음.
+- 검증: `test_capture_jobs_status.py`·`test_capture_jobs_drive.py`·`test_storage_rescan_bounds.py`, OpenAPI 계약 검사, tsc, 프런트 self-test. 실제 운영 드라이브·브라우저 화면은 확인하지 않음.
+
 ## 2026-10-23 — 삭제 뒤 옛 폴더 경로가 되살아나던 원인 수정과 「폴더 등록 전체 초기화」
 
 - 증상(운영 SCX 드라이브, PG18): 등록 이력 전체 삭제 + 프로젝트 정리 강제 삭제 뒤에도 새로고침에 `PROJ-000099_R95J 개발 과제`(드라이브는 `…R95J개발과제`)·`SPDM_NOT_FOUND:list_dir:…`·`…/Drop/85qn80h_ref_organized/INDIVIDUAL`(드라이브는 `completed_Drop`)이 나오고 `WR-00000800_유통환경시뮬레이션`이 등록되지 않음.

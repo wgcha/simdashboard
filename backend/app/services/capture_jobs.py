@@ -56,6 +56,125 @@ _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
 
 
+# --- live progress of the running job (in memory, this process only) ------------------------------
+
+_live_lock = threading.Lock()
+_live: dict[str, dict[str, Any]] = {}      # job id -> progress of the job the worker runs now
+_live_thread: list[int | None] = [None]    # the runner thread: other threads' downloads are not counted
+
+
+def _on_download(event: str, rel: str, size: int | None) -> None:
+    if threading.get_ident() != _live_thread[0]:
+        return
+    with _live_lock:
+        for entry in _live.values():
+            if event == "start":
+                entry["current_file"] = rel
+                entry["current_size"] = size
+            else:
+                entry["files"] += 1
+                entry["bytes"] += int(size or 0)
+                if event == "reused":
+                    entry["reused_files"] += 1
+                entry["current_file"] = None
+                entry["current_size"] = None
+
+
+def _live_begin(job_id: str) -> None:
+    """The worker starts (or, after a read round, continues) this job: its progress is kept across the rounds."""
+    from .drive import reads as drive_reads
+
+    with _live_lock:
+        _live_thread[0] = threading.get_ident()
+        _live.setdefault(job_id, {"started_at": _now_iso().isoformat(), "files": 0, "bytes": 0, "reused_files": 0,
+                                  "current_file": None, "current_size": None})
+    drive_reads.download_listener = _on_download
+
+
+def _live_end(job_id: str | None = None) -> None:
+    """The job ended (or the session did: no ``job_id`` forgets all)."""
+    from .drive import reads as drive_reads
+
+    with _live_lock:
+        if job_id is None:
+            _live.clear()
+        else:
+            _live.pop(job_id, None)
+        idle = not _live
+        if idle:
+            _live_thread[0] = None
+    if idle:
+        drive_reads.download_listener = None
+
+
+def live_progress() -> dict[str, dict[str, Any]]:
+    with _live_lock:
+        return {key: dict(value) for key, value in _live.items()}
+
+
+# Plain Korean text of the error codes a capture job can end with (shown in 결과 받기 상태).
+ERROR_MESSAGES = {
+    "ENVIRONMENT_ROOT_CHANGED": "저장소 루트가 바뀌어 받지 못했습니다. 저장 폴더를 다시 확인한 뒤 다시 시도하세요.",
+    "DASHBOARD_CASE_INVALID": "Case 폴더 구조를 확인할 수 없습니다. 폴더 이름과 깊이 스키마를 확인하세요.",
+    "CAPTURE_UNEXPECTED_ERROR": "결과를 읽는 중 예상하지 못한 오류가 났습니다. 다시 시도하세요.",
+    "DRIVE_READ_NOT_PREPARED": "드라이브 자료를 아직 준비하지 못했습니다. 다시 시도하세요.",
+    "SPDM_FILE_BUSY": "다른 프로그램이 파일을 사용 중이어서 받지 못했습니다. 다시 시도하세요.",
+    "DRIVE_BUSY": "드라이브가 바빠 잠시 미뤘습니다. 자동으로 다시 시도합니다.",
+}
+
+
+def error_message(code: str | None) -> str | None:
+    if not code:
+        return None
+    return ERROR_MESSAGES.get(code, f"결과를 받지 못했습니다({code}). 다시 시도하고, 반복되면 관리자에게 문의하세요.")
+
+
+def list_jobs(conn, *, status: str | None = None, limit: int = 300) -> dict[str, Any]:
+    """Download status for the administrator: every capture job of live registrations, with totals.
+
+    ``status`` is RUNNING (the job the worker runs now, from the in-memory progress), PENDING (waiting;
+    includes interrupted jobs that continue on the next pass), COMPLETED or FAILED.  Jobs are ordered
+    running, pending, failed, then completed (newest first).  ``limit`` caps the rows, never the totals.
+    """
+    live = live_progress()
+    marks = ",".join("?" for _ in LIVE_STATES)
+    found = conn.execute(
+        "SELECT j.id,j.registration_id,j.case_id,j.status,j.error_code,j.created_at,j.updated_at,r.project_id,r.request_id,"
+        "r.environment,p.name,a.title,c.relative_path FROM folder_environment_capture_jobs j "
+        "JOIN folder_environment_registrations r ON r.id=j.registration_id "
+        "LEFT JOIN projects p ON p.id=r.project_id LEFT JOIN analysis_requests a ON a.id=r.request_id "
+        f"LEFT JOIN dashboard_cases c ON c.id=j.case_id WHERE r.status IN ({marks})", list(LIVE_STATES)).fetchall()
+    order = {"RUNNING": 0, "PENDING": 1, "FAILED": 2, "COMPLETED": 3}
+    items: list[dict[str, Any]] = []
+    totals = {"total": 0, "pending": 0, "running": 0, "completed": 0, "failed": 0}
+    for row in found:
+        job_id, stored = str(row[0]), str(row[3])
+        state = "RUNNING" if (stored == "RUNNING" or job_id in live) else stored
+        totals["total"] += 1
+        totals[{"RUNNING": "running", "PENDING": "pending", "COMPLETED": "completed", "FAILED": "failed"}.get(state, "pending")] += 1
+        if status and state != status:
+            continue
+        code = str(row[4]) if row[4] else None
+        progress = live.get(job_id)
+        items.append({
+            "job_id": job_id, "registration_id": str(row[1]), "case_id": str(row[2]), "status": state,
+            "error_code": code, "error_message": error_message(code) if state == "FAILED" else None,
+            "created_at": row[5], "updated_at": row[6], "project_id": row[7], "request_id": row[8],
+            "environment": str(row[9]) if row[9] else None, "project_name": row[10], "request_name": row[11],
+            "case_relative_path": row[12],
+            "progress": ({"files": progress["files"], "bytes": progress["bytes"], "reused_files": progress["reused_files"],
+                          "current_file": progress["current_file"], "current_size": progress["current_size"],
+                          "started_at": progress["started_at"]} if progress else None),
+        })
+    def newest_first(item: dict[str, Any]) -> float:
+        stamp = item["updated_at"]
+        return -stamp.timestamp() if hasattr(stamp, "timestamp") else 0.0
+
+    items.sort(key=lambda item: (order.get(item["status"], 1), newest_first(item)))
+    return {"totals": totals, "items": items[:max(1, int(limit))], "truncated": len(items) > limit,
+            "worker_running": _run_lock.locked()}
+
+
 def counts(conn, *, registration_ids: list[str] | None = None) -> dict[str, int]:
     """Capture jobs of live registrations: total, pending (결과 받는 중), completed, failed."""
     marks = ",".join("?" for _ in LIVE_STATES)
@@ -152,7 +271,9 @@ def _run_registration(registration_id: str, deadline: float, tally: dict[str, in
                 if row is None:
                     return
                 job_id = str(row[0])
+                _live_begin(job_id)   # a read miss repeats this body: the progress of the round stays
                 result = environment_service.capture_job(conn, job_id, root, actor=ACTOR, cache=cache)
+                _live_end(job_id)
                 outcomes[job_id] = str(result.get("status"))
                 if result.get("status") == "INTERRUPTED":
                     stopped.add(job_id)
@@ -166,8 +287,11 @@ def _run_registration(registration_id: str, deadline: float, tally: dict[str, in
                                 "AND status='PENDING'", [registration_id]).fetchone()[0])
     # One read round per Case (its result files) plus the request tree and slack.
     rounds = drive_reads.MAX_ROUNDS + 2 * jobs
-    with drive_reads.bounded(deadline=deadline):
-        drive_reads.run(body, priority="BACKGROUND", rounds=rounds, resumable=True)
+    try:
+        with drive_reads.bounded(deadline=deadline):
+            drive_reads.run(body, priority="BACKGROUND", rounds=rounds, resumable=True)
+    finally:
+        _live_end()
     for status in outcomes.values():
         key = {"COMPLETED": "completed_now", "FAILED": "failed_now", "INTERRUPTED": "interrupted"}.get(status)
         if key:

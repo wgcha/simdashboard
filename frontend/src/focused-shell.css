@@ -624,6 +624,13 @@
 .app-shell .storage-rescan-item-action { justify-self:end; padding:3px 10px; font-size:12px; }
 .app-shell .storage-rescan-error { margin:0; color:var(--color-danger,#b42318); }
 .app-shell .storage-rescan-progress { flex:0 1 420px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--color-text-muted); font-size:12px; }
+.app-shell .storage-capture-jobs { z-index:9; }
+.app-shell .storage-capture-filters { display:flex; flex-wrap:wrap; gap:6px; }
+.app-shell .storage-capture-filters .is-active { border-color:var(--color-accent); font-weight:700; }
+.app-shell .storage-capture-chip { display:inline-block; padding:1px 8px; border-radius:10px; border:1px solid var(--color-border); font-size:12px; font-weight:700; }
+.app-shell .storage-capture-chip.is-running { color:var(--color-accent); border-color:var(--color-accent); }
+.app-shell .storage-capture-chip.is-failed { border-color:var(--color-border-strong); text-decoration:underline; }
+.app-shell .storage-capture-chip.is-completed { color:var(--color-text-muted); }
 
 /* Fixed, readable navigation: retain the 208px rail above the mobile breakpoint. */
 .app-shell .nav-primary { display:grid; gap:5px; }

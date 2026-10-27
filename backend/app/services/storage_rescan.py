@@ -62,6 +62,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -85,8 +86,21 @@ REINTERPRET_BUDGET_SECONDS = 1800.0
 # at most SCOPE_BUDGET_SECONDS of drive reads.
 SYNC_BUDGET_SECONDS = 1800.0
 SCOPE_BUDGET_SECONDS = 300.0
-# CAPTURE phase (SCX drive): pending capture jobs are run this long; the rest continues in the background.
-CAPTURE_BUDGET_SECONDS = 900.0
+# CAPTURE phase (SCX drive): pending capture jobs are run this long (issue #55: a rescan sat 17+ minutes
+# here); the rest stays PENDING and the background capture worker continues it (woken when the rescan ends).
+ENV_CAPTURE_BUDGET = "SIMDASH_RESCAN_CAPTURE_SECONDS"
+DEFAULT_CAPTURE_BUDGET_SECONDS = 120.0
+
+
+def capture_budget_seconds() -> float:
+    raw = (os.getenv(ENV_CAPTURE_BUDGET) or "").strip()
+    try:
+        return max(0.0, float(raw)) if raw else CAPTURE_BUDGET_SECONDS
+    except ValueError:
+        return CAPTURE_BUDGET_SECONDS
+
+
+CAPTURE_BUDGET_SECONDS = DEFAULT_CAPTURE_BUDGET_SECONDS   # tests may patch it
 # A "Storage rescan progress" WARNING line this often while a rescan runs.
 PROGRESS_LOG_SECONDS = 30.0
 REINTERPRET_ACTIVE_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
@@ -126,7 +140,7 @@ def _initial(started_by: str | None = None) -> dict[str, Any]:
             "needs_review": [], "rounds": 0, "scopes": 0, "refreshed": 0, "failed": [], "partial": False,
             "reinterpreted": [], "reinterpret_blocked": [], "reinterpret_unchanged": 0, "reinterpret_deferred": 0,
             "sync_deferred": 0, "drive": _drive_counters(), "elapsed_seconds": 0, "cancel_requested": False,
-            "captures": _capture_counters(), "error": None}
+            "captures": _capture_counters(), "captures_note": None, "error": None}
 
 
 def _capture_counters() -> dict[str, int]:
@@ -592,14 +606,28 @@ def _capture_all() -> None:
     def progress(tally: dict[str, int]) -> None:
         _set_progress(done=tally["completed_now"] + tally["failed_now"])
 
+    budget = capture_budget_seconds()
     result = capture_jobs.run_pending(
-        budget_seconds=CAPTURE_BUDGET_SECONDS, wait_seconds=capture_jobs.SESSION_SECONDS + 30.0,
+        budget_seconds=budget, wait_seconds=min(budget, 30.0),
         cancel=_cancel, observer=_on_drive, progress=progress)
     with connect() as conn:
         after = capture_jobs.counts(conn)
+    note = None
+    if after["pending"]:
+        note = f"결과 받기 {after['pending']}건은 백그라운드에서 계속 받습니다. '결과 받기 상태'에서 진행을 확인할 수 있습니다."
     _update(captures={**after, "completed_now": int(result.get("completed_now") or 0),
-                      "interrupted": int(result.get("interrupted") or 0)})
+                      "interrupted": int(result.get("interrupted") or 0)}, captures_note=note)
     _checkpoint()
+
+
+def _wake_capture_worker() -> None:
+    """The worker skipped its passes while the rescan ran: start the next one now for the jobs left PENDING."""
+    try:
+        from . import capture_jobs
+
+        capture_jobs.wake()
+    except Exception:  # noqa: BLE001 - best effort
+        logger.warning("Capture worker wake-up failed", exc_info=True)
 
 
 def _finish(**fields: Any) -> None:
@@ -628,3 +656,4 @@ def _run(actor: str, started_by: str | None = None) -> None:
         _finish(status="FAILED", error=message)
     finally:
         done.set()
+        _wake_capture_worker()   # the worker skipped its passes while the rescan ran

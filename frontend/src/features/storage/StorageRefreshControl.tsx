@@ -5,6 +5,7 @@ import { folderEnvironmentApi, type FolderDiscoveryReview, type StorageRescanRei
 import { rescanProgressDetail } from '../../shared/api/storageRescanModel'
 import { DbBackupSettingsEntry } from './DbBackupPanel'
 import { DriveSettingsEntry } from './DriveAdminPanel'
+import { CaptureJobsPanel } from './CaptureJobsPanel'
 
 const POLL_MS = 2000
 const ENVIRONMENT_LABEL: Record<string, string> = { USAGE: '사용', DISTRIBUTION: '유통' }
@@ -39,7 +40,7 @@ function summary(state: StorageRescanState): string {
   if (state.reinterpreted.length || state.reinterpret_blocked.length) parts.push(`새 스키마 적용 ${state.reinterpreted.length}`, `적용 못함 ${state.reinterpret_blocked.length}`)
   if (excluded) parts.push(`제외 ${excluded}`)
   if (state.sync_deferred) parts.push(`시간 제한으로 미확인 ${state.sync_deferred}`)
-  if (state.captures?.pending) parts.push(`결과 받는 중 ${state.captures.pending}/${state.captures.total} (백그라운드에서 계속 받습니다)`)
+  if (state.captures?.pending) parts.push(state.captures_note || `결과 받기 ${state.captures.pending}건은 백그라운드에서 계속 받습니다`)
   if (state.status === 'CANCELLED') return `저장 폴더 확인을 중지했습니다. 그때까지의 결과만 반영했습니다 (${parts.join(' · ')}).`
   return `저장 폴더를 다시 확인했습니다 (${parts.join(' · ')})${state.partial ? '. 남은 폴더가 있어 한 번 더 실행하세요' : ''}.`
 }
@@ -180,6 +181,7 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
       <small className="storage-rescan-progress" role="status" data-testid="storage-rescan-progress" title={rescanProgressDetail(rescan)}>{rescanProgressDetail(rescan)}</small>
       <button type="button" className="ghost-button" data-testid="storage-rescan-cancel" disabled={cancelling || rescan.cancel_requested} title="진행 중인 저장 폴더 확인을 다음 확인 지점에서 멈춥니다. 그때까지 확인한 결과는 남습니다." onClick={() => void cancel()}><Square /> {cancelling || rescan.cancel_requested ? '중지 중' : '중지'}</button>
     </>}
+    <CaptureJobsPanel refreshKey={rescan?.status === 'RUNNING' ? 'running' : report?.finished_at ?? 'idle'} />
     {report && <section className="storage-rescan-report" aria-label="저장 폴더 확인 결과" data-testid="storage-rescan-report">
       <header><strong>저장 폴더 확인 결과</strong><button type="button" className="storage-rescan-close" aria-label="닫기" onClick={() => setReport(null)}><X /></button></header>
       {report.status === 'FAILED' && <p className="storage-rescan-error" role="alert">{report.error || '저장 폴더를 확인하지 못했습니다.'}</p>}

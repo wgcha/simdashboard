@@ -2183,6 +2183,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/capture-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Capture Jobs Status
+         * @description [결과 받기 상태] (global administrators, issue #55): download status of the SCX drive capture jobs.
+         *
+         *     Per job: request/Case, status (PENDING 대기 · RUNNING 받는 중 · COMPLETED · FAILED), error code with a
+         *     plain Korean message, times and, while RUNNING, the live progress (files / bytes of the current run,
+         *     current file; in memory of the server process). ``totals`` count all jobs, whatever ``status``/``limit``.
+         *     Failed jobs are retried with ``POST /registrations/{registration_id}/capture/retry``. Read only.
+         */
+        get: operations["capture_jobs_status_api_folder_discovery_environments_capture_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/rescan/cancel": {
         parameters: {
             query?: never;
@@ -13799,6 +13824,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    capture_jobs_status_api_folder_discovery_environments_capture_jobs_get: {
+        parameters: {
+            query?: {
+                status?: ("PENDING" | "RUNNING" | "COMPLETED" | "FAILED") | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

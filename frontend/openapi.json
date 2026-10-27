@@ -6368,6 +6368,72 @@
         }
       }
     },
+    "/api/folder-discovery/environments/capture-jobs": {
+      "get": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Capture Jobs Status",
+        "description": "[결과 받기 상태] (global administrators, issue #55): download status of the SCX drive capture jobs.\n\nPer job: request/Case, status (PENDING 대기 · RUNNING 받는 중 · COMPLETED · FAILED), error code with a\nplain Korean message, times and, while RUNNING, the live progress (files / bytes of the current run,\ncurrent file; in memory of the server process). ``totals`` count all jobs, whatever ``status``/``limit``.\nFailed jobs are retried with ``POST /registrations/{registration_id}/capture/retry``. Read only.",
+        "operationId": "capture_jobs_status_api_folder_discovery_environments_capture_jobs_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PENDING",
+                    "RUNNING",
+                    "COMPLETED",
+                    "FAILED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 300,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/rescan/cancel": {
       "post": {
         "tags": [
