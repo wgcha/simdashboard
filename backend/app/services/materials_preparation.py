@@ -57,6 +57,7 @@ SESSION_SECONDS = 300.0                # drive reads of one request's session
 PASS_SECONDS = 600.0                   # one pass of the worker
 RECHECK_SECONDS = 600.0                # a READY row viewed after this long is listed again
 EMPTY_SCOPE_SECONDS = 600.0            # a registered request without Scenes is looked at again after this long
+SNAPSHOT_BACKOFF_SECONDS = 300.0       # a request whose folder snapshot could not be taken waits this long
 MAX_TRANSIENT_ATTEMPTS = 5
 _MESSAGE_LIMIT = 400
 # Drive session ended (deadline / cancel / out of rounds / busy): the pass stops, the row waits for the next one.
@@ -72,6 +73,9 @@ _run_lock = threading.Lock()
 _queued_lock = threading.Lock()
 _queued: set[tuple[str, str, str]] = set()
 _empty_scopes: dict[tuple[str, str, str], float] = {}
+# Requests whose folder snapshot failed: no forced folder check again (every pass or every catalog poll) until
+# SNAPSHOT_BACKOFF_SECONDS passed or a folder refresh of the request succeeded (request_check).
+_snapshot_backoff: dict[tuple[str, str, str], float] = {}
 
 
 def enabled() -> bool:
@@ -101,6 +105,7 @@ def reset_for_tests() -> None:
     with _queued_lock:
         _queued.clear()
         _empty_scopes.clear()
+        _snapshot_backoff.clear()
 
 
 # --- rows --------------------------------------------------------------------------------------
@@ -157,13 +162,15 @@ def request_check(conn: ConnectionLike, project_id: str, request_id: str, enviro
         return
     conn.execute(f"UPDATE {TABLE} SET needs_check=? WHERE request_id=? AND environment=? AND status<>'PENDING'",
                  [True, request_id, str(environment).upper()])
+    with _queued_lock:
+        _snapshot_backoff.pop((str(project_id), str(request_id), str(environment).upper()), None)
     queue_scope(project_id, request_id, environment)
 
 
 def _wake() -> None:
     from . import capture_jobs
 
-    capture_jobs.wake()
+    capture_jobs.wake(captures=False)   # never interrupts a running materials pass
 
 
 # --- screen side (DB only) ----------------------------------------------------------------------
@@ -335,10 +342,18 @@ def deck(conn: ConnectionLike, request_id: str, environment: str, scene_id: str 
         _insert_pending(conn, root_key, project_id, request_id, environment, selected["relative_path"])
         return pending()
     status = str(row.get("status"))
+    retry_after: int | None = None
     if retry and status == "FAILED":
-        _update(conn, str(row["id"]), status="PENDING", attempts=0, needs_check=False)
-        row = {**row, "status": "PENDING", "error_code": None, "error_message": None}
-        return pending()
+        rel = str(row.get("source_rel_path") or selected["relative_path"])
+        accepted, retry_after = optistruct_materials._accept_retry(optistruct_materials.file_key(root_key, rel))
+        if accepted:   # one [다시 분석] per file per minute (process-wide), as before
+            if environment == "USAGE":
+                # The failed parse is cached per file version: drop it so the next pass parses again.
+                conn.execute("DELETE FROM materials_deck_cache WHERE root_key=? AND rel_path=? AND solver=? "
+                             "AND status='FAILED'", [root_key, rel, optistruct_materials.SOLVER])
+            _update(conn, str(row["id"]), status="PENDING", attempts=0, needs_check=False)
+            row = {**row, "status": "PENDING", "error_code": None, "error_message": None}
+            return pending()
     if status == "PENDING":
         return pending()
     if status == "NO_DECK":
@@ -348,6 +363,7 @@ def deck(conn: ConnectionLike, request_id: str, environment: str, scene_id: str 
     rel = str(row.get("source_rel_path") or selected["relative_path"])
     if status == "FAILED":
         analysis = _pending_analysis(solver, row, rel, "FAILED")
+        analysis["retry_after_seconds"] = retry_after
         return {**base, "analysis": analysis, "deck": None, "preparation": {"status": "FAILED"}}
     if _outdated(row):
         _update(conn, str(row["id"]), needs_check=True)
@@ -532,14 +548,22 @@ def _ensure_snapshot(project_id: str, request_id: str, environment: str, deadlin
 
 
 def _run_scope(scope_key: tuple[str, str, str], deadline: float, tally: dict[str, int],
-               should_stop: Callable[[], bool] | None) -> None:
+               should_stop: Callable[[], bool] | None, cancel: threading.Event | None = None) -> None:
     """The waiting Scenes of one request: one bounded, resumable BACKGROUND read session (+ OptiStruct parses)."""
     from .drive import reads as drive_reads
 
     project_id, request_id, environment = scope_key
     with _queued_lock:
         _queued.discard(scope_key)
-    if not _ensure_snapshot(project_id, request_id, environment, deadline):
+    try:
+        ready = _ensure_snapshot(project_id, request_id, environment, deadline)
+    except Exception:
+        with _queued_lock:
+            _snapshot_backoff[scope_key] = time.monotonic()
+        raise
+    if not ready:
+        with _queued_lock:
+            _snapshot_backoff[scope_key] = time.monotonic()
         return
     with connect() as conn:
         ctx, entries = _scope_entries(conn, request_id, environment)
@@ -557,9 +581,14 @@ def _run_scope(scope_key: tuple[str, str, str], deadline: float, tally: dict[str
     if not work:
         return
 
+    def stopping() -> bool:
+        return (cancel is not None and cancel.is_set()) or (should_stop is not None and should_stop())
+
     parsed_now: set[str] = set()
     for _attempt in range(2):     # the second session stores the OptiStruct parses the first one asked for
-        stopped: set[str] = set()
+        # Results are collected in the body and written after the session, one short connection per Scene:
+        # a read miss repeats the body without losing (or holding locks on) the Scenes already prepared.
+        outcomes: dict[str, tuple[dict[str, Any], Callable[[ConnectionLike], None], str]] = {}
         parses: dict[str, Any] = {}
         ended = {"value": False}
 
@@ -567,11 +596,11 @@ def _run_scope(scope_key: tuple[str, str, str], deadline: float, tally: dict[str
             with connect() as conn:
                 ctx, entries = _scope_entries(conn, request_id, environment)
                 while True:
-                    if should_stop is not None and should_stop():
+                    if stopping():
                         ended["value"] = True
                         return
                     candidates = [row for key, row in _rows(conn, ctx["root_key"], request_id, environment).items()
-                                  if key in entries and key not in stopped and key not in parses
+                                  if key in entries and key not in outcomes and key not in parses
                                   and (row.get("status") == "PENDING" or row.get("needs_check"))]
                     if not candidates:
                         return
@@ -591,38 +620,56 @@ def _run_scope(scope_key: tuple[str, str, str], deadline: float, tally: dict[str
                             return   # the session ended (deadline, rounds): this Scene waits for the next pass
                         message = str(exc) if not isinstance(exc, OSError) or isinstance(exc, SpdmStorageError) \
                             else f"덱 파일을 읽을 수 없습니다: {exc.__class__.__name__}"
-                        _failure(conn, row, code, message, transient=transient)
-                        stopped.add(key)
-                        tally["failed"] += 1
+                        outcomes[key] = (row, lambda c, row=row, code=code, message=message, transient=transient:
+                                         _failure(c, row, code, message, transient=transient), "failed")
                         continue
                     if result["status"] == "PARSE":
                         if key in parsed_now:
                             info = optistruct_materials.transient_error(ctx["root_key"], result["spec"].rel_path) or {}
-                            _failure(conn, row, str(info.get("error_code") or "MATERIALS_SCAN_INCOMPLETE"),
-                                     str(info.get("error_message") or "입력 파일을 아직 분석하지 못했습니다. 다음 확인에서 다시 분석합니다."),
-                                     transient=True)
-                            stopped.add(key)
+                            code = str(info.get("error_code") or "MATERIALS_SCAN_INCOMPLETE")
+                            message = str(info.get("error_message")
+                                          or "입력 파일을 아직 분석하지 못했습니다. 다음 확인에서 다시 분석합니다.")
+                            outcomes[key] = (row, lambda c, row=row, code=code, message=message:
+                                             _failure(c, row, code, message, transient=True), "failed")
                             continue
                         parses[key] = result["spec"]
                         continue
-                    try:
-                        _store(conn, row, result)
-                    except ValueError:   # not JSON-serialisable (a non-finite number)
-                        _failure(conn, row, "MATERIALS_PARSE_FAILED", "분석 결과를 저장할 수 없습니다(잘못된 수치).",
-                                 transient=False)
-                    tally[result["status"].lower()] = tally.get(result["status"].lower(), 0) + 1
+                    outcomes[key] = (row, lambda c, row=row, result=result: _store(c, row, result),
+                                     result["status"].lower())
+
+        def write() -> None:
+            for row, apply, kind in outcomes.values():
+                try:
+                    with connect() as conn:
+                        try:
+                            apply(conn)
+                        except ValueError:   # not JSON-serialisable (a non-finite number)
+                            _failure(conn, row, "MATERIALS_PARSE_FAILED", "분석 결과를 저장할 수 없습니다(잘못된 수치).",
+                                     transient=False)
+                            kind = "failed"
+                except Exception:  # noqa: BLE001 - one Scene's bookkeeping never loses the others
+                    logger.warning("Materials preparation result of %s not stored", row.get("relative_path"),
+                                   exc_info=True)
+                    continue
+                tally[kind] = tally.get(kind, 0) + 1
+            outcomes.clear()
 
         rounds = drive_reads.MAX_ROUNDS + 4 * work
-        with drive_reads.bounded(deadline=deadline):
-            drive_reads.run(body, priority="BACKGROUND", rounds=rounds, resumable=True)
+        try:
+            with drive_reads.bounded(deadline=deadline):
+                drive_reads.run(body, priority="BACKGROUND", rounds=rounds, resumable=True)
+        finally:
+            write()
         if ended["value"]:
             tally["interrupted"] += 1
         if not parses:
             return
         # OptiStruct inputs (500-1000 MB): parsed one after another with their own read session each,
         # cached in materials_deck_cache (blob reuse, size and time limits of optistruct_materials).
+        # The time left is checked before each one (a parse itself is bounded by optistruct_materials).
         for key, spec in parses.items():
-            if (should_stop is not None and should_stop()) or time.monotonic() >= deadline:
+            if stopping() or deadline - time.monotonic() < 1.0:
+                tally["interrupted"] += 1
                 return
             optistruct_materials.run_job(optistruct_materials.JobState(spec=spec))
             parsed_now.add(key)
@@ -647,8 +694,11 @@ def _work_scopes(root_key: str) -> list[tuple[str, str, str]]:
     with _queued_lock:
         queued = sorted(_queued)
         recent_empty = {key for key, at in _empty_scopes.items() if now - at < EMPTY_SCOPE_SECONDS}
+        backoff = {key for key, at in _snapshot_backoff.items() if now - at < SNAPSHOT_BACKOFF_SECONDS}
     ordered: list[tuple[str, str, str]] = []
     for item in [*waiting, *queued, *[scope for scope in unseen if scope not in recent_empty]]:
+        if item in backoff:
+            continue
         if item not in ordered:
             ordered.append(item)
     return ordered
@@ -656,8 +706,13 @@ def _work_scopes(root_key: str) -> list[tuple[str, str, str]]:
 
 def run_pending(*, budget_seconds: float = PASS_SECONDS, session_seconds: float = SESSION_SECONDS,
                 cancel: threading.Event | None = None, should_stop: Callable[[], bool] | None = None,
-                scopes: list[tuple[str, str, str]] | None = None) -> dict[str, Any]:
-    """Prepare the waiting Scenes until none is left or ``budget_seconds`` is used (never raises)."""
+                scopes: list[tuple[str, str, str]] | None = None, yield_to_captures: bool = False) -> dict[str, Any]:
+    """Prepare the waiting Scenes until none is left or ``budget_seconds`` is used (never raises).
+
+    ``yield_to_captures`` (the capture worker): stop before the next request while a capture job is PENDING,
+    so Case results never wait behind deck downloads.  ``should_stop`` and ``cancel`` are also checked
+    between Scenes and before each OptiStruct parse.
+    """
     from . import folder_discovery, folder_discovery_environment
     from .drive import reads as drive_reads
 
@@ -679,6 +734,14 @@ def run_pending(*, budget_seconds: float = PASS_SECONDS, session_seconds: float 
             if time.monotonic() >= deadline - 1.0:
                 status = "TIME_LIMIT"
                 break
+            if yield_to_captures:
+                from . import capture_jobs
+
+                with connect() as conn:
+                    captures_pending = capture_jobs.has_pending(conn)
+                if captures_pending:
+                    status = "YIELDED"
+                    break
             waiting = [item for item in (scopes if scopes is not None else _work_scopes(root_key)) if item not in tried]
             if not waiting:
                 break
@@ -686,7 +749,8 @@ def run_pending(*, budget_seconds: float = PASS_SECONDS, session_seconds: float 
             tried.add(scope_key)
             try:
                 with drive_reads.bounded(cancel=cancel):
-                    _run_scope(scope_key, min(deadline, time.monotonic() + session_seconds), tally, should_stop)
+                    _run_scope(scope_key, min(deadline, time.monotonic() + session_seconds), tally, should_stop,
+                               cancel)
             except Exception as exc:  # noqa: BLE001 - one request never stops the others
                 if getattr(exc, "code", None) == "DRIVE_BUSY":
                     logger.info("Materials preparation of request %s deferred: the drive is busy", scope_key[1])

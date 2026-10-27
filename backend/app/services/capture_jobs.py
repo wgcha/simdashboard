@@ -51,6 +51,9 @@ LIVE_STATES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
 
 _run_lock = threading.Lock()
 _wake = threading.Event()
+_capture_wake = threading.Event()   # set by capture wake-ups only (not by the materials preparation)
+# The materials pass after each capture pass (seconds): short, so new capture jobs never wait long.
+MATERIALS_PASS_SECONDS = 120.0
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
@@ -373,9 +376,29 @@ def idle_seconds() -> int:
         return DEFAULT_IDLE_SECONDS
 
 
-def wake() -> None:
-    """New pending jobs: the worker starts its next pass now (no-op without a worker thread)."""
+def wake(*, captures: bool = True) -> None:
+    """New pending jobs: the worker starts its next pass now (no-op without a worker thread).
+
+    ``captures=False`` (소재물성 preparation asking for a pass) does not interrupt a running materials pass;
+    a capture wake-up does (:func:`captures_waiting`), so new result jobs never wait behind deck downloads.
+    """
+    if captures:
+        _capture_wake.set()
     _wake.set()
+
+
+def captures_waiting() -> bool:
+    """A capture wake-up arrived since the current pass started (the materials pass yields to it)."""
+    return _capture_wake.is_set()
+
+
+def has_pending(conn) -> bool:
+    """Whether any capture job of a live registration is PENDING (the materials pass yields to it)."""
+    marks = ",".join("?" for _ in LIVE_STATES)
+    return conn.execute(
+        "SELECT 1 FROM folder_environment_capture_jobs j JOIN folder_environment_registrations r "
+        f"ON r.id=j.registration_id WHERE j.status='PENDING' AND r.status IN ({marks}) LIMIT 1",
+        list(LIVE_STATES)).fetchone() is not None
 
 
 def _loop(idle: int) -> None:
@@ -384,6 +407,7 @@ def _loop(idle: int) -> None:
     while not _stop.is_set():
         _wake.wait(idle)
         _wake.clear()
+        _capture_wake.clear()
         if _stop.is_set():
             return
         if storage_rescan.running():
@@ -395,7 +419,10 @@ def _loop(idle: int) -> None:
                 # Case results first; then the 소재물성 decks of the registered requests (issue #55).
                 from . import materials_preparation
 
-                materials_preparation.run_pending(cancel=cancel, should_stop=storage_rescan.running)
+                # Bounded and interruptible: a capture wake-up or a rescan stops it between Scenes.
+                materials_preparation.run_pending(
+                    cancel=cancel, budget_seconds=MATERIALS_PASS_SECONDS,
+                    should_stop=lambda: storage_rescan.running() or captures_waiting(), yield_to_captures=True)
         except Exception:  # noqa: BLE001 - the thread never dies
             logger.warning("Capture worker pass failed", exc_info=True)
 

@@ -192,6 +192,130 @@ def test_parse_failure_is_failed_with_a_code_and_retry_prepares_again(scx):
     assert _row(request_id, "2_Face")["status"] == "PENDING"
 
 
+def test_usage_retry_parses_a_failed_input_again_once_per_minute(scx, monkeypatch):
+    """[다시 분석] of a usage Scene drops the cached FAILED parse so the next pass parses again (1/min/file)."""
+    import uuid
+
+    from app.parsers.optistruct_deck_parser import OptiStructParseError
+    from app.services import optistruct_materials
+    from tests.test_depth_schema import COND, USAGE, USAGE_CASE
+    from tests.test_materials_optistruct import _mesh, _sample
+
+    optistruct_materials.reset_for_tests()
+    case = f"{USAGE}/Working/{USAGE_CASE}"
+    scx.add(f"{case}/Settle/{COND}_settle_result.json", b'{"Set Tilt Angle @ Settle (deg)": 1.18}')
+    scx.add(f"{case}/Settle/model.fem", ("BEGIN BULK\n" + _sample() + _mesh(20) + "ENDDATA\n").encode("utf-8"))
+    scan = scx.post("/api/folder-discovery/environments/scan", {"environment": "USAGE", "relative_path": ""})
+    preview = scx.post("/api/folder-discovery/environments/previews", {"scan_id": scan["id"], "assignments": []})
+    request_id = scx.post("/api/folder-discovery/environments/registrations",
+                          {"preview_id": preview["id"], "idempotency_key": f"rt-{uuid.uuid4()}", "capture": False})["request_id"]
+
+    original = optistruct_materials._parse
+    broken = {"on": True}
+
+    def parse(*args, **kwargs):
+        if broken["on"]:
+            raise OptiStructParseError("MATERIALS_CARD_TOO_LARGE", "test: broken input")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(optistruct_materials, "_parse", parse)
+
+    def deck(**extra):
+        response = scx.client.get(BASE + "/deck", params={"request_id": request_id, "environment": "USAGE",
+                                                         "scene_id": scene_id, **extra})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    _prepare()
+    usage = scx.client.get(BASE + "/catalog", params={"request_id": request_id, "environment": "USAGE"}).json()
+    scene_id = next(item for item in usage["scenes"] if item["label"] == "Settle")["scene_id"]
+    assert deck()["analysis"]["error_code"] == "MATERIALS_CARD_TOO_LARGE"
+
+    assert deck(retry="true")["analysis"]["status"] == "QUEUED"      # accepted: the cached failure is dropped
+    _prepare()
+    assert deck()["analysis"]["status"] == "FAILED"                  # parsed again (still broken)
+    refused = deck(retry="true")                                     # a second retry within the minute
+    assert refused["analysis"]["status"] == "FAILED" and refused["analysis"]["retry_after_seconds"]
+    with optistruct_materials._lock:
+        optistruct_materials._last_retry.clear()                     # a minute later
+    broken["on"] = False
+    assert deck(retry="true")["analysis"]["status"] == "QUEUED"
+    _prepare()
+    ready = deck()
+    assert ready["analysis"]["status"] == "READY" and ready["deck"]["materials"]
+
+
+def test_materials_pass_yields_to_capture_jobs_and_cancel(scx, monkeypatch):
+    from app.services import capture_jobs
+
+    _decks(scx)
+    _project_id, request_id = _register(scx)
+    capture_jobs._capture_wake.clear()                               # the worker's pass would clear it (none here)
+    _catalog(scx, request_id)
+    assert not capture_jobs.captures_waiting(), "a materials wake-up never interrupts the materials pass"
+    downloads = len(scx.drive.downloads())
+
+    with monkeypatch.context() as patch:
+        patch.setattr(capture_jobs, "has_pending", lambda conn: True)
+        assert materials_preparation.run_pending(yield_to_captures=True)["status"] == "YIELDED"
+
+    capture_jobs.wake()                                              # a new capture job arrived
+    try:
+        stopped = materials_preparation.run_pending(should_stop=capture_jobs.captures_waiting)
+        assert stopped["status"] == "STOPPED" and stopped["ready"] == 0, stopped
+    finally:
+        capture_jobs._capture_wake.clear()
+        capture_jobs._wake.clear()
+    import threading
+
+    cancel = threading.Event()
+    calls = {"n": 0}
+    original = materials_preparation._prepare_distribution
+
+    def cancel_after_first(*args, **kwargs):
+        calls["n"] += 1
+        cancel.set()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(materials_preparation, "_prepare_distribution", cancel_after_first)
+    result = materials_preparation.run_pending(cancel=cancel, scopes=[(_project_id, request_id, "DISTRIBUTION")])
+    assert calls["n"] >= 1 and result["interrupted"] >= 1, result
+    assert _row(request_id, "3_Face")["status"] == "PENDING" or _row(request_id, "2_Face")["status"] == "PENDING"
+    assert len(scx.drive.downloads()) >= downloads
+
+
+def test_scene_results_are_kept_across_read_rounds_and_written_per_scene(scx, monkeypatch):
+    """Scenes prepared before a read miss are written once, each with its own short connection."""
+    _decks(scx)
+    scx.add(f"{OPTION}/3_Face/parts.inc", PARTS)
+    scx.add(f"{OPTION}/3_Face/materials.inc", MATERIALS.replace(b"inc/curves.inc", b"../2_Face/inc/curves.inc"))
+    _project_id, request_id = _register(scx)
+    _catalog(scx, request_id)
+    stores = []
+    original = materials_preparation._store
+    monkeypatch.setattr(materials_preparation, "_store", lambda conn, row, result: stores.append(row["relative_path"])
+                        or original(conn, row, result))
+    assert _prepare()["ready"] == 2
+    assert sorted(path.rsplit("/", 1)[-1] for path in stores) == ["2_Face", "3_Face"]
+    assert _row(request_id, "3_Face")["status"] == "READY"
+
+
+def test_failed_folder_snapshot_backs_off(scx, monkeypatch):
+    _decks(scx)
+    project_id, request_id = _register(scx)
+    with connect() as conn:
+        conn.execute("UPDATE folder_environment_scans SET status='SUPERSEDED_TEST' WHERE request_id=? "
+                     "AND id LIKE 'folder-refresh-%'", [request_id])
+    calls = []
+    monkeypatch.setattr(materials_preparation, "_ensure_snapshot", lambda *args: calls.append(args) or False)
+    scope = (project_id, request_id, "DISTRIBUTION")
+    _catalog(scx, request_id)                                        # queues the scope
+    materials_preparation.run_pending()
+    _catalog(scx, request_id)                                        # a poll queues it again
+    materials_preparation.run_pending()
+    assert [args[:3] for args in calls] == [scope], "one forced folder check per backoff period"
+
+
 def test_duckdb_bootstrap_adds_materials_preparations_to_an_existing_database():
     """DuckDB parity of migration 0046 on a database that already has data (additive only)."""
     from app.config import database_settings

@@ -276,6 +276,8 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
   const [analysis, setAnalysis] = useState<MaterialsAnalysis | null>(null)
   const [pollToken, setPollToken] = useState(0)
   const [catalogPollToken, setCatalogPollToken] = useState(0)
+  // Every finished catalog request (also a failed one) counts, so a poll is scheduled again after an error.
+  const [catalogLoads, setCatalogLoads] = useState(0)
   const retryNext = useRef(false)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [loadingDeck, setLoadingDeck] = useState(false)
@@ -318,7 +320,11 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
       if (!controller.signal.aborted) setCatalogState({ requestId, value })
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '소재 덱 위치를 불러오지 못했습니다.')
-    }).finally(() => { if (!controller.signal.aborted) setLoadingCatalog(false) })
+    }).finally(() => {
+      if (controller.signal.aborted) return
+      setLoadingCatalog(false)
+      setCatalogLoads((count) => count + 1)
+    })
     return () => controller.abort()
   }, [requestId, environment, refreshToken, manualRefresh, catalogPollToken])
 
@@ -328,7 +334,7 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
     if (!catalogPreparing) return
     const timer = window.setTimeout(() => setCatalogPollToken((token) => token + 1), PREPARATION_POLL_MS)
     return () => window.clearTimeout(timer)
-  }, [catalogPreparing, catalog])
+  }, [catalogPreparing, catalogLoads])
 
   // URL repair: restore parents of an old `scene`-only link, drop stale ids
   // (with their children) and auto-select single candidates. It never moves
