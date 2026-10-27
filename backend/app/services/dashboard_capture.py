@@ -25,6 +25,18 @@ _USAGE_DIRS = {"settle", "wobble", "horizontal_force_angle", "slope_angle", "slo
 _DISTRIBUTION_DIRS = {"drop", "clamping"}
 
 
+def _is_load_case_name(name: str, kinds: set[str]) -> bool:
+    """A load-case folder name of these kinds: the kind itself or ``<prefix>_<kind>`` (issue #55, 2026-10-27).
+
+    Real folders carry a prefix (``completed_Drop``, ``completed_Slope_Angle_360``); the capture gate only
+    knew the bare names and failed every such Case with DASHBOARD_CASE_INVALID while the depth schema
+    already took them as LOAD_CASE.  Case and whitespace are ignored; the kind must be the whole name or
+    its last underscore-separated part(s), so ``slope_angle_360`` is not read as ``slope_angle``.
+    """
+    key = "".join(str(name).split()).casefold()
+    return any(key == kind or key.endswith("_" + kind) for kind in kinds)
+
+
 class DashboardCaptureError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
@@ -98,9 +110,9 @@ def _validate_case_root(root: Path, relative: str, environment: str) -> str:
     target = _safe_target(root, relative)
     if not fs.is_dir(target):
         raise DashboardCaptureError("DASHBOARD_CASE_INVALID", "capture root는 Simulation Case 폴더여야 합니다.")
-    child_names = {entry.name.casefold() for entry in fs.list(target) if fs.is_dir(fs.join(target, entry.name))}
+    child_names = {entry.name for entry in fs.list(target) if fs.is_dir(fs.join(target, entry.name))}
     expected = _USAGE_DIRS if environment == "USAGE" else _DISTRIBUTION_DIRS
-    if not child_names.intersection(expected):
+    if not any(_is_load_case_name(name, expected) for name in child_names):
         raise DashboardCaptureError("DASHBOARD_CASE_INVALID", "지정한 경로에서 해당 환경의 Simulation Case를 확인할 수 없습니다.")
     return target
 
@@ -138,8 +150,8 @@ def discover_cases(conn: ConnectionLike, relative_path: str = "", environment: s
             continue
         if visited > 20000:
             break
-        names = {PurePosixPath(item).name.casefold() for item in children}
-        if names.intersection(expected):
+        names = {PurePosixPath(item).name for item in children}
+        if any(_is_load_case_name(name, expected) for name in names):
             rel = current if current else "."
             if not base_relative:
                 parent_parts = PurePosixPath(current).parts
@@ -722,7 +734,7 @@ def _distribution_payload(
             continue
         # Production capture roots are Cases. The pure helper also accepts a
         # Run root for isolated parser fixtures; it never changes persisted Case identity.
-        if directories and directories[0].casefold() in {"drop", "clamping"}:
+        if directories and _is_load_case_name(directories[0], _DISTRIBUTION_DIRS):
             if len(directories) < 3:
                 quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:INCOMPLETE_RESULT_PATH")
                 continue

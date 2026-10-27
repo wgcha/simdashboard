@@ -270,6 +270,29 @@ def _loop(idle: int) -> None:
             logger.warning("Capture worker pass failed", exc_info=True)
 
 
+# Failures that a later version no longer makes: retried once when the server starts (no user action).
+# DASHBOARD_CASE_INVALID: before 0.3.1.6 a Case with prefixed load-case folders (``completed_Drop``) was refused.
+RETRY_ON_START_CODES = ("DASHBOARD_CASE_INVALID",)
+
+
+def retry_fixed_failures(conn) -> int:
+    """FAILED jobs of live registrations whose error a newer version fixed -> PENDING (returns the count)."""
+    marks = ",".join("?" for _ in LIVE_STATES)
+    codes = ",".join("?" for _ in RETRY_ON_START_CODES)
+    cursor = conn.execute(
+        "UPDATE folder_environment_capture_jobs SET status='PENDING',error_code=NULL,updated_at=? "
+        f"WHERE status='FAILED' AND error_code IN ({codes}) AND registration_id IN "
+        f"(SELECT id FROM folder_environment_registrations WHERE status IN ({marks}))",
+        [_now_iso(), *RETRY_ON_START_CODES, *LIVE_STATES])
+    return int(getattr(cursor, "rowcount", 0) or 0)
+
+
+def _now_iso():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)   # same naive UTC as the other job writes
+
+
 def start() -> bool:
     """Start the single capture worker thread (SCX drive mode only; idempotent)."""
     global _thread
@@ -282,6 +305,13 @@ def start() -> bool:
         if _thread is not None and _thread.is_alive():
             return True
         _stop.clear()
+        try:
+            with connect() as conn:
+                retried = retry_fixed_failures(conn)
+            if retried:
+                logger.warning("Capture jobs: %d failed job(s) queued again (fixed in this version)", retried)
+        except Exception:  # noqa: BLE001 - never blocks the worker
+            logger.warning("Capture jobs: re-queueing fixed failures failed", exc_info=True)
         _wake.set()   # pending jobs of the last run continue after a restart
         _thread = threading.Thread(target=_loop, args=(idle,), name="capture-jobs", daemon=True)
         _thread.start()
