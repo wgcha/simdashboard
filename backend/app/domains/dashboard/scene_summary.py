@@ -24,7 +24,8 @@ FORMAT_VERSION = 1
 # Marks a Scene of a capture whose values live in ``dashboard_scene_summaries`` (no ``observations``).
 VALUES_STORAGE = "SCENE_SUMMARY_V1"
 # Peak locations kept per group.  A group with more ties at its maximum (e.g. a csv of zeros) is marked
-# truncated and the reader parses that Scene's csv files again instead, so no location is ever lost.
+# truncated; only a peak that this group decides is then computed from the Scene's csv files again, so no
+# location is ever lost and other groups of the Scene keep using the summary.
 LOCATION_CAP = 32
 # Keys of an observation that the group and the Scene sources already carry.
 _DERIVED_KEYS = ("component_id", "basis", "source_path", "source_ref")
@@ -110,15 +111,14 @@ def encode(groups: dict[GroupKey, Group], sources: list[dict[str, Any]]) -> dict
 
 
 def decode(data: dict[str, Any], sources: list[dict[str, Any]]) -> dict[GroupKey, Group] | None:
-    """Groups of one stored summary, or ``None`` when it cannot be used (unknown format, truncated)."""
+    """Groups of one stored summary, or ``None`` for an unknown format.  Truncated groups are marked."""
     if not isinstance(data, dict) or data.get("v") != FORMAT_VERSION:
         return None
     groups: dict[GroupKey, Group] = {}
     for item in data.get("groups") or []:
-        if item.get("t"):
-            return None
         key = tuple(item["k"])
         group = Group()
+        group.truncated = bool(item.get("t"))
         group.count, group.numeric, group.maximum = int(item["n"]), int(item["m"]), item.get("x")
         group.units = set(item.get("u") or [])
         for compact in item.get("l") or []:
@@ -161,7 +161,7 @@ def observations_from_sources(sources: list[dict[str, Any]], contents: dict[str,
 # In-process LRU of parsed csv files for the on-demand detail view.  Assets are immutable (the id is derived
 # from the capture and the path), so the asset id is a safe key.  Bounded by entries and by values held.
 _CACHE_MAX_ENTRIES = 64
-_CACHE_MAX_OBSERVATIONS = 200_000
+_CACHE_MAX_OBSERVATIONS = 50_000   # about 30 MB of parsed observations
 _cache: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
 _cache_lock = Lock()
 

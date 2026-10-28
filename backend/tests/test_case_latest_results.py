@@ -78,10 +78,13 @@ def test_newer_result_of_a_scene_replaces_the_older_one(admin_client):
     catalog = _catalog(client, project_id, request_id)
     case_latest = next(item for item in catalog["captures"] if item.get("kind") == "LATEST")
     with connect() as conn:
-        merged = dashboard_capture.get_latest_capture(conn, case_latest["dashboard_case_id"])
+        # Summary captures (issue #55): the Scene values are loaded from dashboard_scene_summaries.
+        merged = dashboard_capture.attach_scene_values(
+            conn, dashboard_capture.get_latest_capture(conn, case_latest["dashboard_case_id"]))
     edges = [scene for run in merged["payload"]["runs"] for scene in run["scenes"] if scene["label"] == "4_Edge"]
     assert len(edges) == 1
-    assert "55" in str(edges[0]) and edges[0]["source_capture_id"] != case_latest["id"]
+    maxima = {group.maximum for group in edges[0]["_groups"].values()}
+    assert 55 in maxima and 20 not in maxima and edges[0]["source_capture_id"] != case_latest["id"]
 
 
 def test_latest_capture_requires_view_permission(admin_client, monkeypatch):

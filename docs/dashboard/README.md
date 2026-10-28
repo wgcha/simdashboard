@@ -61,9 +61,9 @@ C23/C24를 Cell/Cushion/Box 또는 Upper/Lower로 추정하지 않는다. 거동
 예전 유통 수집은 csv 값 하나하나를 관측 JSON으로 `payload_json` 한 행에 담아(csv 크기의 약 27배 이상) 큰 Case가 PostgreSQL jsonb 256 MB 한도에 걸렸다. 새 수집은 다음처럼 나눠 저장한다.
 
 - `dashboard_captures.payload_json`: 머리 정보만(문맥, Run/Scene 목록, 품질 이슈, 미디어, Scene별 csv 목록 `sources`(경로·asset id·component·basis·상태·값 개수), 값이 있는 component `value_components`, `values_storage="SCENE_SUMMARY_V1"`).
-- `dashboard_scene_summaries`(migration 0047, 추가만): (capture, Run, Run option, Scene)마다 한 행. (component, basis, kind, position, line) 묶음별 값 개수·숫자 개수·최댓값·최댓값 위치(동률 32개까지)·명시 단위. 화면의 엣지 최대·선택 엔벌로프·완전성·위치 최대는 모두 이 묶음으로 계산되어 예전과 같은 수치가 나온다. 동률이 32개를 넘는 묶음이나 요약 행이 없는 Scene은 원본 csv를 다시 읽어 계산한다.
+- `dashboard_scene_summaries`(migration 0047, 추가만): (capture, Run, Run option, Scene)마다 한 행. (component, basis, kind, position, line) 묶음별 값 개수·숫자 개수·최댓값·최댓값 위치(동률 32개까지)·명시 단위. 화면의 엣지 최대·선택 엔벌로프·완전성·위치 최대는 모두 이 묶음으로 계산되어 예전과 같은 수치가 나온다. 요약 행이 없는 Scene은 원본 csv를 다시 읽어 계산하고, 동률이 32개를 넘는 묶음은 그 묶음이 최대를 정하는 경우에만 원본 csv를 다시 읽는다.
 - 상세(라인 분포·코너 점)는 Scene 상세를 열 때 그 Scene·component의 원본 csv(`dashboard_assets`에 이미 한 번 저장된 바이트)를 다시 파싱한다(프로세스 내 LRU).
-- 예전 형식 수집(관측값이 `payload_json`에 있음)은 그대로 읽으며 데이터 이관은 없다. 같은 Case를 다시 받으면 새 형식이 된다. 사용환경(USAGE) 수집은 값이 평가별 작은 JSON이라 바꾸지 않았다(`dashboard-v3` 유지).
+- 예전 형식 수집(관측값이 `payload_json`에 있음)은 그대로 읽으며 데이터 이관은 없다. 지문 계산 recipe는 `dashboard-v3`로 유지하므로(열 `recipe_version`만 v4) 변경 없는 Case는 다시 받지 않고, 새 Case·바뀐 Case만 새 형식이 된다. 사용환경(USAGE) 수집은 값이 평가별 작은 JSON이라 바꾸지 않았다(`dashboard-v3` 유지).
 - 요약 행은 capture와 함께 프로젝트 정리·폴더 등록 삭제·등록 초기화로 지워진다.
 
 ## 구조와 배포

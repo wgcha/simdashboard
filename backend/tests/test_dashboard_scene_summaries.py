@@ -224,7 +224,13 @@ def test_summary_capture_shows_the_same_numbers_as_the_observation_path(tmp_path
                             "WHERE capture_id=?", [created["id"]]).fetchall()
         new_capture = get_capture(conn, created["id"])
         attach_scene_values(conn, new_capture)
+        _golden(root, created, stored, rows, new_capture)
+
+
+def _golden(root, created, stored, rows, new_capture):
     assert stored[0] == "dashboard-v4"
+    # Every Scene reads its summary; the tied group (> LOCATION_CAP) is only marked, not a Scene-wide fallback.
+    assert all("_groups" in scene and "observations" not in scene for scene in new_capture["payload"]["runs"][0]["scenes"])
     header = json.loads(stored[1])
     scenes = [scene for run in header["runs"] for scene in run["scenes"]]
     assert len(rows) == len(scenes) == 3
@@ -232,7 +238,7 @@ def test_summary_capture_shows_the_same_numbers_as_the_observation_path(tmp_path
     assert {source["status"] for scene in scenes for source in scene["sources"]} == {"READY", "SOURCE_PARSE_ERROR", "IGNORED"}
     assert all(source["asset_id"] for scene in scenes for source in scene["sources"])
     assert scenes[0]["value_components"] == ["C23", "C24"]
-    # The 40 equal maxima of one group are more than LOCATION_CAP: that Scene is read from its csv files.
+    # The 40 equal maxima of one group are more than LOCATION_CAP: only that group is marked truncated.
     assert any(json.loads(row[2])["groups"] and any(group.get("t") == 40 for group in json.loads(row[2])["groups"])
                for row in rows)
     assert created["inventory"]["observation_count"] == sum(int(row[1]) for row in rows) > 0
@@ -274,8 +280,8 @@ def test_detail_values_are_parsed_on_demand_from_the_original_csv(tmp_path, monk
         # A missing summary row falls back to the csv files as well.
         conn.execute("DELETE FROM dashboard_scene_summaries WHERE capture_id=?", [created["id"]])
         fallback = attach_scene_values(conn, get_capture(conn, created["id"]), run_id=run["id"])
-    args = (run["id"], run["mode"], "C23", "DETAIL", set(EDGES), {1, 2, 3, 4}, run["run_option_id"])
-    assert _normal(queries.distribution(fallback, *args)) == _normal(legacy_distribution(old_capture, *args))
+        args = (run["id"], run["mode"], "C23", "DETAIL", set(EDGES), {1, 2, 3, 4}, run["run_option_id"])
+        assert _normal(queries.distribution(fallback, *args)) == _normal(legacy_distribution(old_capture, *args))
 
 
 def test_old_format_captures_stay_readable_alone_and_merged_with_new_ones(tmp_path, monkeypatch):
@@ -297,6 +303,10 @@ def test_old_format_captures_stay_readable_alone_and_merged_with_new_ones(tmp_pa
         alone = attach_scene_values(conn, get_capture(conn, legacy_id))   # nothing to load: observations inline
         latest = attach_scene_values(conn, get_latest_capture(conn, created["case_id"]))
         new_as_old = _old_format_payload(root, CASE, created["id"], context)
+        _merged_checks(alone, latest, legacy, legacy_id, created, new_as_old)
+
+
+def _merged_checks(alone, latest, legacy, legacy_id, created, new_as_old):
     run = alone["payload"]["runs"][0]
     args = (run["id"], run["mode"], "C23", "DETAIL", {"TOP", "LEFT"}, {1, 3}, run["run_option_id"])
     assert _normal(queries.distribution(alone, *args)) == _normal(legacy_distribution(alone, *args))
@@ -347,6 +357,9 @@ def test_large_case_stays_small_in_the_database(tmp_path, monkeypatch):
     assert max(int(row[0]) for row in rows) < 64 * 1024     # no single-row size cliff
     assert header_bytes + summary_bytes < old_bytes / 20
     assert created["inventory"]["payload_bytes"] == header_bytes
+    inventory = created["inventory"]
+    assert inventory["summary_rows"] == scenes and inventory["summary_bytes"] == summary_bytes
+    assert inventory["summary_max_bytes"] == max(int(row[0]) for row in rows)
 
 
 def test_usage_payload_is_unchanged_and_small(tmp_path, monkeypatch):
@@ -412,3 +425,52 @@ def test_project_cleanup_removes_scene_summaries_with_their_capture(tmp_path, mo
                                force_project_ids=[payload["project_id"]])
         assert conn.execute("SELECT count(*) FROM dashboard_scene_summaries WHERE capture_id=?",
                             [created["id"]]).fetchone()[0] == 0
+
+
+def test_truncated_group_reparses_only_when_its_peak_is_requested(tmp_path, monkeypatch):
+    root = _case(tmp_path, monkeypatch)
+    loads = []
+    original = dashboard_capture.scene_observations
+    monkeypatch.setattr(dashboard_capture, "scene_observations",
+                        lambda conn, scene, component_id=None: loads.append(scene["id"]) or original(conn, scene, component_id))
+    with connect() as conn:
+        ensure_dashboard_schema(conn)
+        created = create_capture(conn, _payload(root, conn), actor="test-actor")
+        capture = attach_scene_values(conn, get_capture(conn, created["id"]))
+        run = capture["payload"]["runs"][0]
+        base = (run["id"], run["mode"])
+        for basis in ("DETAIL", "REPORTED_SUMMARY"):
+            queries.distribution(capture, *base, "C23", basis, set(EDGES), {1, 2, 3, 4}, run["run_option_id"])
+        queries.distribution(capture, *base, "C24", "REPORTED_SUMMARY", set(EDGES), {1}, run["run_option_id"])
+        assert loads == [], "groups without truncated ties never read csv files"
+        # Every C24 DETAIL view shows the LEFT (LH) edge peak, which the tied group decides.
+        result = queries.distribution(capture, *base, "C24", "DETAIL", {"LEFT"}, {1, 2, 3, 4}, run["run_option_id"])
+        queries.distribution(capture, *base, "C24", "DETAIL", {"TOP"}, {2}, run["run_option_id"])
+    tied = next(peak for peak in result["edge_peaks"] if peak["edge"] == "LEFT" and peak["value"] == 0)
+    assert len(tied["locations"]) == 160 and len(loads) == 1   # 40 rows x 4 lines, one Scene parsed once
+
+
+def test_unchanged_v3_case_is_not_captured_again_after_the_upgrade(tmp_path, monkeypatch):
+    """The fingerprint recipe stays dashboard-v3: an existing capture keeps serving an unchanged Case."""
+    root = _case(tmp_path, monkeypatch)
+    with connect() as conn:
+        ensure_dashboard_schema(conn)
+        payload = _payload(root, conn)
+        created = create_capture(conn, payload, actor="test-actor")
+        # Turn the row into what 0.3.2.4 stored for the same files (v3, observations inline, no summaries).
+        context = get_capture(conn, created["id"])["payload"]["context"]
+        conn.execute("UPDATE dashboard_captures SET recipe_version='dashboard-v3',payload_json=? WHERE id=?",
+                     [_json(_old_format_payload(root, CASE, created["id"], context)), created["id"]])
+        conn.execute("DELETE FROM dashboard_scene_summaries WHERE capture_id=?", [created["id"]])
+        before = get_latest_capture(conn, created["case_id"])["fingerprint"]
+        again = create_capture(conn, payload, actor="test-actor")
+        assert again["id"] == created["id"] and again["inventory"]["outcome"] == "UNCHANGED"
+        assert conn.execute("SELECT count(*) FROM dashboard_captures WHERE case_id=?", [created["case_id"]]).fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM dashboard_scene_summaries").fetchone()[0] == 0
+        assert get_latest_capture(conn, created["case_id"])["fingerprint"] == before   # finalization identity
+        assert conn.execute("SELECT recipe_version FROM dashboard_captures WHERE id=?", [created["id"]]).fetchone() == ("dashboard-v3",)
+        # A changed Case is captured as v4.
+        (root / RUN / "Edge_Drop" / "Corner_Max_Result_C23.csv").write_text("Position,Max_Value\nTOP_LH,1\n")
+        changed = create_capture(conn, payload, actor="test-actor")
+        assert changed["id"] != created["id"]
+        assert conn.execute("SELECT recipe_version FROM dashboard_captures WHERE id=?", [changed["id"]]).fetchone() == ("dashboard-v4",)

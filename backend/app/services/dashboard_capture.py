@@ -503,8 +503,10 @@ def create_capture(
         raise DashboardCaptureError(capture_inventory.TOO_LARGE_CODE,
                                     capture_inventory.too_large_message(inventory, "assets"), inventory)
     # dashboard-v4 (issue #55, stage 2): a DISTRIBUTION capture keeps per-Scene value summaries in
-    # ``dashboard_scene_summaries`` instead of every csv value in ``payload_json``.  A new recipe makes a
-    # re-capture of an unchanged Case write the new format; USAGE payloads are unchanged (still v3).
+    # ``dashboard_scene_summaries`` instead of every csv value in ``payload_json``.  The fingerprint keeps the
+    # v3 recipe on purpose: an unchanged Case keeps its existing (v3, still readable) capture instead of being
+    # captured again with all its csv/image/video bytes; only new or changed Cases are written as v4.
+    fingerprint_recipe = "dashboard-v3"
     recipe_version = "dashboard-v4" if payload["environment"] == "DISTRIBUTION" else "dashboard-v3"
     fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "component_id")}
     if payload.get("folder_schema_locations"):
@@ -515,7 +517,7 @@ def create_capture(
         fingerprint_context["usage_source_review"] = review_contract.get("fingerprint")
     if walk_issues:
         fingerprint_context["quality_issues"] = sorted(set(walk_issues))
-    digest = fingerprint({"files": manifest, "context": fingerprint_context}, recipe_version)
+    digest = fingerprint({"files": manifest, "context": fingerprint_context}, fingerprint_recipe)
     storage_root_id = str(payload["storage_root_id"])
     case_id = _case_id(storage_root_id, relative)
     existing_case = conn.execute("SELECT id,project_id,request_id,environment,source_name,metadata_json FROM dashboard_cases WHERE id=?", [case_id]).fetchone()
@@ -564,7 +566,7 @@ def create_capture(
         metadata = next(item for item in manifest if item["relative_path"] == path)
         media_asset_ids.append((asset_id, path, data, media_type, metadata))
         _replace_asset_id(payload_json, path, asset_id)
-    summary_rows: list[tuple[str, str, str, str, str, int]] = []
+    summary_rows: list[tuple[str, str, str, str, int, int]] = []
     if payload["environment"] == "DISTRIBUTION":
         payload_json.pop("scenes", None)
         payload_json.pop("run", None)
@@ -579,7 +581,10 @@ def create_capture(
     payload_text, manifest_text = _json(payload_json), _json(manifest)
     payload_bytes, manifest_bytes = len(payload_text.encode("utf-8")), len(manifest_text.encode("utf-8"))
     capture_inventory.finish(inventory, observation_count=observation_count, top_sources=top_sources,
-                             payload_bytes=payload_bytes, manifest_bytes=manifest_bytes)
+                             payload_bytes=payload_bytes, manifest_bytes=manifest_bytes,
+                             summary_bytes=sum(row[4] for row in summary_rows),
+                             summary_max_bytes=max((row[4] for row in summary_rows), default=0),
+                             summary_rows=len(summary_rows))
     payload_limit = capture_inventory.max_payload_bytes()
     if payload_bytes > payload_limit or manifest_bytes > payload_limit:
         inventory["outcome"] = capture_inventory.TOO_LARGE_CODE
@@ -917,7 +922,10 @@ def attach_scene_values(conn: ConnectionLike, capture: dict[str, Any] | None, *,
 
     Scenes of old captures carry ``observations`` and are left alone.  A summary Scene gets ``_groups``
     from ``dashboard_scene_summaries``; with ``detail`` (or when its summary is missing or truncated) it gets
-    ``observations`` parsed on demand from its original csv assets instead.  Only the Scenes of ``run_id``
+    ``observations`` parsed on demand from its original csv assets instead.  A summary Scene also gets
+    ``_load_observations``, used by the queries only for a peak decided by a group with more tied maxima
+    than the summary keeps (it reads through ``conn``, so the queries must run while it is open).
+    Only the Scenes of ``run_id``
     (and ``scene_id``) are loaded, each from the capture that owns it (``source_capture_id`` of a merged view).
     A detail load may name ``component_id`` to parse only that component's csv files.
     """
@@ -950,12 +958,14 @@ def attach_scene_values(conn: ConnectionLike, capture: dict[str, Any] | None, *,
                 raw = stored.get((str(run.get("id")), str(run.get("run_option_id") or ""), str(scene.get("id"))))
                 groups = scene_summary.decode(_decode(raw), scene.get("sources") or []) if raw is not None else None
                 if groups is None:
-                    pending.append((run, scene))   # missing or truncated summary: parse the csv files instead
+                    pending.append((run, scene))   # missing or unknown summary: parse the csv files instead
                 else:
                     scene["_groups"] = groups
+                    scene["_load_observations"] = lambda conn=conn, scene=scene: scene_observations(conn, scene)
         for _run, scene in pending:
             scene["observations"] = scene_observations(conn, scene, component_id if detail else None)
             scene.pop("_groups", None)
+            scene.pop("_load_observations", None)
     return capture
 
 

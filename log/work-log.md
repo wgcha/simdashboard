@@ -8,7 +8,7 @@
 - 변경: recipe `dashboard-v4`(유통만). 머리 payload에는 Run/Scene 목록·Scene별 csv 목록(asset id)만, 값은 새 표 `dashboard_scene_summaries`(migration 0047, 추가만, FK 없음)에 Scene마다 묶음별 최대·위치·개수로 저장. 조회 계층(`dashboard_queries`)은 관측 목록 대신 묶음으로 계산(옛 형식은 관측에서 같은 묶음을 만들어 같은 코드로 계산). Scene 상세는 원본 csv를 그때 파싱(`scene_summary`, LRU). 라우터 distribution·scene detail·comparison이 `attach_scene_values`로 필요한 Run/Scene만 읽음. 최종 지정(`case_finalization`)은 Scene `sources` 경로도 사용. API 응답 형태 변경 없음(OpenAPI·프런트 변경 없음).
 - DB: 0047 + DuckDB `ensure_dashboard_scene_summaries_schema`, 기동 필수 표·열 검사, 프로젝트 정리(`_STAGE_LEAVES`)·폴더 등록 삭제 계획·등록 초기화(프로젝트 정리 단계 경유) 대상.
 - 검증: 새 `test_dashboard_scene_summaries.py`(0.3.2.4 알고리즘 고정 사본과 비교한 골든 240조합, 상세 온디맨드 파싱 = 예전 상세, 요약 행 없음·동률 초과 시 csv 재파싱, 예전 형식 단독·신규와 병합 읽기, 큰 합성 Case 40 Scene·156,000 값: 예전 payload 93.8 MB → 머리 250 KB + 요약 304 KB, 행 최대 64 KB 미만, USAGE 불변, DuckDB 빈/기존 DB, 프로젝트 정리). dashboard_*·capture_size_guard·migration·startup·cleanup·reset·registration delete·finalization·result_registration 테스트 통과(기존 실패 2건: `test_catalog_uses_confirmed_schema…`, `test_too_large_job_stays_failed…`는 변경 전에도 실패).
-- 남은 점: 실제 PG18 migration(빈·기존 DB)·운영 Case·Windows 서버 검증 안 함. 업데이트 뒤 각 유통 Case의 다음 받기가 새 capture를 만들며 원본 자산(영상 포함)을 한 번 더 저장한다(기존 동작과 같은 버전 증가). 머리 payload의 Scene별 csv 경로 목록은 Scene·csv 수에 비례(합성 40 Scene에서 250 KB).
+- 남은 점: 실제 PG18 migration(빈·기존 DB)·운영 Case·Windows 서버 검증 안 함. 검수 반영: 지문 계산 recipe는 `dashboard-v3` 유지(열에만 v4) → 변경 없는 Case는 다시 받지 않고 기존 v3 수집·최종 지정 지문 유지, 새·변경 Case만 v4. 동률 32개 초과는 그 묶음만 표시하고 그 묶음이 최대를 정할 때만 csv 재파싱. LRU 상한 50,000 값. 수집 inventory에 요약 행 수·합계·최대 바이트. 머리 payload의 Scene별 csv 경로 목록은 Scene·csv 수에 비례(합성 40 Scene에서 250 KB).
 
 ## 2026-10-28 — 결과 대시보드: 폴더 등록 Case 기준 집계
 

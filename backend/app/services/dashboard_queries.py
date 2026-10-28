@@ -477,6 +477,26 @@ def peak(values, *, complete=False, basis=None, scope=None):
             "source_refs": [o.get("source_ref", {"row": o.get("row"), "column": o.get("column")}) for o in locations]}
 
 
+def _full_groups(scene):
+    """Groups of the Scene's csv files parsed again (only for a peak decided by a truncated group)."""
+    if "_full_groups" not in scene:
+        loader = scene.get("_load_observations")
+        if loader is None:
+            raise DashboardCaptureError("DASHBOARD_VALUES_NOT_LOADED", "Scene 결과값을 불러오지 못했습니다.")
+        scene["_full_groups"] = scene_summary.groups_from_observations(loader())
+    return scene["_full_groups"]
+
+
+def keyed_peak(scene, groups, keys, *, complete=False, basis=None, scope=None):
+    """``group_peak`` of these group keys; a truncated group at the maximum is read in full from the csv files."""
+    selected = [groups.get(key) for key in keys]
+    maximum = max((g.maximum for g in selected if g is not None and g.maximum is not None), default=None)
+    if maximum is not None and any(g is not None and g.truncated and g.maximum == maximum for g in selected):
+        full = _full_groups(scene)
+        selected = [full.get(key) for key in keys]
+    return group_peak(selected, complete=complete, basis=basis, scope=scope)
+
+
 def group_peak(groups, *, complete=False, basis=None, scope=None):
     """``peak`` of the observations of these groups, from their reduced form (same value, locations, unit)."""
     present = [g for g in groups if g is not None and g.maximum is not None]
@@ -495,19 +515,21 @@ def scene_edges(scene, component, basis, lines, member_id, groups=None):
     groups = scene_groups(scene) if groups is None else groups
     result = []
     for edge, position in EDGES.items():
-        selected = [groups.get((component, basis, "SIDE", position, line)) for line in lines]
+        keys = [(component, basis, "SIDE", position, line) for line in lines]
+        selected = [groups.get(key) for key in keys]
         present = [g for g in selected if g is not None]
         complete = all(g is not None and g.numeric > 0 for g in selected)
         complete = complete and bool(lines) and all(g.numeric == g.count for g in present)
-        result.append({**group_peak(present, complete=complete, basis=basis, scope="SELECTED_EDGE_LINES"), "edge": edge,
+        peak_value = keyed_peak(scene, groups, keys, complete=complete, basis=basis, scope="SELECTED_EDGE_LINES")
+        result.append({**peak_value, "edge": edge,
                        "scene_id": scene["id"], "member_id": member_id})
     return result
 
 
-def extracted_groups(groups, component, basis, lines):
-    """Groups of ``observations(scene, component, basis, lines)``, SIDE only unless every line is selected."""
+def extracted_keys(groups, component, basis, lines):
+    """Group keys of ``observations(scene, component, basis, lines)``, SIDE only unless every line is selected."""
     every_line = set(lines) == ALL_LINES
-    return [g for key, g in groups.items() if key[0] == component and key[1] == basis
+    return [key for key in groups if key[0] == component and key[1] == basis
             and (key[2] == "CORNER" or key[4] in lines) and (every_line or key[2] == "SIDE")]
 
 
@@ -560,8 +582,8 @@ def distribution(capture, run_id, mode, component, basis, edges, lines, run_opti
         groups = scene_groups(scene)
         values = scene_edges(scene, component, basis, lines, member_id, groups)
         result["edge_peaks"].extend(values)
-        extracted_peak = group_peak(
-            extracted_groups(groups, component, basis, lines),
+        extracted_peak = keyed_peak(
+            scene, groups, extracted_keys(groups, component, basis, lines),
             basis=basis,
             scope="EXTRACTED_SIDES_AND_CORNERS" if lines == {1, 2, 3, 4} else "EXTRACTED_SELECTED_LINES",
         )

@@ -109,6 +109,9 @@ def start(case_path: str, files: list[tuple[str, bytes, str]], skipped: list[dic
         "observation_count": None,
         "payload_bytes": None,
         "manifest_bytes": None,
+        "summary_rows": None,
+        "summary_bytes": None,
+        "summary_max_bytes": None,
         "top_sources": [],
         "limits": {"payload_bytes": max_payload_bytes(), "asset_total_bytes": max_asset_total_bytes()},
         "outcome": "RUNNING",
@@ -154,7 +157,10 @@ def measure_observations(payload: Any) -> tuple[int, list[dict[str, Any]]]:
 
 
 def finish(inventory: dict[str, Any], *, observation_count: int, top_sources: list[dict[str, Any]],
-           payload_bytes: int, manifest_bytes: int) -> dict[str, Any]:
+           payload_bytes: int, manifest_bytes: int, summary_bytes: int = 0, summary_max_bytes: int = 0,
+           summary_rows: int = 0) -> dict[str, Any]:
+    # Issue #55, stage 2: per-Scene summary rows (dashboard_scene_summaries) of a DISTRIBUTION capture.
+    inventory.update(summary_rows=summary_rows, summary_bytes=summary_bytes, summary_max_bytes=summary_max_bytes)
     inventory.update(observation_count=observation_count, top_sources=top_sources, payload_bytes=payload_bytes,
                      manifest_bytes=manifest_bytes)
     return inventory
@@ -193,5 +199,7 @@ def log_line(inventory: dict[str, Any]) -> str:
     line = (f"Capture inventory case={inventory['case_path']} outcome={inventory['outcome']} "
             f"taken[{taken}] skipped[{skipped}] observations={inventory['observation_count']} "
             f"payload_bytes={inventory['payload_bytes']} manifest_bytes={inventory['manifest_bytes']} "
+            f"summaries={inventory.get('summary_rows')}/{inventory.get('summary_bytes')}B"
+            f"(max {inventory.get('summary_max_bytes')}B) "
             f"top_csv[{sources}] top_media[{media}]")
     return line if len(line) <= MAX_LOG_CHARS else line[:MAX_LOG_CHARS - 3] + "..."
