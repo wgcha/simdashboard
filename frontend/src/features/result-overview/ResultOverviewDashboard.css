@@ -66,7 +66,7 @@
 .result-overview-filters select:focus,
 .result-overview-search input:focus { border-color: var(--result-blue); box-shadow: 0 0 0 3px #245fc51c; }
 
-.result-overview-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--result-space-4); margin-bottom: var(--result-space-5); }
+.result-overview-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--result-space-3); margin-bottom: var(--result-space-5); }
 .result-overview-summary-card { display: flex; align-items: center; min-width: 0; min-height: 132px; gap: var(--result-space-3); border: 1px solid var(--result-border); border-radius: 10px; padding: var(--result-space-4); background: var(--result-surface); box-shadow: 0 2px 5px #1b2a3b0b; }
 .result-overview-summary-icon { display: grid; flex: 0 0 52px; place-items: center; width: 52px; height: 52px; border-radius: 10px; }
 .result-overview-summary-icon svg { width: 27px; height: 27px; }
@@ -75,6 +75,13 @@
 .result-overview-summary-card b { font-size: var(--text-title); line-height: 1; letter-spacing: -.04em; }
 .result-overview-summary-card small { color: var(--result-muted); font-size: var(--text-caption); white-space: normal; overflow-wrap: anywhere; }
 .result-overview-summary-card > svg { flex: 0 0 17px; width: 17px; margin-left: auto; color: var(--result-muted); }
+.tone-info .result-overview-summary-icon { background: #eaf1ff; color: var(--result-blue); }
+.tone-info b { color: var(--result-blue); }
+.result-overview-summary-card.is-text-value b { font-size: var(--text-subheading); line-height: 1.25; letter-spacing: -.02em; color: var(--result-muted); }
+.verdict-receiving { background: #eaf1ff; color: var(--result-blue); }
+.result-overview-refresh-note { margin-left: 6px; color: var(--result-muted); font-size: var(--text-caption); }
+.result-overview-source { padding: var(--result-space-2) var(--result-space-4); border-top: 1px solid #e8edf4; color: var(--result-muted); font-size: var(--text-caption); }
+.result-overview-legacy-link { border: 0; background: transparent; color: var(--result-blue); text-align: left; }
 .tone-danger .result-overview-summary-icon { background: #fff0f0; color: var(--result-red); }
 .tone-danger b { color: var(--result-red); }
 .tone-success .result-overview-summary-icon { background: #eaf8ee; color: var(--result-green); }

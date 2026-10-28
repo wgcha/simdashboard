@@ -1,5 +1,6 @@
 import { Download, RotateCcw, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { OPEN_CAPTURE_JOBS_EVENT, type OpenCaptureJobsDetail } from '../../shared/events/captureJobs'
 import { folderEnvironmentApi, type CaptureJobItem, type CaptureJobStatus, type CaptureJobsState } from '../../shared/api/folderEnvironment'
 
 const POLL_MS = 4000
@@ -54,6 +55,12 @@ export function CaptureJobsPanel({ refreshKey }: { refreshKey?: string }) {
   }, [])
   const active = Boolean(state && (state.totals.pending > 0 || state.totals.running > 0))
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  // The 결과 대시보드 cards (받는 중 / 받기 실패) open this panel with the matching filter.
+  useEffect(() => {
+    const show = (event: Event) => { setFilter((event as CustomEvent<OpenCaptureJobsDetail | undefined>).detail?.filter ?? 'ALL'); setOpen(true) }
+    window.addEventListener(OPEN_CAPTURE_JOBS_EVENT, show)
+    return () => window.removeEventListener(OPEN_CAPTURE_JOBS_EVENT, show)
+  }, [])
   useEffect(() => { void load() }, [load, refreshKey, open])
   useEffect(() => {
     if (!active) return undefined

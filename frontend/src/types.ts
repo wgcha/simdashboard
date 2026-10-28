@@ -516,6 +516,22 @@ export type PortfolioOverview = {
   quality_by_type: Array<{ type: string; pass: number; fail: number; no_data: number }>
   records: Array<{ project_id: string; project_name: string; product_name: string; request_id: string; request_title: string; owner: string; request_status: string; request_progress: number; current_step: string | null; current_step_id?: string | null; completed_count?: number | null; total_count?: number | null; scenario_name?: string | null; work_plan?: RequestWorkPlan | null; latest_demo_run: { id: string; name: string; execution_mode: 'DEMO_ONLY'; status: string; progress: number; created_at: string; completed_at: string | null } | null; request_type_assignment: { request_type_id: string; request_type_version: number; source: 'ADMIN' | 'RULE' | 'USER' | 'DEFAULT'; decided_by: string; decided_at: string } | null; requested_at: string; load_case_id: string; load_case_name: string; analysis_type: string; load_case_status: string; run_id: string | null; completed_at: string | null; verdict: string; result_count: number }>
   filter_options: { projects: Array<{ id: string; name: string }>; analysis_types: string[]; statuses: string[] }
+  /** Folder-registered Cases (request x Case x environment); absent on servers older than 0.3.2.2. */
+  case_grain?: string
+  case_source?: string
+  case_freshness?: string | null
+  case_counts?: PortfolioCaseCounts
+  case_records?: PortfolioCaseRecord[]
+  legacy_counts?: { load_cases: number; with_run: number; pending: number; judged: number; fail: number }
+}
+
+export type PortfolioCaseState = 'COMPLETED' | 'RECEIVING' | 'WAITING' | 'FAILED'
+export type PortfolioCaseCounts = { total: number; completed: number; receiving: number; waiting: number; failed: number; judged: number; criteria_fail: number; refresh_failed: number }
+export type PortfolioCaseRecord = {
+  project_id: string; project_name: string; product_name: string; request_id: string; request_title: string; owner: string; request_status: string; requested_at: string
+  case_id: string; case_name: string; case_path: string; environment: 'USAGE' | 'DISTRIBUTION'
+  case_state: PortfolioCaseState; refresh_state: 'RECEIVING' | 'FAILED' | null
+  job_status: string | null; error_code: string | null; capture_count: number; captured_at: string | null
 }
 
 export type PortfolioLayout = {

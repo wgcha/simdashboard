@@ -2,6 +2,14 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-28 — 결과 대시보드: 폴더 등록 Case 기준 집계
+
+- 증상: 결과 대시보드의 기준 미충족/결과 보유/결과 대기가 모두 0. 집계가 옛 `load_cases` → `analysis_runs` → `scalar_results`만 읽는데 폴더 등록은 하중 경우를 만들지 않는다.
+- 변경: `/api/portfolio/overview`에 필드 추가(기존 필드 유지): `case_records`·`case_counts`·`case_freshness`·`case_source`·`legacy_counts`. 단위는 의뢰 × Case(`dashboard_cases`) × 환경. 상태는 배타적이며 위에서부터 적용: 결과 보유=capture 있음(재받기 작업은 `refresh_state`로만 표시) / 결과 받는 중=capture 없음+최신 작업 PENDING·RUNNING / 받기 실패=capture 없음+최신 작업 FAILED / 결과 대기=같은 프로젝트·의뢰·환경에 live 등록(`LIVE_STATES`)이 있는 Case 중 나머지. 삭제된 등록의 작업·live 등록 없는 고아 Case는 세지 않음. 기준 미충족은 새 결과에 판정 기준이 없어 「판정 기준 없음」, 옛 FAIL 집계는 옛 결과에만 유지. 옛 `load_cases` 기록은 「옛 결과 N건」으로 따로 표시.
+- 화면: 카드 5장(기준 미충족·결과 보유·결과 받는 중·결과 대기·받기 실패)에 정의 문구, 목록 하단에 집계 기준·최근 결과 받은 시각. 관리자는 받는 중/받기 실패 목록에서 「결과 받기 상태」를 바로 열 수 있다(`simdash:open-capture-jobs`).
+- 검증: 새 `test_portfolio_cases.py`, `test_portfolio_slice.py`, OpenAPI 계약 검사(스키마 변화 없음), tsc, test:architecture·css-architecture·api·routing. `e2e/result-overview.spec.ts`는 새 카드에 맞게 고쳤으나 실행하지 않음.
+- 남은 점: 포트폴리오 조회에는 원래 프로젝트 멤버십 필터가 없어 추가하지 않음(project_id 필터만 동작). 실제 DB·브라우저 화면은 확인하지 않음.
+
 ## 2026-10-27 — 소재물성: 드라이브에서 미리 받아 DB에서 보여 주기 (이슈 #55)
 
 - 증상: 소재물성 열기 → `DRIVE_READ_NOT_PREPARED(조회 횟수 한도)`. 화면 요청마다 Scene 덱 폴더를 드라이브에서 나열·내용 확인했다.

@@ -9,6 +9,7 @@ from typing import Any
 from ...database_connection import ConnectionLike, connect, rows
 from ...domains.portfolio.ports import PortfolioRepository
 from ...services.request_monitoring import request_monitoring_summary
+from .portfolio_cases import CASE_GRAIN, CASE_SOURCE, build_case_records, case_counts
 
 
 class SQLPortfolioRepository:
@@ -110,7 +111,38 @@ class SQLPortfolioRepository:
             "failed": verdict_counts["FAIL"],
             "pass_rate": round(verdict_counts["PASS"] / judged * 100, 1) if judged else None,
         }
+        # Folder-registered Cases (request x Case x environment): the new result model.  Legacy
+        # load_case records above are kept and counted separately.
+        request_fields = {item["request_id"]: item for item in reversed(raw)}
+
+        def case_selected(item: dict[str, Any]) -> bool:
+            requested = item["requested_at"].date() if isinstance(item["requested_at"], datetime) else date.fromisoformat(str(item["requested_at"])[:10])
+            haystack = " ".join(str(item.get(key) or "") for key in ("project_name", "product_name", "request_title", "case_name", "case_path", "owner")).casefold()
+            return (
+                (date_from is None or requested >= date_from)
+                and (date_to is None or requested <= date_to)
+                and (not project_id or item["project_id"] == project_id)
+                and not analysis_type  # folder Cases carry no analysis type
+                and (not status or item["request_status"] == status)
+                and (not query or query in haystack)
+            )
+
+        case_records = build_case_records(self._connection, request_fields, case_selected)
+        legacy_records = [item for item in records if item["load_case_id"]]
+        legacy_counts = {
+            "load_cases": len(legacy_records),
+            "with_run": sum(1 for item in legacy_records if item["run_id"] is not None),
+            "pending": sum(1 for item in legacy_records if item["run_id"] is None),
+            "judged": sum(1 for item in legacy_records if item["run_id"] is not None and item["verdict"] in ("PASS", "FAIL")),
+            "fail": sum(1 for item in legacy_records if item["verdict"] == "FAIL"),
+        }
         return {
+            "case_grain": CASE_GRAIN,
+            "case_source": CASE_SOURCE,
+            "case_freshness": max((str(item["captured_at"]) for item in case_records if item["captured_at"]), default=None),
+            "case_counts": case_counts(case_records),
+            "case_records": case_records,
+            "legacy_counts": legacy_counts,
             "grain": "LOAD_CASE_LATEST_RUN",
             "source": "projects/analysis_requests/request_steps/load_cases/latest analysis_run · canonical request monitoring projection",
             "freshness": max((str(item["completed_at"]) for item in records if item["completed_at"]), default=None),

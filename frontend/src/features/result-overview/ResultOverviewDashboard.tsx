@@ -1,15 +1,19 @@
-import { AlertCircle, CheckCircle2, ChevronRight, Clock3, ExternalLink, LoaderCircle, Search, SlidersHorizontal } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronRight, Clock3, Download, ExternalLink, LoaderCircle, Search, SlidersHorizontal, XCircle } from 'lucide-react'
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import type { PortfolioOverview } from '../../types'
+import type { PortfolioCaseRecord, PortfolioOverview } from '../../types'
+import { openCaptureJobs } from '../../shared/events/captureJobs'
 import { Button } from '../../shared/components/Button'
 import { Input } from '../../shared/components/Input'
 import { Select } from '../../shared/components/Select'
 import './ResultOverviewDashboard.css'
 
 export type ResultOverviewRecord = PortfolioOverview['records'][number]
+export type ResultOverviewCaseRecord = PortfolioCaseRecord
 
 type ResultOverviewDashboardProps = {
-  data: { records: PortfolioOverview['records']; filter_options: Pick<PortfolioOverview['filter_options'], 'projects'> }
+  data: { records: PortfolioOverview['records']; filter_options: Pick<PortfolioOverview['filter_options'], 'projects'> } & Partial<Pick<PortfolioOverview, 'case_records' | 'case_counts' | 'case_source' | 'case_freshness' | 'legacy_counts'>>
+  /** Global administrators only: the 「결과 받기 상태」 panel is mounted for them. */
+  isGlobalAdmin?: boolean
   loading: boolean
   projectId: string
   search: string
@@ -17,6 +21,7 @@ type ResultOverviewDashboardProps = {
   onSearchChange: (search: string) => void
   onOpenResult: (record: ResultOverviewRecord) => void
   onOpenRequest: (record: ResultOverviewRecord) => void
+  onOpenCase?: (record: ResultOverviewCaseRecord) => void
   onShowOperations: () => void
 }
 
@@ -25,6 +30,10 @@ type TypeSummary = { name: string; pass: number; fail: number; pending: number; 
 const DEFAULT_PAGE_SIZE = 25
 const PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 const isPageSize = (value: number): value is (typeof PAGE_SIZE_OPTIONS)[number] => PAGE_SIZE_OPTIONS.includes(value as (typeof PAGE_SIZE_OPTIONS)[number])
+type Filter = 'all' | 'review' | 'available' | 'receiving' | 'pending' | 'failed' | 'legacy'
+const ENVIRONMENT_TEXT: Record<string, string> = { USAGE: '사용', DISTRIBUTION: '유통' }
+const CASE_STATE_TEXT: Record<string, string> = { COMPLETED: '결과 보유', RECEIVING: '받는 중', WAITING: '대기', FAILED: '받기 실패' }
+const CASE_STATE_CLASS: Record<string, string> = { COMPLETED: 'verdict-pass', RECEIVING: 'verdict-receiving', WAITING: 'verdict-waiting', FAILED: 'verdict-fail' }
 const verdictText: Record<string, string> = { PASS: 'PASS', FAIL: 'FAIL', NO_DATA: '판정 없음' }
 const dateValue = (value: string | null | undefined) => value ? new Date(value).getTime() || 0 : 0
 const formatDate = (value: string | null | undefined) => value ? new Date(value).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' }) : '—'
@@ -51,24 +60,35 @@ function buildTypeSummaries(records: ResultOverviewRecord[]) {
   return [...summaries.values()].sort((a, b) => (b.pass + b.fail + b.pending + b.noData + b.other) - (a.pass + a.fail + a.pending + a.noData + a.other))
 }
 
-export function ResultOverviewDashboard({ data, loading, projectId, search, onProjectChange, onSearchChange, onOpenResult, onOpenRequest, onShowOperations }: ResultOverviewDashboardProps) {
-  const [filter, setFilter] = useState<'all' | 'review' | 'available' | 'pending'>('all')
+export function ResultOverviewDashboard({ data, loading, projectId, search, isGlobalAdmin = false, onProjectChange, onSearchChange, onOpenResult, onOpenRequest, onOpenCase, onShowOperations }: ResultOverviewDashboardProps) {
+  const [filter, setFilter] = useState<Filter>('all')
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE)
   useEffect(() => { setPage(0) }, [data, filter, pageSize, projectId, search])
   const safePageSize = isPageSize(pageSize) ? pageSize : DEFAULT_PAGE_SIZE
-  const records = [...data.records].sort((a, b) => Number(hasRun(b)) - Number(hasRun(a)) || dateValue(b.completed_at || b.requested_at) - dateValue(a.completed_at || a.requested_at))
-  const typeSummaries = buildTypeSummaries(records)
-  const reviewCount = records.filter((record) => hasResult(record) && String(record.verdict).toUpperCase() === 'FAIL').length
-  const resultCountTotal = records.filter(hasRun).length
-  const pendingCount = records.filter(isPending).length
-  const unassignedCount = records.filter((record) => !hasLoadCase(record)).length
-  const matchingRecords = records.filter((record) => filter === 'all' || (filter === 'review' ? hasResult(record) && String(record.verdict).toUpperCase() === 'FAIL' : filter === 'available' ? hasRun(record) : isPending(record)))
-  const pageCount = Math.max(1, Math.ceil(matchingRecords.length / safePageSize))
+  const legacyRecords = [...data.records].filter(hasLoadCase).sort((a, b) => Number(hasRun(b)) - Number(hasRun(a)) || dateValue(b.completed_at || b.requested_at) - dateValue(a.completed_at || a.requested_at))
+  const caseRecords = [...(data.case_records ?? [])].sort((a, b) => dateValue(b.captured_at || b.requested_at) - dateValue(a.captured_at || a.requested_at))
+  const typeSummaries = buildTypeSummaries(legacyRecords)
+  const counts = data.case_counts ?? { total: 0, completed: 0, receiving: 0, waiting: 0, failed: 0, judged: 0, criteria_fail: 0, refresh_failed: 0 }
+  const legacyFail = legacyRecords.filter((record) => hasResult(record) && String(record.verdict).toUpperCase() === 'FAIL')
+  const legacyJudged = data.legacy_counts?.judged ?? legacyRecords.filter((record) => hasRun(record) && ['PASS', 'FAIL'].includes(String(record.verdict).toUpperCase())).length
+  const criteriaFail = legacyFail.length + counts.criteria_fail
+  const noCriteria = legacyJudged + counts.judged === 0
+  const legacyMode = filter === 'legacy' || filter === 'review'
+  const caseState: Record<string, string> = { available: 'COMPLETED', receiving: 'RECEIVING', pending: 'WAITING', failed: 'FAILED' }
+  const matchingCases = legacyMode ? [] : caseRecords.filter((record) => filter === 'all' || record.case_state === caseState[filter])
+  const matchingLegacy = filter === 'review' ? legacyFail : filter === 'legacy' ? legacyRecords : []
+  const matchingCount = legacyMode ? matchingLegacy.length : matchingCases.length
+  const pageCount = Math.max(1, Math.ceil(matchingCount / safePageSize))
   const safePage = Math.min(Math.max(page, 0), pageCount - 1)
-  const recentRecords = matchingRecords.slice(safePage * safePageSize, (safePage + 1) * safePageSize)
-  const toggleFilter = (next: typeof filter) => setFilter((current) => current === next ? 'all' : next)
-  const pendingRecords = records.filter(isPending).slice(0, 4)
+  const pageSlice = <T,>(items: T[]) => items.slice(safePage * safePageSize, (safePage + 1) * safePageSize)
+  const recentCases = pageSlice(matchingCases)
+  const recentLegacy = pageSlice(matchingLegacy)
+  const toggleFilter = (next: Filter) => setFilter((current) => current === next ? 'all' : next)
+  const waitingCases = caseRecords.filter((record) => record.case_state === 'WAITING').slice(0, 4)
+  const legacyCount = data.legacy_counts?.load_cases ?? legacyRecords.length
+  const headingText: Record<Filter, string> = { all: '최근 결과를 받은 순', review: '옛 결과 중 수치 판정 FAIL', available: '결과를 보유한 Case', receiving: '결과를 받고 있는 Case (대기·받는 중)', pending: '등록되었지만 아직 결과가 없는 Case', failed: '결과 받기에 실패한 Case', legacy: '옛 결과(하중 경우 기준) 목록' }
+  const adminJobsAvailable = isGlobalAdmin && (filter === 'receiving' || filter === 'failed')
 
   return <div className="result-overview-dashboard" data-ui-density="v1" data-testid="result-overview-dashboard">
     <header className="result-overview-heading">
@@ -83,33 +103,44 @@ export function ResultOverviewDashboard({ data, loading, projectId, search, onPr
 
     {loading ? <div className="result-overview-loading" role="status" aria-busy="true"><LoaderCircle className="spin" aria-hidden="true" /> 결과 대시보드를 갱신하고 있습니다.</div> : <>
     <section className="result-overview-summary" aria-label="결과 요약">
-      <SummaryCard label="기준 미충족" value={reviewCount} note="최신 Run의 수치 판정 FAIL" tone="danger" selected={filter === 'review'} onClick={() => toggleFilter('review')} icon={<AlertCircle aria-hidden="true" />} />
-      <SummaryCard label="결과 보유" value={resultCountTotal} note="최신 Run이 있는 하중 경우" tone="success" selected={filter === 'available'} onClick={() => toggleFilter('available')} icon={<CheckCircle2 aria-hidden="true" />} />
-      <SummaryCard label="결과 대기" value={pendingCount} note="Run이 없는 하중 경우" tone="warning" selected={filter === 'pending'} onClick={() => toggleFilter('pending')} icon={<Clock3 aria-hidden="true" />} />
+      <SummaryCard label="기준 미충족" value={noCriteria ? '판정 기준 없음' : criteriaFail} note={noCriteria ? '새 결과에는 아직 판정 기준이 없습니다. 기준이 생기면 FAIL 건수를 셉니다.' : '옛 결과의 최신 Run 수치 판정 FAIL 건수. 새 결과는 판정 기준이 없어 세지 않습니다.'} tone="danger" selected={filter === 'review'} onClick={() => toggleFilter('review')} icon={<AlertCircle aria-hidden="true" />} />
+      <SummaryCard label="결과 보유" value={counts.completed} note="결과를 한 번 이상 받은 Case (의뢰 × Case × 환경)" tone="success" selected={filter === 'available'} onClick={() => toggleFilter('available')} icon={<CheckCircle2 aria-hidden="true" />} />
+      <SummaryCard label="결과 받는 중" value={counts.receiving} note="결과가 없고 받기 작업이 대기 또는 진행 중인 Case" tone="info" selected={filter === 'receiving'} onClick={() => toggleFilter('receiving')} icon={<Download aria-hidden="true" />} />
+      <SummaryCard label="결과 대기" value={counts.waiting} note="폴더에 등록됐지만 결과도 받기 작업도 아직 없는 Case" tone="warning" selected={filter === 'pending'} onClick={() => toggleFilter('pending')} icon={<Clock3 aria-hidden="true" />} />
+      <SummaryCard label="받기 실패" value={counts.failed} note="결과가 없고 마지막 받기 작업이 실패한 Case" tone="danger" selected={filter === 'failed'} onClick={() => toggleFilter('failed')} icon={<XCircle aria-hidden="true" />} />
     </section>
 
     <div className="result-overview-content">
-      <section className="result-overview-panel recent-results-panel"><header className="result-overview-panel-heading"><div><h2>최근 해석 결과</h2><p>{filter === 'all' ? '최신 Run의 완료일 순' : filter === 'review' ? '수치 판정 FAIL 결과' : filter === 'available' ? '결과를 보유한 하중 경우' : '결과를 기다리는 하중 경우'}</p></div><div className="result-overview-list-tools"><span>{matchingRecords.length}건{filter !== 'all' && <button className="result-overview-clear" onClick={() => setFilter('all')}>전체 보기</button>}</span><label className="result-overview-page-size"><span>페이지 크기</span><Select controlSize="sm" aria-label="결과 목록 페이지 크기" value={safePageSize} onChange={(event) => { const next = Number(event.target.value); setPageSize(isPageSize(next) ? next : DEFAULT_PAGE_SIZE) }}>{PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}개</option>)}</Select></label></div></header>
-        {recentRecords.length === 0 ? <EmptyState /> : <div className="result-overview-result-list" role="table" aria-label="최근 해석 결과 목록">
+      <section className="result-overview-panel recent-results-panel"><header className="result-overview-panel-heading"><div><h2>{legacyMode ? '옛 결과' : '최근 해석 결과'}</h2><p>{headingText[filter]}</p></div><div className="result-overview-list-tools"><span>{matchingCount}건{filter !== 'all' && <button className="result-overview-clear" onClick={() => setFilter('all')}>전체 보기</button>}{adminJobsAvailable && <button className="result-overview-clear" onClick={() => openCaptureJobs({ filter: filter === 'failed' ? 'FAILED' : 'ALL' })}>결과 받기 상태 열기</button>}</span><label className="result-overview-page-size"><span>페이지 크기</span><Select controlSize="sm" aria-label="결과 목록 페이지 크기" value={safePageSize} onChange={(event) => { const next = Number(event.target.value); setPageSize(isPageSize(next) ? next : DEFAULT_PAGE_SIZE) }}>{PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}개</option>)}</Select></label></div></header>
+        {matchingCount === 0 ? <EmptyState noCases={!legacyMode && counts.total === 0} /> : legacyMode ? <div className="result-overview-result-list" role="table" aria-label="옛 결과 목록">
           <div className="result-overview-result-row result-overview-result-header" role="row"><span role="columnheader">의뢰 제목 / 하중 경우</span><span role="columnheader">판정</span><span role="columnheader">완료일</span><span role="columnheader">작업</span></div>
-          {recentRecords.map((record) => <article className="result-overview-result-row" role="row" key={`${record.request_id}:${record.load_case_id || 'unassigned'}`}>
-            <span role="cell" className="result-overview-record-name"><strong title={record.request_title}>{record.request_title}</strong><small title={`${record.load_case_name || '하중 경우 미지정'} · ${record.project_name}`}>{record.load_case_name || '하중 경우 미지정'} · {record.project_name}</small></span>
-            <span role="cell"><b className={`result-overview-verdict verdict-${String(record.verdict).toLowerCase()}`}>{!hasLoadCase(record) ? '미지정' : isPending(record) ? '대기' : isNoData(record) ? '판정 없음' : verdictText[String(record.verdict).toUpperCase()] ?? '확인 필요'}</b></span>
+          {recentLegacy.map((record) => <article className="result-overview-result-row" role="row" key={`${record.request_id}:${record.load_case_id}`}>
+            <span role="cell" className="result-overview-record-name"><strong title={record.request_title}>{record.request_title}</strong><small title={`${record.load_case_name} · ${record.project_name}`}>{record.load_case_name} · {record.project_name}</small></span>
+            <span role="cell"><b className={`result-overview-verdict verdict-${String(record.verdict).toLowerCase()}`}>{isPending(record) ? '대기' : isNoData(record) ? '판정 없음' : verdictText[String(record.verdict).toUpperCase()] ?? '확인 필요'}</b></span>
             <span role="cell" className="result-overview-date">{formatDate(record.completed_at)}</span>
             <span role="cell" className="result-overview-row-actions">{hasRun(record) ? <Button size="sm" onClick={() => onOpenResult(record)}>결과 검토</Button> : <Button size="sm" onClick={() => onOpenRequest(record)}>의뢰 보기</Button>}<Button size="sm" variant="ghost" className="result-overview-icon-action" aria-label={`${record.request_title} 의뢰 열기`} onClick={() => onOpenRequest(record)}><ExternalLink aria-hidden="true" /></Button></span>
           </article>)}
+        </div> : <div className="result-overview-result-list" role="table" aria-label="최근 해석 결과 목록">
+          <div className="result-overview-result-row result-overview-result-header" role="row"><span role="columnheader">의뢰 제목 / Case</span><span role="columnheader">상태</span><span role="columnheader">결과 받은 시각</span><span role="columnheader">작업</span></div>
+          {recentCases.map((record) => <article className="result-overview-result-row" role="row" key={record.case_id}>
+            <span role="cell" className="result-overview-record-name"><strong title={record.request_title}>{record.request_title}</strong><small title={`${record.case_path} · ${record.project_name}`}>{record.case_name} · {ENVIRONMENT_TEXT[record.environment] ?? record.environment} 환경 · {record.project_name}</small></span>
+            <span role="cell"><b className={`result-overview-verdict ${CASE_STATE_CLASS[record.case_state] ?? 'verdict-waiting'}`} title={record.case_state === 'FAILED' && record.error_code ? record.error_code : undefined}>{CASE_STATE_TEXT[record.case_state] ?? '확인 필요'}</b>{record.refresh_state && <small className="result-overview-refresh-note">{record.refresh_state === 'FAILED' ? '갱신 실패' : '갱신 중'}</small>}</span>
+            <span role="cell" className="result-overview-date">{formatDate(record.captured_at)}</span>
+            <span role="cell" className="result-overview-row-actions">{onOpenCase && <Button size="sm" onClick={() => onOpenCase(record)}>{record.case_state === 'COMPLETED' ? '결과 검토' : '의뢰 보기'}</Button>}{onOpenCase && <Button size="sm" variant="ghost" className="result-overview-icon-action" aria-label={`${record.request_title} 의뢰 열기`} onClick={() => onOpenCase(record)}><ExternalLink aria-hidden="true" /></Button>}</span>
+          </article>)}
         </div>}
         {pageCount > 1 && <nav className="result-overview-pagination" aria-label="결과 목록 페이지"><Button size="sm" disabled={safePage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>이전</Button><span>{safePage + 1} / {pageCount}</span><Button size="sm" disabled={safePage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>다음</Button></nav>}
+        <footer className="result-overview-source" data-testid="result-overview-source">집계 기준: 폴더 등록 Case (의뢰 × Case × 환경) · 최근 결과 받은 시각 {formatDate(data.case_freshness)}</footer>
       </section>
 
       <aside className="result-overview-side-column">
-        <section className="result-overview-panel type-summary-panel"><header className="result-overview-panel-heading"><div><h2>유형별 판정</h2><p>최신 Run의 수치 판정</p></div></header><div className="result-overview-type-list">{typeSummaries.length === 0 ? <EmptyState /> : typeSummaries.map((summary) => <TypeBar key={summary.name} summary={summary} />)}</div><div className="result-overview-legend"><span className="legend-pass">PASS</span><span className="legend-fail">FAIL</span><span className="legend-pending">대기</span><span className="legend-no-data">판정 없음</span>{typeSummaries.some((summary) => summary.other > 0) && <span className="legend-other">확인 필요</span>}</div></section>
-        <section className="result-overview-panel pending-panel"><header className="result-overview-panel-heading"><div><h2>결과 대기</h2><p>하중 경우에 결과가 아직 연결되지 않았습니다.</p></div><span>{pendingCount}</span></header>{pendingRecords.length ? <div className="result-overview-pending-list">{pendingRecords.map((record) => <button key={`${record.request_id}:${record.load_case_id}`} onClick={() => onOpenRequest(record)}><span><strong>{record.request_title}</strong><small>{record.load_case_name || '하중 경우 미지정'}</small></span><ChevronRight aria-hidden="true" /></button>)}</div> : <p className="result-overview-empty-copy">현재 결과 대기 항목이 없습니다.</p>}{unassignedCount > 0 && <small className="result-overview-unassigned">하중 경우 미지정 의뢰 {unassignedCount}건은 별도로 표시됩니다.</small>}</section>
+        <section className="result-overview-panel type-summary-panel"><header className="result-overview-panel-heading"><div><h2>유형별 판정 (옛 결과)</h2><p>옛 결과의 최신 Run 수치 판정</p></div></header><div className="result-overview-type-list">{typeSummaries.length === 0 ? <p className="result-overview-empty-copy">옛 결과가 없습니다. 새 결과에는 판정 기준이 아직 없습니다.</p> : typeSummaries.map((summary) => <TypeBar key={summary.name} summary={summary} />)}</div><div className="result-overview-legend"><span className="legend-pass">PASS</span><span className="legend-fail">FAIL</span><span className="legend-pending">대기</span><span className="legend-no-data">판정 없음</span>{typeSummaries.some((summary) => summary.other > 0) && <span className="legend-other">확인 필요</span>}</div></section>
+        <section className="result-overview-panel pending-panel"><header className="result-overview-panel-heading"><div><h2>결과 대기</h2><p>폴더에 등록됐지만 결과가 아직 없는 Case입니다.</p></div><span>{counts.waiting}</span></header>{waitingCases.length ? <div className="result-overview-pending-list">{waitingCases.map((record) => <button key={record.case_id} onClick={() => onOpenCase?.(record)}><span><strong>{record.request_title}</strong><small>{record.case_name} · {ENVIRONMENT_TEXT[record.environment] ?? record.environment}</small></span><ChevronRight aria-hidden="true" /></button>)}</div> : <p className="result-overview-empty-copy">현재 결과 대기 항목이 없습니다.</p>}{legacyCount > 0 && <button type="button" className="result-overview-unassigned result-overview-legacy-link" aria-pressed={filter === 'legacy'} onClick={() => toggleFilter('legacy')}>옛 결과 {legacyCount}건 {filter === 'legacy' ? '(목록 표시 중)' : '보기'}</button>}</section>
       </aside>
     </div></>}
   </div>
 }
 
-function SummaryCard({ label, value, note, tone, icon, selected, onClick }: { label: string; value: number; note: string; tone: string; icon: ReactNode; selected: boolean; onClick: () => void }) { const descriptionId = useId(); return <button className={`result-overview-summary-card tone-${tone}`} aria-label={label} aria-describedby={`${descriptionId}-value ${descriptionId}-note`} aria-pressed={selected} onClick={onClick}><span className="result-overview-summary-icon">{icon}</span><div><strong>{label}</strong><b id={`${descriptionId}-value`}>{value}</b><small id={`${descriptionId}-note`}>{note}</small></div><ChevronRight aria-hidden="true" /></button> }
+function SummaryCard({ label, value, note, tone, icon, selected, onClick }: { label: string; value: number | string; note: string; tone: string; icon: ReactNode; selected: boolean; onClick: () => void }) { const descriptionId = useId(); return <button className={`result-overview-summary-card tone-${tone}${typeof value === 'string' ? ' is-text-value' : ''}`} aria-label={label} title={`${label}: ${note}`} aria-describedby={`${descriptionId}-value ${descriptionId}-note`} aria-pressed={selected} onClick={onClick}><span className="result-overview-summary-icon">{icon}</span><div><strong>{label}</strong><b id={`${descriptionId}-value`}>{value}</b><small id={`${descriptionId}-note`}>{note}</small></div><ChevronRight aria-hidden="true" /></button> }
 function TypeBar({ summary }: { summary: TypeSummary }) { const total = summary.pass + summary.fail + summary.pending + summary.noData + summary.other; return <div className="result-overview-type-row"><div className="result-overview-type-label"><span title={summary.name}>{summary.name}</span><b>{total}</b></div><div className="result-overview-bar" role="img" aria-label={`${summary.name} ${total}건: PASS ${summary.pass}, FAIL ${summary.fail}, 대기 ${summary.pending}, 판정 없음 ${summary.noData}, 확인 필요 ${summary.other}`}><i className="bar-pass" style={{ width: `${summary.pass / total * 100}%` }} /><i className="bar-fail" style={{ width: `${summary.fail / total * 100}%` }} /><i className="bar-pending" style={{ width: `${summary.pending / total * 100}%` }} /><i className="bar-no-data" style={{ width: `${summary.noData / total * 100}%` }} /><i className="bar-other" style={{ width: `${summary.other / total * 100}%` }} /></div></div> }
-function EmptyState() { return <p className="result-overview-empty-copy">조건에 맞는 결과가 없습니다. 필터를 조정해 보세요.</p> }
+function EmptyState({ noCases = false }: { noCases?: boolean }) { return <p className="result-overview-empty-copy">{noCases ? '폴더에 등록된 Case가 없습니다. 저장소 폴더를 등록하면 여기에 표시됩니다.' : '조건에 맞는 결과가 없습니다. 필터를 조정해 보세요.'}</p> }

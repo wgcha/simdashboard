@@ -13,9 +13,15 @@ test('첫 화면은 독립 결과 대시보드이며 실제 최신 Run 집계와
   await expect(dashboard.getByRole('heading', { name: '결과 대시보드', exact: true })).toBeVisible()
   await expect(page.getByTestId('focused-request-overview')).toHaveCount(0)
   const data = await (await page.request.get('/api/portfolio/overview')).json() as PortfolioOverview
-  await expect(dashboard.getByRole('button', { name: '기준 미충족', exact: true }).locator('b')).toHaveText(String(data.records.filter((record) => record.run_id && record.result_count > 0 && record.verdict === 'FAIL').length))
-  await expect(dashboard.getByRole('button', { name: '결과 보유', exact: true }).locator('b')).toHaveText(String(data.records.filter((record) => record.run_id).length))
-  await expect(dashboard.getByRole('button', { name: '결과 대기', exact: true }).locator('b')).toHaveText(String(data.records.filter((record) => record.load_case_id && !record.run_id).length))
+  const counts = data.case_counts!
+  const legacyFail = data.records.filter((record) => record.load_case_id && record.run_id && record.result_count > 0 && record.verdict === 'FAIL').length
+  const criteria = dashboard.getByRole('button', { name: '기준 미충족', exact: true }).locator('b')
+  await expect(criteria).toHaveText(counts.judged + (data.legacy_counts?.judged ?? 0) === 0 ? '판정 기준 없음' : String(legacyFail))
+  await expect(dashboard.getByRole('button', { name: '결과 보유', exact: true }).locator('b')).toHaveText(String(counts.completed))
+  await expect(dashboard.getByRole('button', { name: '결과 받는 중', exact: true }).locator('b')).toHaveText(String(counts.receiving))
+  await expect(dashboard.getByRole('button', { name: '결과 대기', exact: true }).locator('b')).toHaveText(String(counts.waiting))
+  await expect(dashboard.getByRole('button', { name: '받기 실패', exact: true }).locator('b')).toHaveText(String(counts.failed))
+  await expect(dashboard.getByTestId('result-overview-source')).toContainText('최근 결과 받은 시각')
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
   if (process.env.GUI_QA_OUTPUT_DIR) {
     mkdirSync(process.env.GUI_QA_OUTPUT_DIR, { recursive: true })
@@ -35,6 +41,7 @@ test('대시보드 결과에서 의뢰와 하중 경우 및 정확한 Run으로 
   await loginWorkspace(page, 'e2e-admin', '/')
   const dashboard = page.getByTestId('result-overview-dashboard')
   await dashboard.getByLabel('의뢰 제목, 하중 경우 검색').fill('Run 비교: 회귀와 개선')
+  await dashboard.getByRole('button', { name: /^옛 결과 \d+건/ }).click()   // legacy load_case records are listed separately
   const row = dashboard.locator('article.result-overview-result-row').filter({ hasText: 'Run 비교: 회귀와 개선' })
   await expect(row).toHaveCount(1)
   const data = await (await page.request.get('/api/portfolio/overview')).json() as PortfolioOverview
