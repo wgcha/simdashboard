@@ -106,6 +106,8 @@ class _PostgresStartupConnection:
                                            "source_rel_path", "files_json", "warnings_json", "deck_json", "error_code",
                                            "error_message", "attempts", "checked_at", "prepared_at", "created_at",
                                            "updated_at"},
+                "dashboard_scene_summaries": {"id", "capture_id", "scene_id", "run_id", "run_option_id",
+                                              "format_version", "observation_count", "summary_json", "created_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])

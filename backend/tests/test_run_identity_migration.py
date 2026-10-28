@@ -80,7 +80,9 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert discovery_links and discovery_links.down_revision == "0044_scx_relay_submissions"
     materials_preparations = script.get_revision("0046_materials_preparations")
     assert materials_preparations and materials_preparations.down_revision == "0045_folder_discovery_links"
-    assert tuple(script.get_heads()) == ("0046_materials_preparations",)
+    scene_summaries = script.get_revision("0047_dashboard_scene_summaries")
+    assert scene_summaries and scene_summaries.down_revision == "0046_materials_preparations"
+    assert tuple(script.get_heads()) == ("0047_dashboard_scene_summaries",)
 
 
 def test_result_location_links_migration_widens_alembic_version_before_other_ddl(monkeypatch: pytest.MonkeyPatch) -> None:

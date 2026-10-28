@@ -42,3 +42,6 @@ def ensure_dashboard_schema(connection) -> None:
         CREATE INDEX IF NOT EXISTS ix_dashboard_cases_request ON dashboard_cases(request_id);
         CREATE INDEX IF NOT EXISTS ix_dashboard_captures_case ON dashboard_captures(case_id, created_at);
     """)
+    # Per-Scene value summaries of DISTRIBUTION captures (migration 0047, issue #55).
+    from ...database import ensure_dashboard_scene_summaries_schema
+    ensure_dashboard_scene_summaries_schema(connection)

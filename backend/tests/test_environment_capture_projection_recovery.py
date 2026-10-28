@@ -478,11 +478,12 @@ def test_distribution_manual_scene_registration_retries_two_case_captures(captur
     payloads_by_case = {str(relative_path): json.loads(payload) for relative_path, payload in rows}
     assert set(payloads_by_case) == set(package_paths)
     for package_path, payload in payloads_by_case.items():
+        # Issue #55 (dashboard-v4): the header lists each Scene's csv files with their value counts.
         observations = [
-            observation
+            {"source_path": source["path"]}
             for run in payload.get("runs", [])
             for scene in run.get("scenes", [])
-            for observation in scene.get("observations", [])
+            for source in scene.get("sources", []) if source.get("observations")
         ]
         assert observations, package_path
         assert any(

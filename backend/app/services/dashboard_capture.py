@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..database_connection import ConnectionLike, rows
+from ..domains.dashboard import scene_summary
 from ..domains.dashboard.parser import EVALUATIONS, _pick_usage, build_distribution_scene, fingerprint, scene_sort_key
 from . import capture_inventory, spdm_storage
 from . import usage_source_review
@@ -501,7 +502,10 @@ def create_capture(
         _logger.warning("%s", capture_inventory.log_line(inventory))
         raise DashboardCaptureError(capture_inventory.TOO_LARGE_CODE,
                                     capture_inventory.too_large_message(inventory, "assets"), inventory)
-    recipe_version = "dashboard-v3"
+    # dashboard-v4 (issue #55, stage 2): a DISTRIBUTION capture keeps per-Scene value summaries in
+    # ``dashboard_scene_summaries`` instead of every csv value in ``payload_json``.  A new recipe makes a
+    # re-capture of an unchanged Case write the new format; USAGE payloads are unchanged (still v3).
+    recipe_version = "dashboard-v4" if payload["environment"] == "DISTRIBUTION" else "dashboard-v3"
     fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "component_id")}
     if payload.get("folder_schema_locations"):
         fingerprint_context["folder_schema_locations"] = _schema_fingerprint_locations(
@@ -560,20 +564,20 @@ def create_capture(
         metadata = next(item for item in manifest if item["relative_path"] == path)
         media_asset_ids.append((asset_id, path, data, media_type, metadata))
         _replace_asset_id(payload_json, path, asset_id)
+    summary_rows: list[tuple[str, str, str, str, str, int]] = []
     if payload["environment"] == "DISTRIBUTION":
-        # Persist each observation once. Derived maxima depend on the caller's
-        # chosen basis/scope and are computed by the query service.
-        for run in payload_json["runs"]:
-            for scene in run["scenes"]:
-                for key in ("component_results", "peak", "edge_peaks"):
-                    scene.pop(key, None)
         payload_json.pop("scenes", None)
         payload_json.pop("run", None)
+        # What the attempt read, counted on the full parse (the stored header no longer holds observations).
+        observation_count, top_sources = capture_inventory.measure_observations(payload_json)
+        asset_by_path = {path: asset_id for asset_id, path, _data, _media_type, _metadata in media_asset_ids}
+        summary_rows = _summarize_scenes(payload_json, asset_by_path)
+    else:
+        observation_count, top_sources = capture_inventory.measure_observations(payload_json)
     # Issue #55: measure before PostgreSQL does.  A DISTRIBUTION Case with hundreds of csv files made a
     # ~224 MB payload_json and ended in ProgramLimitExceeded (jsonb elements above 268435455 bytes).
     payload_text, manifest_text = _json(payload_json), _json(manifest)
     payload_bytes, manifest_bytes = len(payload_text.encode("utf-8")), len(manifest_text.encode("utf-8"))
-    observation_count, top_sources = capture_inventory.measure_observations(payload_json)
     capture_inventory.finish(inventory, observation_count=observation_count, top_sources=top_sources,
                              payload_bytes=payload_bytes, manifest_bytes=manifest_bytes)
     payload_limit = capture_inventory.max_payload_bytes()
@@ -586,6 +590,12 @@ def create_capture(
         conn.execute("INSERT INTO dashboard_captures(id,case_id,fingerprint,recipe_version,manifest_json,payload_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)", [capture_id, case_id, digest, recipe_version, manifest_text, payload_text, actor, _now()])
         for asset_id, path, data, media_type, metadata in media_asset_ids:
             conn.execute("INSERT INTO dashboard_assets(id,capture_id,relative_path,sha256,media_type,content,metadata_json) VALUES(?,?,?,?,?,?,?)", [asset_id, capture_id, path, metadata["sha256"], media_type, data, _json({"asset_id": asset_id, "relative_path": path})])
+        created_at = _now()
+        for scene_id, run_id, option_id, summary_text, _bytes, count in summary_rows:
+            conn.execute("INSERT INTO dashboard_scene_summaries(id,capture_id,scene_id,run_id,run_option_id,format_version,"
+                         "observation_count,summary_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                         [_summary_id(capture_id, run_id, option_id, scene_id), capture_id, scene_id, run_id, option_id,
+                          scene_summary.FORMAT_VERSION, count, summary_text, created_at])
     except Exception as exc:  # noqa: BLE001 - only the database size limit is translated
         if _is_db_size_limit(exc):
             inventory["outcome"] = capture_inventory.TOO_LARGE_CODE
@@ -596,6 +606,35 @@ def create_capture(
     inventory["outcome"] = "COMPLETED"
     _logger.warning("%s", capture_inventory.log_line(inventory))
     return {"id": capture_id, "case_id": case_id, "fingerprint": digest, "status": status, "context": context, "payload": payload_json, "inventory": inventory}
+
+
+def _summary_id(capture_id: str, run_id: str, option_id: str, scene_id: str) -> str:
+    return "dashboard-scene-summary-" + hashlib.sha256(f"{capture_id}|{run_id}|{option_id}|{scene_id}".encode()).hexdigest()[:40]
+
+
+def _summarize_scenes(payload: dict[str, Any], asset_by_path: dict[str, str]) -> list[tuple[str, str, str, str, int, int]]:
+    """Replace each Scene's observations by a summary row (issue #55, stage 2); the header keeps an index.
+
+    The Scene keeps ``sources`` (its csv files with their asset ids, in parse order) for the on-demand
+    detail parse, ``value_components`` for the catalog and ``values_storage`` naming the format.
+    Returns (scene id, run id, run option id, summary json, summary bytes, observation count) rows.
+    """
+    rows = []
+    for run in payload.get("runs", []):
+        for scene in run.get("scenes", []):
+            for key in ("component_results", "peak", "edge_peaks"):
+                scene.pop(key, None)
+            observations = scene.pop("observations", None) or []
+            sources = [{**source, "asset_id": asset_by_path.get(str(source.get("path")))}
+                       for source in scene.get("sources") or []]
+            groups = scene_summary.groups_from_observations(observations)
+            scene["sources"] = sources
+            scene["value_components"] = scene_summary.value_components(groups)
+            scene["values_storage"] = scene_summary.VALUES_STORAGE
+            text = _json(scene_summary.encode(groups, sources))
+            rows.append((str(scene["id"]), str(run.get("id")), str(run.get("run_option_id") or ""), text,
+                         len(text.encode("utf-8")), len(observations)))
+    return rows
 
 
 def _is_db_size_limit(exc: BaseException) -> bool:
@@ -862,6 +901,76 @@ def get_capture(conn: ConnectionLike, capture_id: str) -> dict[str, Any] | None:
     payload = _decode(row[3])
     payload.setdefault("context", {}).update({"project_id": row[4], "request_id": row[5], "capture_id": capture_id})
     return {"id": row[0], "case_id": row[1], "fingerprint": row[2], "environment": row[6], "source_name": row[7], "payload": payload}
+
+
+_IN_CHUNK = 400
+
+
+def _chunks(values: list[Any]) -> list[list[Any]]:
+    return [values[start:start + _IN_CHUNK] for start in range(0, len(values), _IN_CHUNK)]
+
+
+def attach_scene_values(conn: ConnectionLike, capture: dict[str, Any] | None, *, run_id: str | None = None,
+                        scene_id: str | None = None, detail: bool = False,
+                        component_id: str | None = None) -> dict[str, Any] | None:
+    """Load the values of summary-format Scenes (issue #55, stage 2) into a capture read for the queries.
+
+    Scenes of old captures carry ``observations`` and are left alone.  A summary Scene gets ``_groups``
+    from ``dashboard_scene_summaries``; with ``detail`` (or when its summary is missing or truncated) it gets
+    ``observations`` parsed on demand from its original csv assets instead.  Only the Scenes of ``run_id``
+    (and ``scene_id``) are loaded, each from the capture that owns it (``source_capture_id`` of a merged view).
+    A detail load may name ``component_id`` to parse only that component's csv files.
+    """
+    if not capture or capture.get("environment") != "DISTRIBUTION":
+        return capture
+    wanted: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for run in capture.get("payload", {}).get("runs", []):
+        if run_id is not None and str(run.get("id")) != str(run_id):
+            continue
+        for scene in run.get("scenes", []):
+            if scene.get("values_storage") != scene_summary.VALUES_STORAGE or "observations" in scene:
+                continue
+            if scene_id is not None and str(scene.get("id")) != str(scene_id):
+                continue
+            if "_groups" in scene and not detail:
+                continue
+            owner = str(scene.get("source_capture_id") or capture["id"])
+            wanted.setdefault(owner, []).append((run, scene))
+    for owner, items in wanted.items():
+        pending = items
+        if not detail:
+            stored: dict[tuple[str, str, str], Any] = {}
+            for chunk in _chunks(sorted({str(scene.get("id")) for _run, scene in items})):
+                for row in conn.execute(
+                        "SELECT run_id,run_option_id,scene_id,summary_json FROM dashboard_scene_summaries "
+                        f"WHERE capture_id=? AND scene_id IN ({','.join('?' for _ in chunk)})", [owner, *chunk]).fetchall():
+                    stored[(str(row[0]), str(row[1]), str(row[2]))] = row[3]
+            pending = []
+            for run, scene in items:
+                raw = stored.get((str(run.get("id")), str(run.get("run_option_id") or ""), str(scene.get("id"))))
+                groups = scene_summary.decode(_decode(raw), scene.get("sources") or []) if raw is not None else None
+                if groups is None:
+                    pending.append((run, scene))   # missing or truncated summary: parse the csv files instead
+                else:
+                    scene["_groups"] = groups
+        for _run, scene in pending:
+            scene["observations"] = scene_observations(conn, scene, component_id if detail else None)
+            scene.pop("_groups", None)
+    return capture
+
+
+def scene_observations(conn: ConnectionLike, scene: dict[str, Any], component_id: str | None = None) -> list[dict[str, Any]]:
+    """A summary Scene's observations (of one component, when named), parsed on demand from its original csv bytes."""
+    sources = [source for source in scene.get("sources") or [] if source.get("asset_id")
+               and (component_id is None or source.get("component_id") == component_id)]
+    ids = sorted({str(source["asset_id"]) for source in sources if source.get("observations")})
+    contents: dict[str, bytes] = {}
+    for chunk in _chunks(ids):
+        for asset_id, content in conn.execute(
+                f"SELECT id,content FROM dashboard_assets WHERE id IN ({','.join('?' for _ in chunk)})", chunk).fetchall():
+            if content is not None:
+                contents[str(asset_id)] = bytes(content)
+    return scene_summary.observations_from_sources(sources, contents)
 
 
 def find_asset(conn: ConnectionLike, asset_id: str) -> dict[str, Any] | None:

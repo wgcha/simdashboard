@@ -37,8 +37,19 @@ def stress_unit(observations: list[dict[str, Any]]) -> tuple[str | None, str]:
 
     Different explicit units cannot be one value, so they stay unlabelled.
     """
-    explicit = {str(item["unit"]).strip() for item in observations
-                if str(item.get("unit") or "").strip() and item.get("unit_status") != UNIT_STATUS_SYSTEM}
+    explicit = {unit for item in observations if (unit := explicit_unit(item))}
+    return stress_unit_of(explicit)
+
+
+def explicit_unit(item: dict[str, Any]) -> str | None:
+    """The source unit one observation states, or ``None`` (a system-labelled unit is not explicit)."""
+    if str(item.get("unit") or "").strip() and item.get("unit_status") != UNIT_STATUS_SYSTEM:
+        return str(item["unit"]).strip()
+    return None
+
+
+def stress_unit_of(explicit: set[str]) -> tuple[str | None, str]:
+    """``stress_unit`` from the set of explicit units already collected (scene summaries, issue #55)."""
     if len(explicit) == 1:
         return next(iter(explicit)), UNIT_STATUS_SOURCE
     if explicit:

@@ -41,6 +41,8 @@ _CONTACT_RE = re.compile(r"(?:^|_)(?P<value>(?:Face|Corner|Edge)[A-Za-z0-9]+)(?:
 _NUM_RE = re.compile(r"^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$")
 MAX_CSV_ROWS = 100_000
 MAX_SCENE_OBSERVATIONS = 400_000
+# A csv left out because the Scene already held MAX_SCENE_OBSERVATIONS values (scene ``sources``).
+SOURCE_SKIPPED_LIMIT = "SKIPPED_LIMIT"
 
 
 def _number(value: Any) -> float | int | None:
@@ -335,13 +337,21 @@ def build_distribution_scene(
     media: list[dict[str, Any]] = []
     components: set[str] = set()
     quality: list[str] = []
+    # Issue #55: every csv of the Scene, in parse order, so the values can be parsed again on demand
+    # from the stored original bytes (scene summaries keep only the maxima, not every observation).
+    sources: list[dict[str, Any]] = []
     for relative, content in files:
         suffix = PurePosixPath(relative).suffix.casefold()
         if suffix in {".csv"}:
             parsed = parse_distribution_csv(content, relative)
             parsed_observations = parsed.get("observations", [])
+            source = {"path": relative, "component_id": parsed.get("component_id"),
+                      "basis": parsed.get("basis", "DETAIL"), "status": parsed.get("status"),
+                      "observations": len(parsed_observations)}
+            sources.append(source)
             if len(observations) + len(parsed_observations) > MAX_SCENE_OBSERVATIONS:
                 quality.append("SOURCE_PARSE_ERROR")
+                source.update(status=SOURCE_SKIPPED_LIMIT, observations=0)
                 continue
             for observation in parsed_observations:
                 observation["component_id"] = parsed.get("component_id")
@@ -371,7 +381,7 @@ def build_distribution_scene(
         component_observations = [item for item in observations if item.get("component_id") == component_id]
         peaks_by_basis = {basis: _peak([item for item in component_observations if item.get("basis") == basis], basis=basis) for basis in ("REPORTED_SUMMARY", "DETAIL")}
         component_results.append({"component_id": component_id, "peak": None, "peaks_by_basis": peaks_by_basis, "edge_peaks": [item for item in component_observations if item.get("kind") == "SIDE"]})
-    return {**scene, "components": sorted(components), "peak": peak, "observations": observations, "edge_peaks": [item for item in observations if item.get("kind") == "SIDE"], "component_results": component_results, "media": media, "quality_issues": sorted(set(quality)), "verdict": None}
+    return {**scene, "components": sorted(components), "peak": peak, "observations": observations, "sources": sources, "edge_peaks": [item for item in observations if item.get("kind") == "SIDE"], "component_results": component_results, "media": media, "quality_issues": sorted(set(quality)), "verdict": None}
 
 
 def fingerprint(manifest: Any, recipe_version: str = "dashboard-v1") -> str:

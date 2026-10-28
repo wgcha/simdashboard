@@ -101,6 +101,8 @@ _STAGE_LEAVES = (
     ("result_registration_location_links", (("project_id", "project"), ("request_id", "request"))),
     ("result_registration_paths", (("project_id", "project"), ("request_id", "request"))),
     ("dashboard_assets", (("capture_id", "capture"),)),
+    # Per-Scene value summaries (migration 0047, issue #55) go with their capture.
+    ("dashboard_scene_summaries", (("capture_id", "capture"),)),
     ("dashboard_versions", (("dashboard_id", "dashboard"),)),
     ("dashboards", (("id", "dashboard"),)),
     ("validations", (("id", "validation"),)),
@@ -239,6 +241,7 @@ KEEP_COLUMNS = {
     ("dashboard_cases", "project_id"): "Cases of deleted projects/requests are deleted",
     ("dashboard_cases", "request_id"): "see dashboard_cases.project_id",
     ("dashboard_captures", "case_id"): "captures of deleted Cases are deleted",
+    ("dashboard_scene_summaries", "run_id"): "Run label inside a capture; summaries are deleted with their capture",
     ("result_registration_drafts", "project_id"): "drafts of deleted projects/requests/Cases/captures are deleted",
     ("result_registration_drafts", "request_id"): "see result_registration_drafts.project_id",
     ("result_registration_drafts", "case_id"): "see result_registration_drafts.project_id",

@@ -13,6 +13,7 @@ from app.services.dashboard_capture import (
     _walk,
     create_capture,
     find_asset,
+    attach_scene_values,
     get_capture,
 )
 from app.services.dashboard_queries import distribution
@@ -143,7 +144,7 @@ def test_capture_keeps_unrecognized_csv_in_manifest_and_asset_store(
         assert after_delete["id"] != with_excluded["id"]
         retained = get_capture(connection, with_excluded["id"])
         assert retained is not None and excluded_issue in retained["payload"]["quality_issues"]
-        capture = get_capture(connection, result["id"])
+        capture = attach_scene_values(connection, get_capture(connection, result["id"]))   # summary values (#55)
         assert capture is not None
         run = capture["payload"]["runs"][0]
         projected = distribution(capture, run["id"], run["mode"], "C23", "REPORTED_SUMMARY", {"TOP"}, {1, 2, 3, 4})

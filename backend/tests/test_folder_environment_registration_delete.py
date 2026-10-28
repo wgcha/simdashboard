@@ -88,6 +88,8 @@ def test_delete_removes_owned_business_data_and_keeps_spdm_tree(admin_client):
     assert targets["project_ids"] == [project_id] and targets["request_ids"] == [request_id]
     assert targets["case_ids"] == [job["case_id"]]
     before = _tree_state(root)
+    with connect() as conn:   # per-Scene value summaries of the capture (migration 0047, issue #55)
+        assert _count(conn, "dashboard_scene_summaries", "capture_id", job["capture_id"]) >= 1
 
     preview = _preview(client, [rid])
     item = preview["items"][0]
@@ -105,6 +107,7 @@ def test_delete_removes_owned_business_data_and_keeps_spdm_tree(admin_client):
         assert _count(conn, "dashboard_cases", "id", job["case_id"]) == 0
         assert _count(conn, "dashboard_captures", "id", job["capture_id"]) == 0
         assert _count(conn, "dashboard_assets", "capture_id", job["capture_id"]) == 0
+        assert _count(conn, "dashboard_scene_summaries", "capture_id", job["capture_id"]) == 0
         assert _count(conn, "folder_environment_registry", "registration_id", rid) == 0
         assert _count(conn, "folder_environment_capture_jobs", "registration_id", rid) == 0
         assert _count(conn, "product_information", "project_id", project_id) == 0

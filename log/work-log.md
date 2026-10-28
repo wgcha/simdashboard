@@ -2,6 +2,14 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-28 — 유통환경 수집: Scene 요약 + 원본 csv 온디맨드 파싱 (이슈 #55, 2단계)
+
+- 증상: 유통 Case 수집이 csv 값마다 관측 JSON을 `dashboard_captures.payload_json` 한 행에 저장(csv의 약 27배 이상) → 224 MB Case가 jsonb 256 MB 한도, 화면마다 전체 payload 로드. 0.3.2.4는 128 MiB 가드로 거절만 했다.
+- 변경: recipe `dashboard-v4`(유통만). 머리 payload에는 Run/Scene 목록·Scene별 csv 목록(asset id)만, 값은 새 표 `dashboard_scene_summaries`(migration 0047, 추가만, FK 없음)에 Scene마다 묶음별 최대·위치·개수로 저장. 조회 계층(`dashboard_queries`)은 관측 목록 대신 묶음으로 계산(옛 형식은 관측에서 같은 묶음을 만들어 같은 코드로 계산). Scene 상세는 원본 csv를 그때 파싱(`scene_summary`, LRU). 라우터 distribution·scene detail·comparison이 `attach_scene_values`로 필요한 Run/Scene만 읽음. 최종 지정(`case_finalization`)은 Scene `sources` 경로도 사용. API 응답 형태 변경 없음(OpenAPI·프런트 변경 없음).
+- DB: 0047 + DuckDB `ensure_dashboard_scene_summaries_schema`, 기동 필수 표·열 검사, 프로젝트 정리(`_STAGE_LEAVES`)·폴더 등록 삭제 계획·등록 초기화(프로젝트 정리 단계 경유) 대상.
+- 검증: 새 `test_dashboard_scene_summaries.py`(0.3.2.4 알고리즘 고정 사본과 비교한 골든 240조합, 상세 온디맨드 파싱 = 예전 상세, 요약 행 없음·동률 초과 시 csv 재파싱, 예전 형식 단독·신규와 병합 읽기, 큰 합성 Case 40 Scene·156,000 값: 예전 payload 93.8 MB → 머리 250 KB + 요약 304 KB, 행 최대 64 KB 미만, USAGE 불변, DuckDB 빈/기존 DB, 프로젝트 정리). dashboard_*·capture_size_guard·migration·startup·cleanup·reset·registration delete·finalization·result_registration 테스트 통과(기존 실패 2건: `test_catalog_uses_confirmed_schema…`, `test_too_large_job_stays_failed…`는 변경 전에도 실패).
+- 남은 점: 실제 PG18 migration(빈·기존 DB)·운영 Case·Windows 서버 검증 안 함. 업데이트 뒤 각 유통 Case의 다음 받기가 새 capture를 만들며 원본 자산(영상 포함)을 한 번 더 저장한다(기존 동작과 같은 버전 증가). 머리 payload의 Scene별 csv 경로 목록은 Scene·csv 수에 비례(합성 40 Scene에서 250 KB).
+
 ## 2026-10-28 — 결과 대시보드: 폴더 등록 Case 기준 집계
 
 - 증상: 결과 대시보드의 기준 미충족/결과 보유/결과 대기가 모두 0. 집계가 옛 `load_cases` → `analysis_runs` → `scalar_results`만 읽는데 폴더 등록은 하중 경우를 만들지 않는다.

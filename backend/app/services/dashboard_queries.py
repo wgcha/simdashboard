@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import math
 from typing import Any
 
+from ..domains.dashboard import scene_summary
 from ..domains.dashboard.parser import scene_sequence_label, scene_sequence_number, scene_sort_key
-from ..domains.dashboard.units import stress_unit, unit_system
+from ..domains.dashboard.units import stress_unit, stress_unit_of, unit_system
 from .dashboard_capture import DashboardCaptureError, _decode
 
 EDGES = {"LEFT": "LH", "RIGHT": "RH", "TOP": "TOP", "BOTTOM": "BOT"}
@@ -56,14 +56,29 @@ def context_key(context):
         "execution_run_id", "run_option_id", "mode", "capture_id", "component_id", "basis", "scene_id"))
 
 
-def number(value):
-    if isinstance(value, bool):
-        return None
-    try:
-        result = float(value)
-        return result if math.isfinite(result) else None
-    except (TypeError, ValueError):
-        return None
+number = scene_summary.finite_number
+ALL_LINES = frozenset({1, 2, 3, 4})
+
+
+def scene_groups(scene):
+    """Value groups of a Scene: from its observations (old captures, on-demand detail) or its summary.
+
+    A summary Scene (``values_storage``) must have been loaded by ``dashboard_capture.attach_scene_values``.
+    """
+    if "observations" in scene:
+        return scene_summary.groups_from_observations(scene.get("observations") or [])
+    if "_groups" in scene:
+        return scene["_groups"]
+    if scene.get("values_storage") == scene_summary.VALUES_STORAGE:
+        raise DashboardCaptureError("DASHBOARD_VALUES_NOT_LOADED", "Scene 결과값을 불러오지 못했습니다.")
+    return {}
+
+
+def scene_value_components(scene):
+    """Components with values in a Scene (catalog ``has_values``)."""
+    if "observations" not in scene and "value_components" in scene:
+        return {str(item) for item in scene.get("value_components") or [] if item}
+    return {o["component_id"] for o in scene.get("observations", []) if o.get("component_id")}
 
 
 def option_projection(run, capture_id):
@@ -280,7 +295,7 @@ def catalog(conn, request_id, environment, project_id=None):
                     "label": str(scene.get("source_name") or scene.get("label") or scene.get("id") or "Scene"),
                     **scope,
                 })
-            with_values = {o["component_id"] for s in run["scenes"] for o in s.get("observations", []) if o.get("component_id")}
+            with_values = {c for s in run["scenes"] for c in scene_value_components(s)}
             media_only = {m["component_id"] for s in run["scenes"] for m in s.get("media", []) if m.get("component_id")} - with_values
             # Components with values come first so the screen's default shows numbers,
             # not a media-only component (each item says whether it has values).
@@ -432,7 +447,8 @@ def select_run(capture, run_id, mode, component, basis, run_option_id=None):
     if len(runs) != 1:
         fail("선택 Run/Mode와 수집 버전이 일치하지 않습니다.")
     run = runs[0]
-    all_components = {o.get("component_id") for s in run["scenes"] for o in [*s.get("observations", []), *s.get("media", [])]}
+    all_components = ({c for s in run["scenes"] for c in scene_value_components(s)}
+                      | {o.get("component_id") for s in run["scenes"] for o in [*s.get("observations", []), *s.get("media", [])]})
     if component not in all_components:
         fail("선택 Component가 해당 Run/Mode에 없습니다.")
     option_id, option_label, option_status = option_projection(run, capture["id"])
@@ -461,16 +477,38 @@ def peak(values, *, complete=False, basis=None, scope=None):
             "source_refs": [o.get("source_ref", {"row": o.get("row"), "column": o.get("column")}) for o in locations]}
 
 
-def scene_edges(scene, component, basis, lines, member_id):
-    source = observations(scene, component, basis, lines)
+def group_peak(groups, *, complete=False, basis=None, scope=None):
+    """``peak`` of the observations of these groups, from their reduced form (same value, locations, unit)."""
+    present = [g for g in groups if g is not None and g.maximum is not None]
+    maximum = max((g.maximum for g in present), default=None)
+    ranked = sorted((location for g in present if g.maximum == maximum for location in g.locations),
+                    key=lambda location: location[0])
+    locations = [observation for _sequence, observation in ranked]
+    unit, unit_status = stress_unit_of({unit for g in present for unit in g.units})
+    return {"value": maximum, "unit": unit, "unit_status": unit_status, "basis": basis, "scope": scope,
+            "status": "MISSING" if maximum is None else "READY" if complete else "PARTIAL",
+            "completeness": "COMPLETE" if complete else "PARTIAL", "locations": locations,
+            "source_refs": [o.get("source_ref", {"row": o.get("row"), "column": o.get("column")}) for o in locations]}
+
+
+def scene_edges(scene, component, basis, lines, member_id, groups=None):
+    groups = scene_groups(scene) if groups is None else groups
     result = []
     for edge, position in EDGES.items():
-        vals = [o for o in source if o.get("kind") == "SIDE" and o.get("position") == position]
-        complete = all(any(o.get("line_index") == line and number(o.get("value")) is not None for o in vals) for line in lines)
-        complete = complete and bool(lines) and all(number(o.get("value")) is not None for o in vals)
-        result.append({**peak(vals, complete=complete, basis=basis, scope="SELECTED_EDGE_LINES"), "edge": edge,
+        selected = [groups.get((component, basis, "SIDE", position, line)) for line in lines]
+        present = [g for g in selected if g is not None]
+        complete = all(g is not None and g.numeric > 0 for g in selected)
+        complete = complete and bool(lines) and all(g.numeric == g.count for g in present)
+        result.append({**group_peak(present, complete=complete, basis=basis, scope="SELECTED_EDGE_LINES"), "edge": edge,
                        "scene_id": scene["id"], "member_id": member_id})
     return result
+
+
+def extracted_groups(groups, component, basis, lines):
+    """Groups of ``observations(scene, component, basis, lines)``, SIDE only unless every line is selected."""
+    every_line = set(lines) == ALL_LINES
+    return [g for key, g in groups.items() if key[0] == component and key[1] == basis
+            and (key[2] == "CORNER" or key[4] in lines) and (every_line or key[2] == "SIDE")]
 
 
 def scene_name(scene):
@@ -519,13 +557,11 @@ def distribution(capture, run_id, mode, component, basis, edges, lines, run_opti
     for scene in ordered_scenes(run["scenes"]):
         public = scene_public(scene)
         result["scenes"].append(public)
-        values = scene_edges(scene, component, basis, lines, member_id)
+        groups = scene_groups(scene)
+        values = scene_edges(scene, component, basis, lines, member_id, groups)
         result["edge_peaks"].extend(values)
-        extracted = observations(scene, component, basis, lines)
-        if lines != {1, 2, 3, 4}:
-            extracted = [o for o in extracted if o.get("kind") == "SIDE"]
-        extracted_peak = peak(
-            extracted,
+        extracted_peak = group_peak(
+            extracted_groups(groups, component, basis, lines),
             basis=basis,
             scope="EXTRACTED_SIDES_AND_CORNERS" if lines == {1, 2, 3, 4} else "EXTRACTED_SELECTED_LINES",
         )
@@ -596,6 +632,9 @@ def scene_detail(capture, scene_id, run_id, mode, component, basis, lines, posit
     if len(found) != 1:
         fail("선택 Scene이 해당 Run/Mode/capture에 없습니다.")
     scene = found[0]
+    if "observations" not in scene and scene.get("values_storage") == scene_summary.VALUES_STORAGE:
+        # Summary captures (issue #55): the router parses this Scene's csv files on demand first.
+        raise DashboardCaptureError("DASHBOARD_VALUES_NOT_LOADED", "Scene 상세 결과값을 불러오지 못했습니다.")
     context = {**context, "scene_id": scene_id}
     context["context_key"] = context_key(context)
     source = observations(scene, component, "DETAIL", lines)

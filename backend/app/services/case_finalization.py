@@ -370,6 +370,8 @@ def _latest_scene_owners(merged: dict[str, Any], captures: dict[str, dict[str, A
         if source not in captures:
             continue
         files = [str(item.get("source_path") or "") for item in scene.get("observations") or [] if isinstance(item, dict)]
+        # Summary captures (issue #55, dashboard-v4) list the Scene's csv files instead of every value.
+        files += [str(item.get("path") or "") for item in scene.get("sources") or [] if isinstance(item, dict)]
         files += [str(item.get("relative_path") or "") for item in scene.get("media") or [] if isinstance(item, dict)]
         matched = [path for path in current_paths if any(name and _under(path, name) for name in files)]
         if not matched:

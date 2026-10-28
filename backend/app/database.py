@@ -90,6 +90,7 @@ def initialize_database() -> None:
                 "folder_project_links",
                 "folder_discovery_exclusions",
                 "materials_preparations",
+                "dashboard_scene_summaries",
             )
             missing = [
                 table_name
@@ -159,6 +160,8 @@ def initialize_database() -> None:
                                            "source_rel_path", "files_json", "warnings_json", "deck_json", "error_code",
                                            "error_message", "attempts", "checked_at", "prepared_at", "created_at",
                                            "updated_at"},
+                "dashboard_scene_summaries": {"id", "capture_id", "scene_id", "run_id", "run_option_id",
+                                              "format_version", "observation_count", "summary_json", "created_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }
             incompatible = []
@@ -1298,7 +1301,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_folder_discovery_links_schema(conn)
         ensure_materials_preparations_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
-        ensure_dashboard_schema(conn)
+        ensure_dashboard_schema(conn)   # includes dashboard_scene_summaries (migration 0047)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)
@@ -1696,6 +1699,16 @@ def ensure_materials_preparations_schema(conn: duckdb.DuckDBPyConnection) -> Non
         UNIQUE (root_key, request_id, environment, scene_key)
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS materials_preparations_work ON materials_preparations (status, needs_check)")
+
+
+def ensure_dashboard_scene_summaries_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0047 (per-Scene value summaries, issue #55)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS dashboard_scene_summaries (
+        id VARCHAR PRIMARY KEY, capture_id VARCHAR NOT NULL, scene_id VARCHAR NOT NULL, run_id VARCHAR NOT NULL,
+        run_option_id VARCHAR NOT NULL, format_version INTEGER NOT NULL, observation_count INTEGER NOT NULL,
+        summary_json VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
+        UNIQUE (capture_id, scene_id, run_id, run_option_id)
+    )""")
 
 
 def ensure_folder_registration_delete_schema(conn: duckdb.DuckDBPyConnection) -> None:

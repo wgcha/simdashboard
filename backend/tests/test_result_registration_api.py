@@ -653,7 +653,10 @@ def test_distribution_inspection_and_capture_keep_metric_scene_and_media_context
         decoded_payload = json.loads(payload) if isinstance(payload, str) else payload
         scenes = [scene for run in decoded_payload["runs"] for scene in run["scenes"]]
         assert len(scenes) == 1
-        assert len(scenes[0]["observations"]) == 4
+        # Issue #55 (dashboard-v4): the header lists the csv files; the values are in the Scene summary.
+        assert "observations" not in scenes[0] and sum(item["observations"] for item in scenes[0]["sources"]) == 4
+        assert conn.execute("SELECT observation_count FROM dashboard_scene_summaries WHERE capture_id=?",
+                            [result["capture_id"]]).fetchall() == [(4,)]
         assert len(scenes[0]["media"]) == 1
         assert conn.execute("SELECT count(*) FROM dashboard_assets WHERE capture_id=?", [result["capture_id"]]).fetchone()[0] == 2
     assert (root / prepared["result_relative_path"] / csv_path).read_bytes() == csv_bytes

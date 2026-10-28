@@ -216,7 +216,7 @@ def distribution(run_id: str, request: Request, capture_id: str, mode: str, comp
     if not edges.issubset(queries.EDGES):
         raise HTTPException(422, "엣지 선택이 올바르지 않습니다.")
     with connect() as conn:
-        capture = capture_for_read(conn, request, capture_id)
+        capture = storage.attach_scene_values(conn, capture_for_read(conn, request, capture_id), run_id=run_id)
         try:
             return queries.distribution(capture, run_id, mode, component_id, basis, edges, lines_from(line_indices), run_option_id)
         except storage.DashboardCaptureError as exc:
@@ -241,7 +241,9 @@ def scene_detail(scene_id: str, request: Request, capture_id: str, run_id: str, 
                  basis: Literal["DETAIL", "REPORTED_SUMMARY"], line_indices: str = "1,2,3,4",
                  position: Literal["TOP", "BOT", "LH", "RH"] = "TOP", run_option_id: str | None = None):
     with connect() as conn:
-        capture = capture_for_read(conn, request, capture_id)
+        # Detail values are parsed on demand from this Scene's original csv files (issue #55).
+        capture = storage.attach_scene_values(conn, capture_for_read(conn, request, capture_id), run_id=run_id,
+                                              scene_id=scene_id, detail=True, component_id=component_id)
         try:
             return queries.scene_detail(capture, scene_id, run_id, mode, component_id, basis, lines_from(line_indices), position, run_option_id)
         except storage.DashboardCaptureError as exc:
@@ -256,7 +258,8 @@ def comparison(payload: ComparisonInput, request: Request):
     parts, ids = [], set()
     with connect() as conn:
         for member in payload.members:
-            capture = capture_for_read(conn, request, member.capture_id)
+            capture = storage.attach_scene_values(conn, capture_for_read(conn, request, member.capture_id),
+                                                  run_id=member.execution_run_id)
             if capture["case_id"] != member.simulation_case_id or member.simulation_case_id in ids:
                 raise HTTPException(422, "Case별로 정확한 수집 버전을 하나씩 선택하세요.")
             ids.add(member.simulation_case_id)

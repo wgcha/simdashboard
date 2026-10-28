@@ -432,6 +432,8 @@ _ALL_COLUMNS = sorted({
     "excluded_by", "excluded_at",
     # materials prepared per request Scene (migration 0046)
     "scene_key", "needs_check", "source_rel_path", "files_json", "warnings_json", "checked_at", "prepared_at",
+    # per-Scene value summaries (migration 0047)
+    "scene_id", "run_id", "run_option_id", "format_version", "observation_count", "summary_json",
 })
 
 

@@ -56,6 +56,16 @@ C23/C24를 Cell/Cushion/Box 또는 Upper/Lower로 추정하지 않는다. 거동
 
 현재 수집 제한은 파일당 32 MiB, 한 버전 합계 256 MiB, 10,000개 파일이다. CSV는 파일당 100,000행, Scene당 정규화 관측값 400,000개까지 읽는다. 500 MiB 영상 수집을 지원한다고 간주하지 않는다. 원본을 이동·재작성하지 않으며 진행 중이거나 안전하게 읽을 수 없는 파일은 게시를 중단한다. 한도를 늘릴 때는 DB·메모리·백업 영향을 함께 검토한다.
 
+### 유통환경 값 저장: Scene 요약 + 원본 csv (이슈 #55, recipe `dashboard-v4`)
+
+예전 유통 수집은 csv 값 하나하나를 관측 JSON으로 `payload_json` 한 행에 담아(csv 크기의 약 27배 이상) 큰 Case가 PostgreSQL jsonb 256 MB 한도에 걸렸다. 새 수집은 다음처럼 나눠 저장한다.
+
+- `dashboard_captures.payload_json`: 머리 정보만(문맥, Run/Scene 목록, 품질 이슈, 미디어, Scene별 csv 목록 `sources`(경로·asset id·component·basis·상태·값 개수), 값이 있는 component `value_components`, `values_storage="SCENE_SUMMARY_V1"`).
+- `dashboard_scene_summaries`(migration 0047, 추가만): (capture, Run, Run option, Scene)마다 한 행. (component, basis, kind, position, line) 묶음별 값 개수·숫자 개수·최댓값·최댓값 위치(동률 32개까지)·명시 단위. 화면의 엣지 최대·선택 엔벌로프·완전성·위치 최대는 모두 이 묶음으로 계산되어 예전과 같은 수치가 나온다. 동률이 32개를 넘는 묶음이나 요약 행이 없는 Scene은 원본 csv를 다시 읽어 계산한다.
+- 상세(라인 분포·코너 점)는 Scene 상세를 열 때 그 Scene·component의 원본 csv(`dashboard_assets`에 이미 한 번 저장된 바이트)를 다시 파싱한다(프로세스 내 LRU).
+- 예전 형식 수집(관측값이 `payload_json`에 있음)은 그대로 읽으며 데이터 이관은 없다. 같은 Case를 다시 받으면 새 형식이 된다. 사용환경(USAGE) 수집은 값이 평가별 작은 JSON이라 바꾸지 않았다(`dashboard-v3` 유지).
+- 요약 행은 capture와 함께 프로젝트 정리·폴더 등록 삭제·등록 초기화로 지워진다.
+
 ## 구조와 배포
 
 | 책임 | 구현 |
@@ -64,7 +74,8 @@ C23/C24를 Cell/Cushion/Box 또는 Upper/Lower로 추정하지 않는다. 거동
 | 폴더 조사·불변 수집 | `backend/app/services/dashboard_capture.py` |
 | 집계·사용환경·Case 비교 조회 | `backend/app/services/dashboard_queries.py` |
 | 권한·게시 트랜잭션·자산 요청 | `backend/app/routers/dashboard.py` |
-| 저장 구조 | `0029_dashboard_captures` migration; `dashboard_cases`, `dashboard_captures`, `dashboard_assets` |
+| 저장 구조 | `0029_dashboard_captures` migration; `dashboard_cases`, `dashboard_captures`, `dashboard_assets`; `0047_dashboard_scene_summaries` (Scene별 요약) |
+| Scene 요약·상세 재파싱 | `backend/app/domains/dashboard/scene_summary.py` |
 | 화면·API 연결 | `frontend/src/features/results/SimulationDashboard.tsx`, `frontend/src/shared/api/simulationDashboard.ts` |
 
 신규 외부 의존성은 없다. 최초 설치는 `deploy.bat`, 기존 설치 업데이트는 `update.bat`을 유지한다. 기존 DB는 검증된 백업 뒤 migration 0029를 적용하며 앱 시작은 스키마를 검사만 한다. DB 원본 자산도 전체 DB 백업 범위에 포함된다. 이번 작업에서 실제 사용자 DB와 설정을 변경하거나 운영 배포하지 않았다.
