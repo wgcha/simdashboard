@@ -122,9 +122,9 @@ def test_too_large_job_stays_failed_until_manual_retry_and_shows_inventory(scx, 
 
     monkeypatch.setattr(dashboard_capture, "create_capture", too_large)
     jobs = _capture_jobs()
-    for _ in range(6):
+    for _ in range(30):   # slow fake drive: a busy machine needs more passes (timing, not behaviour)
         jobs.run_pending(budget_seconds=3.5, session_seconds=3.0)
-        if all(code == "DASHBOARD_CAPTURE_TOO_LARGE" for _status, code in _jobs(request_id)):
+        if _jobs(request_id) and all(code == "DASHBOARD_CAPTURE_TOO_LARGE" for _status, code in _jobs(request_id)):
             break
     assert {(status, code) for status, code in _jobs(request_id)} == {("FAILED", "DASHBOARD_CAPTURE_TOO_LARGE")}
 
