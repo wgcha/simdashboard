@@ -1,7 +1,7 @@
 import { Download, RotateCcw, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { OPEN_CAPTURE_JOBS_EVENT, type OpenCaptureJobsDetail } from '../../shared/events/captureJobs'
-import { folderEnvironmentApi, type CaptureJobItem, type CaptureJobStatus, type CaptureJobsState } from '../../shared/api/folderEnvironment'
+import { folderEnvironmentApi, type CaptureInventory, type CaptureJobItem, type CaptureJobStatus, type CaptureJobsState } from '../../shared/api/folderEnvironment'
 
 const POLL_MS = 4000
 const STATUS_LABEL: Record<CaptureJobStatus, string> = { RUNNING: '받는 중', PENDING: '대기', COMPLETED: '완료', FAILED: '실패' }
@@ -30,6 +30,23 @@ function progressText(item: CaptureJobItem): string {
   if (item.status === 'PENDING') return '순서를 기다립니다. 백그라운드에서 이어서 받습니다.'
   if (item.status === 'FAILED') return item.error_message || `결과를 받지 못했습니다${item.error_code ? ` (${item.error_code})` : ''}.`
   return ''
+}
+
+/** 펼침 상세(issue #55): 받은 파일(종류별) · 제외된 파일(사유별) · 결과 크기. 서버 메모리의 마지막 시도 기록이라 재시작 뒤에는 없을 수 있다. */
+function InventoryDetail({ inventory }: { inventory: CaptureInventory }) {
+  return <details className="storage-capture-inventory" data-testid="capture-job-inventory">
+    <summary>받은 파일 · 제외된 파일 · 결과 크기</summary>
+    <p><strong>받은 파일</strong> {inventory.taken_total.count}개 · {bytesText(inventory.taken_total.bytes)}</p>
+    {inventory.taken.length > 0 && <ul>{inventory.taken.map((entry) => <li key={entry.extension}>{entry.extension} {entry.count}개 · {bytesText(entry.bytes)}</li>)}</ul>}
+    <p><strong>제외된 파일</strong> {inventory.skipped_total.count}개{inventory.skipped_total.bytes ? ` · ${bytesText(inventory.skipped_total.bytes)}` : ''}</p>
+    {inventory.skipped.length > 0 && <ul>{inventory.skipped.map((entry) => <li key={entry.reason}>
+      {entry.label} {entry.count}개{entry.bytes ? ` · ${bytesText(entry.bytes)}` : ''}
+      {Object.keys(entry.extensions).length > 0 ? ` (${Object.entries(entry.extensions).map(([extension, count]) => `${extension} ${count}`).join(', ')})` : ''}
+    </li>)}</ul>}
+    <p><strong>결과 크기</strong> {inventory.payload_bytes == null ? '계산 전' : `${bytesText(inventory.payload_bytes)} (한도 ${bytesText(inventory.limits.payload_bytes)})`}
+      {inventory.observation_count != null ? ` · 읽은 값 ${inventory.observation_count.toLocaleString('ko-KR')}개` : ''}</p>
+    {inventory.top_sources.length > 0 && <ul>{inventory.top_sources.map((entry) => <li key={entry.path}>{entry.path} · {entry.observations.toLocaleString('ko-KR')}개 · 약 {bytesText(entry.approx_bytes)}</li>)}</ul>}
+  </details>
 }
 
 /**
@@ -97,6 +114,7 @@ export function CaptureJobsPanel({ refreshKey }: { refreshKey?: string }) {
           <strong><span className={`storage-capture-chip is-${item.status.toLowerCase()}`}>{STATUS_LABEL[item.status]}</span> {item.project_name ? `${item.project_name} / ` : ''}{item.request_name || item.request_id}{item.environment ? ` (${ENVIRONMENT_LABEL[item.environment] ?? item.environment})` : ''}</strong>
           <code>{item.case_relative_path || item.case_id}</code>
           {progressText(item) && <span className={item.status === 'FAILED' ? 'storage-rescan-error' : undefined}>{progressText(item)}</span>}
+          {item.inventory && <InventoryDetail inventory={item.inventory} />}
           <small>요청 {timeText(item.created_at)} · 최근 변경 {timeText(item.updated_at)}{item.status === 'FAILED' && item.error_code ? ` · ${item.error_code}` : ''}</small>
           {item.status === 'FAILED' && <button type="button" className="ghost-button storage-rescan-item-action" disabled={retrying !== null} onClick={() => void retry(item)}><RotateCcw /> 다시 시도</button>}
         </li>)}

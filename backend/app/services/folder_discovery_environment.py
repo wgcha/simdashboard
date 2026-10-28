@@ -25,6 +25,7 @@ from .folder_discovery_scan import incomplete_message, issue_summary, limits_for
 from .environment_folder_profiles import resolve_role
 from . import usage_source_review
 from . import notifications
+from . import capture_jobs
 
 ENVIRONMENTS = ("USAGE", "DISTRIBUTION")
 ROLES = {
@@ -1592,8 +1593,10 @@ def enqueue_capture(conn, registration_id: str, case_id: str) -> str:
     found = conn.execute("SELECT id FROM folder_environment_capture_jobs WHERE registration_id=? AND case_id=? "
                          "ORDER BY created_at LIMIT 1", [registration_id, case_id]).fetchone()
     if found:
+        # A Case that is too large stays FAILED until the manual retry (a refresh must not loop it).
         conn.execute("UPDATE folder_environment_capture_jobs SET status='PENDING',error_code=NULL,updated_at=? "
-                     "WHERE id=? AND status<>'PENDING'", [now(), found[0]])
+                     "WHERE id=? AND status<>'PENDING' AND NOT (status='FAILED' AND error_code=?)",
+                     [now(), found[0], dashboard_capture.capture_inventory.TOO_LARGE_CODE])
         return str(found[0])
     job_id = ident("environment-capture-job")
     conn.execute("INSERT INTO folder_environment_capture_jobs(id,registration_id,case_id,load_case_id,run_case_id,"
@@ -2068,18 +2071,23 @@ def capture_job(conn, job_id: str, root, *, actor: str, cache: dict | None = Non
         conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',error_code=NULL,capture_id=?,updated_at=? "
                      "WHERE id=?", [result["id"], now(), job_id])
         conn.execute("COMMIT")
+        capture_jobs.record_inventory(job_id, result.get("inventory"))
         return {"status": "COMPLETED", "capture_id": result["id"]}
     except dashboard_capture.DashboardCaptureError as exc:
         conn.execute("ROLLBACK")
         conn.execute("BEGIN TRANSACTION")
         outcome = interrupted(exc.code) if _interrupted(exc.code) else finish("FAILED", exc.code)
         conn.execute("COMMIT")
+        if outcome["status"] == "FAILED":
+            capture_jobs.record_inventory(job_id, exc.inventory, str(exc) if exc.code == dashboard_capture.capture_inventory.TOO_LARGE_CODE else None)
         return outcome
-    except Exception:  # noqa: BLE001 - one Case never stops the others
+    except Exception as exc:  # noqa: BLE001 - one Case never stops the others
         conn.execute("ROLLBACK")
         _logger.warning("Capture job failed unexpectedly job=%s", job_id, exc_info=True)
         conn.execute("BEGIN TRANSACTION")
-        outcome = finish("FAILED", "CAPTURE_UNEXPECTED_ERROR")
+        # Defensive: a database size limit that the guard did not foresee is the same failure, not "unexpected".
+        code = dashboard_capture.capture_inventory.TOO_LARGE_CODE if dashboard_capture._is_db_size_limit(exc) else "CAPTURE_UNEXPECTED_ERROR"
+        outcome = finish("FAILED", code)
         conn.execute("COMMIT")
         return outcome
     except BaseException:   # DriveReadMiss: the session downloads and repeats the body

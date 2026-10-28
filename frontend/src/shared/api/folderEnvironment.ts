@@ -75,6 +75,18 @@ export type FolderExclusionResult = { excluded?: string[]; restored?: string[]; 
 export type StorageRescanFailure = { project_id: string; project_name: string; request_id: string; request_name: string; environment: string; code: string; message: string }
 /** One SCX drive capture job (결과 받기) of GET /api/folder-discovery/environments/capture-jobs (global administrators, issue #55). */
 export type CaptureJobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+/** What the last capture attempt of a job took / skipped and how big its result was (in the server's memory; absent after a restart). */
+export type CaptureInventory = {
+  case_path: string; outcome: string; message?: string
+  taken: { extension: string; count: number; bytes: number }[]
+  taken_total: { count: number; bytes: number }
+  skipped: { reason: string; label: string; count: number; bytes: number; extensions: Record<string, number>; examples: string[] }[]
+  skipped_total: { count: number; bytes: number }
+  observation_count: number | null; payload_bytes: number | null; manifest_bytes: number | null
+  top_sources: { path: string; observations: number; approx_bytes: number }[]
+  top_media: { path: string; bytes: number }[]
+  limits: { payload_bytes: number; asset_total_bytes: number }
+}
 export type CaptureJobItem = {
   job_id: string; registration_id: string; case_id: string; status: CaptureJobStatus
   error_code: string | null; error_message: string | null
@@ -83,6 +95,7 @@ export type CaptureJobItem = {
   project_name: string | null; request_name: string | null; case_relative_path: string | null
   /** RUNNING only: this run's downloaded files and bytes (in the server's memory) and the file being downloaded. */
   progress: { files: number; bytes: number; reused_files: number; current_file: string | null; current_size: number | null; started_at: string } | null
+  inventory?: CaptureInventory | null
 }
 export type CaptureJobsState = {
   totals: { total: number; pending: number; running: number; completed: number; failed: number }

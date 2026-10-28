@@ -115,10 +115,43 @@ def live_progress() -> dict[str, dict[str, Any]]:
         return {key: dict(value) for key, value in _live.items()}
 
 
+# --- file inventory of the last attempt of each job (in memory, this process only; no migration) -----
+
+_INVENTORY_KEEP = 1000
+_inventory_lock = threading.Lock()
+_inventories: dict[str, dict[str, Any]] = {}
+
+
+def record_inventory(job_id: str, inventory: dict[str, Any] | None, message: str | None = None) -> None:
+    """Keep what the job's last capture attempt took / skipped / how big the result was (결과 받기 상태 detail)."""
+    if not inventory:
+        return
+    entry = {**inventory, "recorded_at": _now_iso().isoformat()}
+    if message:
+        entry["message"] = message
+    with _inventory_lock:
+        _inventories.pop(job_id, None)
+        _inventories[job_id] = entry
+        while len(_inventories) > _INVENTORY_KEEP:
+            _inventories.pop(next(iter(_inventories)))
+
+
+def job_inventory(job_id: str) -> dict[str, Any] | None:
+    with _inventory_lock:
+        found = _inventories.get(job_id)
+        return dict(found) if found else None
+
+
+# Failures a newer version does not fix by itself: they stay FAILED until a manual retry (never re-queued by
+# a folder check / refresh / server start).
+NO_AUTO_RETRY_CODES = ("DASHBOARD_CAPTURE_TOO_LARGE",)
+
+
 # Plain Korean text of the error codes a capture job can end with (shown in 결과 받기 상태).
 ERROR_MESSAGES = {
     "ENVIRONMENT_ROOT_CHANGED": "저장소 루트가 바뀌어 받지 못했습니다. 저장 폴더를 다시 확인한 뒤 다시 시도하세요.",
     "DASHBOARD_CASE_INVALID": "Case 폴더 구조를 확인할 수 없습니다. 폴더 이름과 깊이 스키마를 확인하세요.",
+    "DASHBOARD_CAPTURE_TOO_LARGE": "결과가 너무 커서 저장하지 않았습니다. Case를 나누거나 큰 파일을 줄인 뒤 직접 다시 시도하세요(자동으로 다시 시도하지 않습니다).",
     "CAPTURE_UNEXPECTED_ERROR": "결과를 읽는 중 예상하지 못한 오류가 났습니다. 다시 시도하세요.",
     "DRIVE_READ_NOT_PREPARED": "드라이브 자료를 아직 준비하지 못했습니다. 다시 시도하세요.",
     "SPDM_FILE_BUSY": "다른 프로그램이 파일을 사용 중이어서 받지 못했습니다. 다시 시도하세요.",
@@ -159,9 +192,12 @@ def list_jobs(conn, *, status: str | None = None, limit: int = 300) -> dict[str,
             continue
         code = str(row[4]) if row[4] else None
         progress = live.get(job_id)
+        inventory = job_inventory(job_id)
+        detail = (inventory or {}).get("message") if state == "FAILED" else None
         items.append({
             "job_id": job_id, "registration_id": str(row[1]), "case_id": str(row[2]), "status": state,
-            "error_code": code, "error_message": error_message(code) if state == "FAILED" else None,
+            "error_code": code, "error_message": (detail or error_message(code)) if state == "FAILED" else None,
+            "inventory": inventory,
             "created_at": row[5], "updated_at": row[6], "project_id": row[7], "request_id": row[8],
             "environment": str(row[9]) if row[9] else None, "project_name": row[10], "request_name": row[11],
             "case_relative_path": row[12],

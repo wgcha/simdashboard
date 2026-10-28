@@ -12,7 +12,7 @@ from typing import Any
 
 from ..database_connection import ConnectionLike, rows
 from ..domains.dashboard.parser import EVALUATIONS, _pick_usage, build_distribution_scene, fingerprint, scene_sort_key
-from . import spdm_storage
+from . import capture_inventory, spdm_storage
 from . import usage_source_review
 from .storage import get_storage_provider, provider_for_root
 from .storage.local import LocalFsProvider
@@ -38,8 +38,10 @@ def _is_load_case_name(name: str, kinds: set[str]) -> bool:
 
 
 class DashboardCaptureError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, inventory: dict[str, Any] | None = None) -> None:
         self.code = code
+        # Issue #55: what the attempt took / skipped (capture_inventory), kept with the capture job.
+        self.inventory = inventory
         super().__init__(message)
 
 
@@ -210,8 +212,19 @@ def _walk(
     issues: list[str] | None = None,
     include_path=None,
     excluded_files: list[dict[str, str]] | None = None,
+    skipped: list[dict[str, Any]] | None = None,
 ) -> list[tuple[str, bytes, str]]:
     from .drive import reads as drive_reads
+
+    def note(path: Any, reason: str, size: int | None = None) -> None:
+        # Issue #55: every file the capture does not take is counted per reason (capture_inventory).
+        if skipped is not None and len(skipped) < 20000:
+            if size is None and not drive_reads.active():
+                try:   # local listings are not stat'ed; a drive listing carries the size (no extra drive read here)
+                    size = fs.stat(path, follow_links=False, missing_ok=True).size
+                except Exception:  # noqa: BLE001 - a size is only informational
+                    size = 0
+            skipped.append({"path": _safe_issue_path(root, fs.path(path)), "reason": reason, "size": int(size or 0)})
 
     # SCX drive (D2): have the Case's capture files downloaded before reading (no-op in local mode).
     drive_reads.require_content([relative])
@@ -242,6 +255,7 @@ def _walk(
                 if entry.name.casefold() in excluded:
                     if issues is not None:
                         issues.append(_unprocessed_issue(root, fs.path(child), "EXCLUDED_DIRECTORY"))
+                    note(child, "EXCLUDED_DIRECTORY")
                     continue
                 if drive_mode and not spdm_storage._valid_windows_name(entry.name):
                     # Issue #55 (SCX drive): a drive name this Windows server cannot hold (and the
@@ -252,6 +266,7 @@ def _walk(
                         raise DashboardCaptureError("DASHBOARD_PATH_INVALID",
                                                     f"이 서버에서 쓸 수 없는 이름입니다: {_safe_issue_relative(child)}")
                     issues.append(f"UNPROCESSED_FILE:{_safe_issue_relative(child)}:NAME_NOT_LOCAL_SAFE")
+                    note(child, "NAME_NOT_LOCAL_SAFE", getattr(entry, "size", None))
                     continue
                 fs.assert_safe(child)
                 if entry.kind == "dir":
@@ -262,10 +277,13 @@ def _walk(
                         items.append(child)
                         if len(items) > 10000:
                             raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "결과 파일 수 제한을 초과했습니다.")
-                    elif excluded_files is not None:
-                        excluded_files.append({"relative_path": _safe_issue_relative(relative_path), "reason": "FORMAT_OR_PATTERN_EXCLUDED"})
-                    elif issues is not None:
-                        issues.append(_unprocessed_issue(root, fs.path(child), "UNSUPPORTED_EXTENSION"))
+                    else:
+                        note(child, "UNSUPPORTED_EXTENSION" if PurePosixPath(entry.name).suffix.casefold() not in allowed
+                             else "FORMAT_OR_PATTERN_EXCLUDED", getattr(entry, "size", None))
+                        if excluded_files is not None:
+                            excluded_files.append({"relative_path": _safe_issue_relative(relative_path), "reason": "FORMAT_OR_PATTERN_EXCLUDED"})
+                        elif issues is not None:
+                            issues.append(_unprocessed_issue(root, fs.path(child), "UNSUPPORTED_EXTENSION"))
         result, total, signatures = [], 0, []
         for item in sorted(items, key=lambda path: fs.path(path).as_posix()):
             fs.assert_safe(item)
@@ -276,6 +294,7 @@ def _walk(
                 if issues is None or not drive_reads.active():
                     raise DashboardCaptureError("DASHBOARD_ASSET_TOO_LARGE", "원본 자산은 32 MiB 이하여야 합니다.")
                 issues.append(_unprocessed_issue(root, fs.path(item), "ASSET_TOO_LARGE"))
+                note(item, "ASSET_TOO_LARGE", signature_of(item)[0])
                 continue
             try:
                 data = fs.read_stable(item, max_bytes=min(MAX_ASSET_BYTES, MAX_TOTAL_BYTES - total))
@@ -287,6 +306,7 @@ def _walk(
                 _logger.warning("Capture skipped a drive file whose name cannot be stored on this server: %s",
                                 _safe_issue_relative(item))
                 issues.append(_unprocessed_issue(root, fs.path(item), "NAME_NOT_LOCAL_SAFE"))
+                note(item, "NAME_NOT_LOCAL_SAFE")
                 continue
             fs.assert_safe(item)
             signature = signature_of(item)
@@ -441,6 +461,7 @@ def create_capture(
             if total > MAX_TOTAL_BYTES:
                 raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "수집 버전은 256 MiB 이하여야 합니다.")
     walk_issues: list[str] = []
+    walk_skipped: list[dict[str, Any]] = []
     review_contract = payload.get("usage_source_review") if payload.get("environment") == "USAGE" else None
     review_selection = usage_source_review.selection(review_contract.get("selection") if isinstance(review_contract, dict) else None)
     if approved_files is None:
@@ -453,7 +474,7 @@ def create_capture(
 
         files = _walk(root, relative, issues=walk_issues,
                       include_path=include_capture_path if review_contract or schema_scoped else None,
-                      excluded_files=[] if review_contract or schema_scoped else None)
+                      excluded_files=[] if review_contract or schema_scoped else None, skipped=walk_skipped)
         if review_contract and schema_scoped:
             review_files = [(path, data) for path, data, _ in files]
             # Re-run source review against the exact canonical locations;
@@ -473,6 +494,13 @@ def create_capture(
     else:
         files = sorted(approved_files, key=lambda item: item[0].casefold())
     manifest = [{"relative_path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "media_type": media_type} for path, data, media_type in files]
+    inventory = capture_inventory.start(relative, files, walk_skipped)
+    asset_limit = capture_inventory.max_asset_total_bytes()
+    if inventory["taken_total"]["bytes"] > asset_limit:
+        inventory["outcome"] = capture_inventory.TOO_LARGE_CODE
+        _logger.warning("%s", capture_inventory.log_line(inventory))
+        raise DashboardCaptureError(capture_inventory.TOO_LARGE_CODE,
+                                    capture_inventory.too_large_message(inventory, "assets"), inventory)
     recipe_version = "dashboard-v3"
     fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "component_id")}
     if payload.get("folder_schema_locations"):
@@ -498,7 +526,9 @@ def create_capture(
     existing = conn.execute("SELECT id,payload_json FROM dashboard_captures WHERE case_id=? AND fingerprint=?", [case_id, digest]).fetchone()
     if existing:
         old_payload = _decode(existing[1])
-        return {"id": str(existing[0]), "case_id": case_id, "fingerprint": digest, "status": old_payload.get("status", "READY"), "context": old_payload.get("context", payload), "payload": old_payload}
+        inventory["outcome"] = "UNCHANGED"
+        _logger.warning("%s", capture_inventory.log_line(inventory))
+        return {"id": str(existing[0]), "case_id": case_id, "fingerprint": digest, "status": old_payload.get("status", "READY"), "context": old_payload.get("context", payload), "payload": old_payload, "inventory": inventory}
 
     capture_id = _capture_id(case_id, digest)
     context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_display_name", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "capture_id", "component_id", "folder_schema_locations", "folder_schema_snapshot_id")}
@@ -539,10 +569,40 @@ def create_capture(
                     scene.pop(key, None)
         payload_json.pop("scenes", None)
         payload_json.pop("run", None)
-    conn.execute("INSERT INTO dashboard_captures(id,case_id,fingerprint,recipe_version,manifest_json,payload_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)", [capture_id, case_id, digest, recipe_version, _json(manifest), _json(payload_json), actor, _now()])
-    for asset_id, path, data, media_type, metadata in media_asset_ids:
-        conn.execute("INSERT INTO dashboard_assets(id,capture_id,relative_path,sha256,media_type,content,metadata_json) VALUES(?,?,?,?,?,?,?)", [asset_id, capture_id, path, metadata["sha256"], media_type, data, _json({"asset_id": asset_id, "relative_path": path})])
-    return {"id": capture_id, "case_id": case_id, "fingerprint": digest, "status": status, "context": context, "payload": payload_json}
+    # Issue #55: measure before PostgreSQL does.  A DISTRIBUTION Case with hundreds of csv files made a
+    # ~224 MB payload_json and ended in ProgramLimitExceeded (jsonb elements above 268435455 bytes).
+    payload_text, manifest_text = _json(payload_json), _json(manifest)
+    payload_bytes, manifest_bytes = len(payload_text.encode("utf-8")), len(manifest_text.encode("utf-8"))
+    observation_count, top_sources = capture_inventory.measure_observations(payload_json)
+    capture_inventory.finish(inventory, observation_count=observation_count, top_sources=top_sources,
+                             payload_bytes=payload_bytes, manifest_bytes=manifest_bytes)
+    payload_limit = capture_inventory.max_payload_bytes()
+    if payload_bytes > payload_limit or manifest_bytes > payload_limit:
+        inventory["outcome"] = capture_inventory.TOO_LARGE_CODE
+        _logger.warning("%s", capture_inventory.log_line(inventory))
+        raise DashboardCaptureError(capture_inventory.TOO_LARGE_CODE,
+                                    capture_inventory.too_large_message(inventory, "payload"), inventory)
+    try:
+        conn.execute("INSERT INTO dashboard_captures(id,case_id,fingerprint,recipe_version,manifest_json,payload_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)", [capture_id, case_id, digest, recipe_version, manifest_text, payload_text, actor, _now()])
+        for asset_id, path, data, media_type, metadata in media_asset_ids:
+            conn.execute("INSERT INTO dashboard_assets(id,capture_id,relative_path,sha256,media_type,content,metadata_json) VALUES(?,?,?,?,?,?,?)", [asset_id, capture_id, path, metadata["sha256"], media_type, data, _json({"asset_id": asset_id, "relative_path": path})])
+    except Exception as exc:  # noqa: BLE001 - only the database size limit is translated
+        if _is_db_size_limit(exc):
+            inventory["outcome"] = capture_inventory.TOO_LARGE_CODE
+            _logger.warning("%s", capture_inventory.log_line(inventory))
+            raise DashboardCaptureError(capture_inventory.TOO_LARGE_CODE,
+                                        capture_inventory.too_large_message(inventory, "payload"), inventory) from exc
+        raise
+    inventory["outcome"] = "COMPLETED"
+    _logger.warning("%s", capture_inventory.log_line(inventory))
+    return {"id": capture_id, "case_id": case_id, "fingerprint": digest, "status": status, "context": context, "payload": payload_json, "inventory": inventory}
+
+
+def _is_db_size_limit(exc: BaseException) -> bool:
+    """PostgreSQL ``program_limit_exceeded`` (54000, e.g. jsonb above 268435455 bytes) or a value-too-large error."""
+    if getattr(exc, "sqlstate", None) in {"54000", "54001", "54011", "54023"}:
+        return True
+    return type(exc).__name__ in {"ProgramLimitExceeded", "StatementTooComplex", "TooManyColumns", "TooManyArguments"}
 
 
 def _replace_asset_id(payload: dict[str, Any], path: str, asset_id: str) -> None:
