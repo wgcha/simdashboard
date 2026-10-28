@@ -22,7 +22,7 @@ from typing import Any
 
 MIB = 1024 * 1024
 # PostgreSQL refuses a jsonb whose elements total 268435455 bytes; stay well below it.
-DEFAULT_MAX_PAYLOAD_BYTES = 200 * MIB
+DEFAULT_MAX_PAYLOAD_BYTES = 128 * MIB   # jsonb is larger than its JSON text; 224 MB JSON already failed at the 256 MB jsonb limit
 ENV_MAX_PAYLOAD = "SIMDASH_CAPTURE_MAX_PAYLOAD_BYTES"
 # Raw files of one capture (stored as BYTEA assets); same value as the long-standing walk limit.
 DEFAULT_MAX_ASSET_TOTAL_BYTES = 256 * MIB

@@ -11,6 +11,11 @@
 - 빌드 정보(커밋·날짜)는 여기에 적지 않습니다. 소스 배포는 서버가 Git에서, 폐쇄망 번들(Windows·Rocky 8)은 빌드 때 찍은 `build-info.json`에서 읽습니다.
 - 0.1.0과 0.2.0은 2026-10-21에 Git 기록을 보고 나중에 정리한 항목이며, 날짜는 해당 상태가 main에 합쳐진 날짜입니다(0.1.0: PR #22, 0.2.0: PR #46·#47).
 
+## 0.3.2.4 — 2026-10-28
+
+- 결과가 DB 한 칸 상한을 넘는 Case는 「예상하지 못한 오류」 대신 「결과가 너무 큼(DASHBOARD_CAPTURE_TOO_LARGE)」과 크기·원인 파일로 실패 처리하고 같은 실패를 자동 반복하지 않음(수동 [다시 시도]만)
+- Case마다 받은 파일(확장자별 개수·용량), 제외한 파일(사유별: avi 등 미지원 형식, 32MB 초과, 이름 문제), 결과 크기, 크기를 가장 많이 차지한 원본을 로그(`Capture inventory`)와 「결과 받기 상태」 상세에 표시
+
 ## 0.3.2.3 — 2026-10-28
 
 - 사용환경: `completed_Settle`, `completed_Wobble`, `completed_Horizontal_Force_Angle`, `completed_Slope_Angle`, `completed_Slope_Angle_360`처럼 앞에 접두어가 붙은 평가 폴더도 평가(Settle 등)로 인식해 그 안의 결과 파일을 찾음. 화면 순번 자리에는 'comp' 대신 평가 이름 표시, Slope_Angle/Slope_Angle_360 「번호만 덧붙은 이름」·「순번 없음」 경고가 더 이상 나오지 않음
