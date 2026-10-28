@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-from ..domains.dashboard.parser import scene_sequence_number, scene_short_name
+from ..domains.dashboard.parser import scene_sequence_number, scene_short_name, usage_evaluation_name
 from . import folder_schema_hierarchy
 
 _SEPARATORS = re.compile(r"[\s_\-]+")
@@ -141,8 +141,13 @@ def folder_name_warnings(schema: dict[str, Any], locations: Any, root_key: str,
     by_parent: dict[str, list[dict[str, Any]]] = {}
     for scene in scenes:
         by_parent.setdefault(str(scene.get("parent_path") or "").casefold(), []).append(scene)
+    def evaluation_folder(item: dict[str, Any]) -> bool:
+        # Usage evaluation folders (``completed_Slope_Angle`` / ``completed_Slope_Angle_360``) are distinct
+        # evaluations, not slips of one Scene name, and carry no 순번 (issue #55, 2026-10-28).
+        return environment == "USAGE" and usage_evaluation_name(str(item.get("name") or "")) is not None
+
     for siblings in by_parent.values():
-        by_name = {str(item.get("name") or ""): item for item in siblings}
+        by_name = {str(item.get("name") or ""): item for item in siblings if not evaluation_folder(item)}
         for kind, severity, members in _clusters(by_name):
             ids = folder_schema_hierarchy.context_ids(schema, root_key, by_name[members[0]].get("hierarchy") or {})
             warnings.append({
@@ -214,6 +219,7 @@ def folder_name_warnings(schema: dict[str, Any], locations: Any, root_key: str,
                            "message": f"예상 밖 폴더: {text}", "paths": [path],
                            "case_id": None, "run_option_id": None})
     for siblings in by_parent.values():
+        siblings = [item for item in siblings if not evaluation_folder(item)]
         numbered = [item for item in siblings if scene_sequence_number(str(item.get("name") or "")) is not None]
         odd = [item for item in siblings if scene_sequence_number(str(item.get("name") or "")) is None]
         if not numbered or not odd:

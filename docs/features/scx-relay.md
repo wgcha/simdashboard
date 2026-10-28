@@ -121,7 +121,7 @@ PhysicsAI 판정: `DONE` = 성공, `PAUSED`(BLOCKED, 재로그인 필요)·`QUEU
  "additional_paths": ["cushion/01_…/part_1.inc", "cushion/01_…/RENUM_INIT.csv"],   // 0~2000개
  "version": "2026.1",
  "resources": {"appliance": "…", "ncpu": 16, "memory_gb": null, "queue_type": "implicit"},
- "run_type": "both - use starter and engine files", "mpi": "SMP (default)", "single_precision": false,
+ "run_type": "both - use starter and engine files", "mpi": "Pure MPI", "single_precision": false,   // mpi 생략 시 "Pure MPI"(어댑터 기본값, 이슈 #57). momType은 보내지 않음(워커 환경변수)
  "client_ref": {"app": "physicsai", "job_id": "…", "hpc_job_id": "…", "run_key": "run__00012"}}   // 기록용, 각 ≤128자
 // 201(새 제출) / 200(replay)
 {"request_id": "…", "state": "SUBMITTED", "replayed": false,

@@ -13,6 +13,23 @@ from .units import stress_unit
 
 
 EVALUATIONS = ("Settle", "Wobble", "Horizontal_Force_Angle", "Slope_Angle", "Slope_Angle_360")
+# Longest first, so ``..._Slope_Angle_360`` is never read as ``Slope_Angle``.
+_EVALUATIONS_BY_LENGTH = tuple(sorted(EVALUATIONS, key=len, reverse=True))
+
+
+def usage_evaluation_name(name: str) -> str | None:
+    """The usage evaluation a folder name stands for: the name itself or ``<prefix>_<evaluation>``.
+
+    Issue #55 (2026-10-28): real folders are ``completed_Settle``, ``completed_Slope_Angle_360`` …;
+    only the bare names were recognised, so their files were not found.  Case and whitespace are
+    ignored; the evaluation must be the whole name or its last underscore-separated part(s).
+    """
+    key = "".join(str(name or "").split()).casefold()
+    for evaluation in _EVALUATIONS_BY_LENGTH:
+        folded = evaluation.casefold()
+        if key == folded or key.endswith("_" + folded):
+            return evaluation
+    return None
 # ASCII digits only: the first run of them in a Scene folder name is its 순번.
 _SEQUENCE_RE = re.compile(r"[0-9]+")
 # A Scene name without digits is shown by its first token (split at _ - whitespace .), cut to 4 characters.
@@ -118,7 +135,7 @@ def _pick_usage(files: Iterable[tuple[str, bytes]]) -> dict[str, Any]:
         if "result2" in stem or "bushing" in stem:
             continue
         parts = PurePosixPath(relative).parts
-        evaluation = next((name for part in parts for name in EVALUATIONS if part.casefold() == name.casefold()), None)
+        evaluation = next((found for part in parts if (found := usage_evaluation_name(part))), None)
         if evaluation:
             grouped[evaluation].append((relative, content))
     observations: list[dict[str, Any]] = []
@@ -162,6 +179,9 @@ def scene_short_name(name: str) -> str | None:
 
 def scene_sequence_label(name: str) -> str | None:
     """What the screens show as 순번: the number, or the short name when there is no digit."""
+    evaluation = usage_evaluation_name(name)
+    if evaluation:   # a usage evaluation folder (``completed_Settle``) is shown by its evaluation, not 'comp'
+        return evaluation
     sequence = scene_sequence_number(name)
     return str(sequence) if sequence is not None else scene_short_name(name)
 

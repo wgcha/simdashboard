@@ -14,6 +14,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from ..domains.dashboard.parser import usage_evaluation_name
 from ..database_connection import rows
 from . import dashboard_capture
 from .drive import reads as drive_reads
@@ -1056,7 +1057,7 @@ def _role(environment, name, parent, depth=0, rules=None, *, working_level=None)
         return None, None
     if environment == "DISTRIBUTION" and _SCENE.search(name): return "SCENE", "PRESENT"
     if environment == "USAGE":
-        if parent.get("role_kind") == "SIMULATION_CASE" and lowered in _EVALUATIONS: return "EVALUATION", None
+        if parent.get("role_kind") == "SIMULATION_CASE" and usage_evaluation_name(name): return "EVALUATION", None
         return ("RESULTS", None) if parent.get("role_kind") == "EVALUATION" else (None, None)
     if parent.get("role_kind") == "SIMULATION_CASE": return "LOAD_CASE", None
     if parent.get("role_kind") == "LOAD_CASE": return "EXECUTION_RUN", None

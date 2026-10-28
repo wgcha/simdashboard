@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
+from ..domains.dashboard.parser import usage_evaluation_name
 from ..database_connection import ConnectionLike, rows
 from ..services import dashboard_capture, folder_discovery_environment, spdm_storage
 from .storage import get_storage_provider, provider_for_root
@@ -539,7 +540,7 @@ def _role_fallback(environment: str, name: str, parent_role: str | None, depth: 
     if lowered == "results" and parent_role in {"EVALUATION", "SCENE"}:
         return "RESULTS", None
     if environment == "USAGE":
-        if parent_role == "SIMULATION_CASE" and lowered in {item.casefold() for item in EVALUATIONS}:
+        if parent_role == "SIMULATION_CASE" and usage_evaluation_name(name):
             return "EVALUATION", None
     else:
         if parent_role == "SIMULATION_CASE": return "LOAD_CASE", None
@@ -908,7 +909,7 @@ def _role_transition(environment: str, parent_role: str, role: str, name: str) -
     }
     if role not in allowed[environment].get(parent_role, set()):
         raise ResultRegistrationError("RESULT_HIERARCHY_INVALID", f"{parent_role} 아래에 {role} 폴더를 둘 수 없습니다.")
-    if role == "EVALUATION" and name.casefold() not in {item.casefold() for item in EVALUATIONS}:
+    if role == "EVALUATION" and not usage_evaluation_name(name):
         raise ResultRegistrationError("RESULT_EVALUATION_INVALID", "지원하는 평가 항목을 선택하세요.")
     if role == "RESULTS" and name.casefold() != "results":
         raise ResultRegistrationError("RESULT_FOLDER_NAME_INVALID", "결과 폴더 이름은 results로 고정합니다.")

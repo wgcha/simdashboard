@@ -77,7 +77,7 @@ SUBMISSION_STATES = ("SUBMITTING", "SUBMITTED", "UNKNOWN", "FAILED", "ATTACHED",
 TRACKED_STATES = ("SUBMITTED", "ATTACHED")
 RECORD_RETRY_DELAYS = (0.5, 2.0, 5.0)
 DEFAULT_RUN_TYPE = "both - use starter and engine files"
-DEFAULT_MPI = "SMP (default)"
+DEFAULT_MPI = "Pure MPI"   # adapter default since 2026-10-28 (issue #57); an explicit mpi wins
 
 
 # --- errors (contract §7) ------------------------------------------------------------------------

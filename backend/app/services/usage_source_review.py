@@ -13,7 +13,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Iterable
 
-from ..domains.dashboard.parser import EVALUATIONS, parse_usage_file
+from ..domains.dashboard.parser import EVALUATIONS, parse_usage_file, usage_evaluation_name
 
 MEDIA_SUFFIXES = {".mp4", ".webm", ".jpg", ".jpeg", ".png"}
 DEFAULT_SELECTION = {"json": True, "video": True, "image": True, "csv": False}
@@ -52,7 +52,7 @@ def identity(path: str, evaluation: str) -> tuple[str, str] | None:
 
 
 def evaluation_for_path(path: str) -> str | None:
-    return next((name for name in EVALUATIONS if any(part.casefold() == name.casefold() for part in PurePosixPath(path).parts)), None)
+    return next((found for part in PurePosixPath(path).parts if (found := usage_evaluation_name(part))), None)
 
 
 def is_result_candidate(path: str, selected: dict[str, bool]) -> bool:
