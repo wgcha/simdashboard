@@ -22,7 +22,7 @@ export type CaseVideoGridProps = {
   defaultSyncPlayback?: boolean
 }
 export type CaseVideoColumns = 2 | 3 | 4
-export type CaseVideoView = 'representatives' | 'scene'
+export type CaseVideoView = 'representatives' | 'scene' | 'all'
 
 const COLUMN_CHOICES: CaseVideoColumns[] = [2, 3, 4]
 const ROWS = 2
@@ -57,7 +57,7 @@ export function CaseVideoGrid({ captureId, runId, runOptionId, mode, defaultColu
   const totalVideos = scenes.length ? scenes.reduce((sum, scene) => sum + scene.video_count + scene.unplayable_count, 0) : null
 
   const loadPage = useCallback(async (page: number, pageSize: number, signal: AbortSignal): Promise<CaseVideoPage> => {
-    const result = await simulationDashboardApi.videos(runId, { ...scope, page, page_size: pageSize, ...(view === 'representatives' ? { representative_only: true } : activeScene ? { scene_id: activeScene.scene_id } : {}) }, signal)
+    const result = await simulationDashboardApi.videos(runId, { ...scope, page, page_size: pageSize, ...(view === 'representatives' ? { representative_only: true } : view === 'scene' && activeScene ? { scene_id: activeScene.scene_id } : {}) }, signal)
     if (!signal.aborted) {
       setCaseId(result.case_id ?? '')
       if (result.video_rule) setRule(result.video_rule)
@@ -87,12 +87,12 @@ export function CaseVideoGrid({ captureId, runId, runOptionId, mode, defaultColu
         const title = context.option_label || context.run_label || '선택한 Run'
         const path = [context.load_case_name, context.run_label].filter(Boolean).join(' · ')
         const total = totalVideos ?? result.pagination.total_items
-        const extra = view === 'representatives' ? (scenes.length ? ` · Scene ${scenes.length}개` : '') : activeScene ? ` · ${activeScene.label}` : ''
+        const extra = view === 'representatives' ? (scenes.length ? ` · Scene ${scenes.length}개` : '') : view === 'scene' && activeScene ? ` · ${activeScene.label}` : ''
         return <><strong>{title}</strong><small>{path ? `${path} · ` : ''}전체 {total}개 영상{extra}</small></>
       }}
       toolbar={<>
         <div className="case-video-columns" role="group" aria-label="영상 열 수"><span>열</span>{COLUMN_CHOICES.map((choice) => <button key={choice} type="button" className={choice === columns ? 'active' : ''} aria-pressed={choice === columns} onClick={() => setColumns(choice)}>{choice}열</button>)}</div>
-        <div className="case-video-modes" role="group" aria-label="영상 보기 방식">{modeButton('representatives', 'Case 전체 · Scene별 대표 영상')}{modeButton('scene', 'Scene 하나 · 영상 전체 격자')}</div>
+        <div className="case-video-modes" role="group" aria-label="영상 보기 방식">{modeButton('representatives', 'Case 전체 · Scene별 대표 영상')}{modeButton('scene', 'Scene 하나 · 영상 전체 격자')}{modeButton('all', '모든 영상')}</div>
         {view === 'scene' && withVideos.length > 0 && <label className="case-video-scene"><span>Scene</span><Select controlSize="sm" value={activeScene?.scene_id ?? ''} onChange={(event) => { setSceneId(event.target.value); setPanel(null) }} aria-label="영상을 볼 Scene">{withVideos.map((scene) => <option key={scene.scene_id} value={scene.scene_id}>{scene.scene_sequence_label ? `${scene.scene_sequence_label} ` : ''}{scene.label} ({scene.video_count + scene.unplayable_count})</option>)}</Select></label>}
         <button type="button" className={`case-video-sync${sync ? ' active' : ''}`} aria-pressed={sync} title="표시한 영상의 재생·정지·위치를 함께 맞춥니다." onClick={() => setSync((value) => !value)}><Link2 aria-hidden="true" /> 동시 재생 맞춤 {sync ? '켜짐' : '꺼짐'}</button>
       </>}

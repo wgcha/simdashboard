@@ -355,7 +355,7 @@ def set_video_representative(payload: VideoRepresentativeInput, request: Request
 
 
 @router.delete("/distribution/video-representatives")
-def reset_video_representative(request: Request, case_id: str, scene_key: str):
+def reset_video_representative(request: Request, case_id: str = Query(max_length=256), scene_key: str = Query(max_length=2048)):
     """Removes the user's choice of one (Case, Scene); the rule / first file name decides again."""
     with connect() as conn:
         project_id, capture = _representative_context(conn, request, case_id, RESULT_IMPORT)

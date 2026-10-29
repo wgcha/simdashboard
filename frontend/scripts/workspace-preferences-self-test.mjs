@@ -1,12 +1,13 @@
 import { DEFAULT_WORKSPACE_PREFERENCES, loadWorkspacePreferences, saveWorkspacePreference } from '../src/app/preferences/workspacePreferences.ts'
 import { workspaceFontSizeStyle } from '../src/app/preferences/workspaceFontSizeStyle.ts'
 
-const store = new Map([['vd-workbench-theme', 'light'], ['vd-workbench-sidebar-collapsed', 'true'], ['vd-workbench-font-size-pt', '16']])
+const store = new Map([['vd-workbench-theme', 'dark'], ['simdashboard.workspace.theme.v1', 'dark'], ['vd-workbench-sidebar-collapsed', 'true'], ['vd-workbench-font-size-pt', '16']])
 const storage = { getItem: (key) => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) }
 const migrated = loadWorkspacePreferences(storage)
-if (migrated.theme !== 'light' || migrated.uiFontSize !== 16) throw new Error('legacy values were not preserved')
+if (migrated.theme !== 'light' || migrated.uiFontSize !== 16) throw new Error('auto-written legacy theme must give way to the light default; font size is preserved')
 if ('sidebarCollapsed' in migrated) throw new Error('removed sidebar collapse preference was restored')
-if (store.get('simdashboard.workspace.theme.v1') !== 'light') throw new Error('legacy theme was not migrated')
+saveWorkspacePreference('theme', 'dark', storage)
+if (store.get('simdashboard.workspace.theme.v2') !== 'dark' || loadWorkspacePreferences(storage).theme !== 'dark') throw new Error('an explicit theme choice was not kept')
 saveWorkspacePreference('uiFontSize', 15, storage)
 if (store.get('simdashboard.workspace.font-size-pt.v1') !== '15') throw new Error('v1 preference was not saved')
 
@@ -14,7 +15,7 @@ for (const [value, expected] of [[11, '11pt'], [18, '18pt'], [14.5, '14.5pt'], [
   if (workspaceFontSizeStyle(value)['--ui-font-size'] !== expected) throw new Error(`font style did not normalize ${String(value)}`)
 }
 
-const invalidStore = new Map([['simdashboard.workspace.theme.v1', 'purple'], ['simdashboard.workspace.sidebar-collapsed.v1', 'yes'], ['simdashboard.workspace.font-size-pt.v1', '40']])
+const invalidStore = new Map([['simdashboard.workspace.theme.v2', 'purple'], ['simdashboard.workspace.sidebar-collapsed.v1', 'yes'], ['simdashboard.workspace.font-size-pt.v1', '40']])
 const invalid = loadWorkspacePreferences({ getItem: (key) => invalidStore.get(key) ?? null, setItem: (key, value) => invalidStore.set(key, value) })
 if (JSON.stringify(invalid) !== JSON.stringify(DEFAULT_WORKSPACE_PREFERENCES)) throw new Error('invalid values did not use defaults')
 

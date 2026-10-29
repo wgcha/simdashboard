@@ -8,7 +8,7 @@
     <script>
       (() => {
         try {
-          const savedTheme = localStorage.getItem('simdashboard.workspace.theme.v1') || localStorage.getItem('vd-workbench-theme');
+          const savedTheme = localStorage.getItem('simdashboard.workspace.theme.v2');
           const theme = savedTheme === 'dark' ? 'dark' : 'light';
           document.documentElement.dataset.theme = theme;
           document.documentElement.style.colorScheme = theme;

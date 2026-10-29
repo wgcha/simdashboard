@@ -8,7 +8,8 @@ export type WorkspacePreferences = {
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>
 
 const STORAGE_KEYS = {
-  theme: 'simdashboard.workspace.theme.v1',
+  // v2 (0.3.4): v1 was written for every user (dark) whether chosen or not; only an explicit choice is kept now.
+  theme: 'simdashboard.workspace.theme.v2',
   uiFontSize: 'simdashboard.workspace.font-size-pt.v1',
 } as const
 
@@ -53,11 +54,10 @@ export function loadWorkspacePreferences(storage?: StorageLike): WorkspacePrefer
   const storedTheme = theme(read(target, STORAGE_KEYS.theme))
   const storedFontSize = normalizeWorkspaceFontSize(read(target, STORAGE_KEYS.uiFontSize))
   const preferences = {
-    theme: storedTheme ?? theme(read(target, LEGACY_KEYS.theme)) ?? DEFAULT_WORKSPACE_PREFERENCES.theme,
+    theme: storedTheme ?? DEFAULT_WORKSPACE_PREFERENCES.theme,
     uiFontSize: storedFontSize ?? normalizeWorkspaceFontSize(read(target, LEGACY_KEYS.uiFontSize)) ?? DEFAULT_WORKSPACE_PREFERENCES.uiFontSize,
   }
-  // The theme is stored only when the user chooses it, so an unchosen theme follows the default.
-  if (storedTheme === undefined && theme(read(target, LEGACY_KEYS.theme))) write(target, STORAGE_KEYS.theme, preferences.theme)
+  // The theme is stored only when the user chooses it, so an unchosen theme follows the default (light).
   if (storedFontSize === undefined) write(target, STORAGE_KEYS.uiFontSize, String(preferences.uiFontSize))
   return preferences
 }
