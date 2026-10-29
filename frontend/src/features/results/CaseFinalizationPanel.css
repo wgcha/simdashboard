@@ -484,3 +484,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* C안: confirm dialog in two columns (기준·현재 Final | 복사할 파일·보고서); complete dialog stays single column */
+.case-finalization__dialog:has(.case-finalization__dialog-body--confirm) { width: min(1180px, 86vw); }
+.case-finalization__dialog-body--confirm { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 24px; }
+.case-finalization__dialog-body--confirm > :not(.case-finalization__column) { grid-column: 1 / -1; }
+.case-finalization__column { display: grid; align-content: start; gap: 10px; min-width: 0; }
+@media (max-width: 900px) { .case-finalization__dialog-body--confirm { grid-template-columns: minmax(0, 1fr); } }

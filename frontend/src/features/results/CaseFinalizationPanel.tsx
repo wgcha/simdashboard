@@ -364,7 +364,8 @@ export function CaseFinalizationPanel(props: Props) {
         </section>
         {skippedVideos.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 영상 {skippedVideos.length}개(파일 이름으로 표시): {skippedVideos.join(', ')}</p>}
         {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}
-      </div> : <div className="case-finalization__dialog-body">
+      </div> : <div className="case-finalization__dialog-body case-finalization__dialog-body--confirm">
+        <div className="case-finalization__column">
         {currentFinal ? <section className="case-finalization__section" aria-label="현재 Final" data-testid="case-final-replace">
           {replacesOtherCase
             ? <label className="case-finalization__format"><input type="checkbox" checked={replaceAcknowledged} disabled={busy || Boolean(dialogCopying)} onChange={(event) => setReplaceAcknowledged(event.target.checked)} />현재 Final({currentFinal.case_label})을 이전 Final로 바꾸고 이 Case를 Final로 지정합니다</label>
@@ -393,6 +394,8 @@ export function CaseFinalizationPanel(props: Props) {
             </ul>
           </div>}
         </section>
+        </div>
+        <div className="case-finalization__column">
         <section className="case-finalization__section" aria-label="Final/CAE">
           <h4>Final/CAE <span>Scene 폴더 파일 {preview.files.length}개{preview.counts.total_bytes !== undefined ? ` · ${formatBytes(preview.counts.total_bytes)}` : ''}</span></h4>
           <div className="case-finalization__counts">
@@ -436,6 +439,7 @@ export function CaseFinalizationPanel(props: Props) {
           </div> : null}
           <CaseReportMetaFields value={meta} disabled={busy || Boolean(dialogCopying) || !scopeAtOpen} onChange={setMeta} />
         </section>
+        </div>
         {skippedVideos.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 영상 {skippedVideos.length}개: {skippedVideos.join(', ')}</p>}
         {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}
         {dialogJob && dialogJob.state !== 'COMPLETE' && <section className="case-finalization__section case-finalization__job" aria-label="Final 복사 진행" data-testid="case-final-job">
