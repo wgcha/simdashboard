@@ -256,6 +256,7 @@ async function installDashboardMocks(page: Page, options: { slowUsage?: boolean;
 }
 
 async function openDisplayOptions(page: Page) {
+  // C layout: 표시 옵션 lives open in the right inspector pane.
   const details = page.locator('.case-display-options')
   if (await details.getAttribute('open') === null) await details.locator('summary').click()
   return details.locator('.case-display-options__panel')
@@ -272,15 +273,15 @@ async function chooseDistribution(page: Page) {
   await expect(path).toContainText('Case A')
   for (const [label, value] of [['Case', CASE_ID], ['하중경우', 'load-drop'], ['Run Case', RUN_ID], ['Run Option', 'option-individual']] as const) {
     const field = path.getByRole('combobox', { name: label, exact: true })
-    if (await field.count()) await field.selectOption(value)
+    // A level with one candidate turns into fixed text once it is auto-selected, so the select may vanish.
+    if (await field.count()) await field.selectOption(value, { timeout: 3000 }).catch(() => undefined)
   }
   // Component and Basis are auto-selected and live in the collapsed display options.
   const options = await openDisplayOptions(page)
   for (const [label, value] of [['Component', COMPONENT_ID], ['Basis', 'DETAIL']] as const) {
     const field = options.getByRole('combobox', { name: label, exact: true })
-    if (await field.count()) await field.selectOption(value)
+    if (await field.count()) await field.selectOption(value, { timeout: 3000 }).catch(() => undefined)
   }
-  await page.locator('.case-display-options > summary').click()
   await expect(page.getByTestId('distribution-dashboard')).toBeVisible()
 }
 
@@ -290,7 +291,7 @@ test('single Run Option is compact and its stable id is pinned in the URL', asyn
   await chooseDistribution(page)
   await expect(page.getByRole('group', { name: 'Case 경로' }).locator('.shared-hierarchy-choice--fixed[data-hierarchy-level="Run Option"]')).toContainText('Individual')
   await expect(page).toHaveURL(/case_option=option-individual/)
-  await expect(page.locator('.case-display-options')).not.toHaveAttribute('open', '')
+  await expect(page.locator('.case-display-options')).toHaveAttribute('open', '')
   const evidenceDir = join(tmpdir(), 'simdashboard-option-qa'); mkdirSync(evidenceDir, { recursive: true })
   await page.screenshot({ path: join(evidenceDir, 'compact-option-desktop.png'), fullPage: false })
 })
@@ -417,6 +418,8 @@ test('chart modes preserve missing and unordered scenes and expanded charts clos
   const payload = distributionPayload() as DashboardDistribution
   // A Scene name without digits: the axis shows the server's short name label (2026-10-17).
   payload.scenes[18] = { ...payload.scenes[18], label: 'Corner_Drop', scene_sequence_number: null, scene_sequence_label: 'Corn', order_status: 'UNCONFIRMED' }
+  // The C layout's side panes need the 2560×1440 baseline for every Scene tick to show.
+  await page.setViewportSize({ width: 2560, height: 1440 })
   await installDashboardMocks(page, { distribution: payload })
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -462,10 +465,7 @@ test('chart modes preserve missing and unordered scenes and expanded charts clos
   mkdirSync(evidence, { recursive: true })
   await page.screenshot({ path: join(evidence, 'chart-desktop.png'), fullPage: true })
   await page.locator('.simulation-dashboard__summary').screenshot({ path: join(evidence, 'summary-desktop.png') })
-  await page.setViewportSize({ width: 390, height: 844 })
-  await expect(mode).toBeVisible()
-  await page.screenshot({ path: join(evidence, 'chart-mobile.png'), fullPage: true })
-  await page.locator('.simulation-dashboard__summary').screenshot({ path: join(evidence, 'summary-mobile.png') })
+  // Desktop-only policy (AGENTS.md): the former 390 px evidence shots are dropped.
   expect(errors).toEqual([])
 })
 
@@ -560,10 +560,13 @@ async function checkWideLayout(page: Page, screenshot: string) {
   await expect(page.getByRole('tablist', { name: '결과 보기' }).getByRole('tab')).toHaveCount(5)
   await expect(page.getByRole('tab', { name: '요약', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('button', { name: 'Final 지정', exact: true })).toBeVisible()
-  // The Case path is one row: every level shares the same vertical band.
-  const tops = await page.getByRole('group', { name: 'Case 경로' }).locator('.shared-hierarchy-choice').evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top)))
-  expect(tops.length).toBeGreaterThanOrEqual(4)
-  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(4)
+  // C layout: the Case path stacks in the left pane (380 px) beside the center charts and the right inspector.
+  const paneBoxes = await page.evaluate(() => ['.case-c__left', '.case-c__center', '.case-c__right'].map((selector) => { const box = document.querySelector(selector)!.getBoundingClientRect(); return { left: Math.round(box.left), width: Math.round(box.width), top: Math.round(box.top), height: Math.round(box.height) } }))
+  expect(paneBoxes[0].width).toBe(380)
+  expect(paneBoxes[2].width).toBe(480)
+  expect(paneBoxes[0].left + paneBoxes[0].width).toBeLessThanOrEqual(paneBoxes[1].left + 1)
+  expect(paneBoxes[1].left + paneBoxes[1].width).toBeLessThanOrEqual(paneBoxes[2].left + 1)
+  expect(await page.getByRole('group', { name: 'Case 경로' }).locator('.shared-hierarchy-choice').count()).toBeGreaterThanOrEqual(4)
   expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth)).toBe(true)
   await page.screenshot({ path: join(tmpdir(), screenshot), fullPage: false })
 }

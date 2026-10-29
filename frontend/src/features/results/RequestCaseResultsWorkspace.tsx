@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { RotateCw } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { SimulationDashboard } from './SimulationDashboard'
@@ -87,6 +87,18 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, requestName 
     // The notice follows a new revision only, not later unchanged checks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sync.revision])
+  // C layout: the screen fills the viewport below the shell header, so its three panes scroll internally.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const update = () => root.style.setProperty('--case-results-top', `${Math.round(root.getBoundingClientRect().top + window.scrollY)}px`)
+    update()
+    window.addEventListener('resize', update)
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    observer?.observe(document.body)
+    return () => { window.removeEventListener('resize', update); observer?.disconnect() }
+  }, [])
   const label = syncLabel(sync, now)
   const attention = driveAttention(sync)
   // App's operational token and the auto-sync revision both only grow, so their sum changes whenever either does.
@@ -100,7 +112,7 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, requestName 
   </div>
   // One tabbed page for both routes: the 소재·물성 tab renders the materials
   // dashboard inside the Case results page and shares its path row.
-  return <div className="request-case-results">
+  return <div ref={rootRef} className="request-case-results">
     {driveChangesOpen ? <DriveSourceChangesDialog projectId={projectId} requestId={requestId} canDecide={canRefreshSchema} onClose={() => setDriveChangesOpen(false)} onDecided={sync.checkNow} /> : null}
     {deviations ? <div className="request-case-results__deviations" role="alert">
       <div><strong>{deviations.message}</strong><button type="button" aria-label="닫기" onClick={() => setDeviations(null)}>×</button></div>

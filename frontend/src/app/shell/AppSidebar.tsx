@@ -117,6 +117,8 @@ export const SIDEBAR_HIDDEN_MENUS: ReadonlySet<AppSidebarMenuId> = new Set<AppSi
   'releases',
   // 해석 작업 실행 is a demo page not used in the current scenario (user decision 2026-10-14).
   'workbench',
+  // 모델 소재·물성 is not a navigator-level item (user decision 2026-10-29); the result screen's 소재·물성 tab and the route stay.
+  'materials',
 ])
 
 function groupForMenu(id: string): MenuGroupId | undefined {

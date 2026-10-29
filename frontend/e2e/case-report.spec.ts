@@ -519,9 +519,8 @@ test('보고서 정보(작성자·개발단계·검토조건·결론)는 PPTX와
 test('엣지를 모두 끄면 보고서 요약은 요약 탭과 같은 선택 없음 문구를 쓴다', async ({ page }) => {
   await installMocks(page)
   await openCaseResults(page)
-  await page.locator('.case-display-options > summary').click()
+  // 표시 옵션 is always open in the C layout inspector.
   for (const edge of ['TOP', 'BOTTOM', 'LEFT', 'RIGHT']) await page.locator('.simulation-dashboard__picker').getByRole('checkbox', { name: edge, exact: true }).uncheck()
-  await page.locator('.case-display-options > summary').click()
   const dialog = await openReport(page)
   await setFormats(dialog, { pptx: false, html: true })
   const [download] = await downloadAll(page, dialog, 1)

@@ -9,7 +9,15 @@
   font-size: var(--text-caption, 12px);
 }
 .request-case-results__status { white-space: nowrap; }
-.request-case-results { padding-top: var(--space-3, 12px); }
+.request-case-results {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: max(640px, calc(100dvh - var(--case-results-top, 200px)));
+  min-height: 0;
+  padding: var(--space-3, 12px) var(--space-4, 16px) var(--space-3, 12px);
+}
+.request-case-results > .request-case-results__deviations { flex: none; }
 .request-case-results__status--busy { color: var(--color-text-muted); }
 .request-case-results__status--ok { color: var(--color-text); }
 .request-case-results__status--wait { color: var(--color-warning); }

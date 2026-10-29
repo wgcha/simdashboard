@@ -77,7 +77,9 @@ import { resetWorkspaceContext } from './app/workspace/resetWorkspaceContext'
 import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
 function App() {
   const [preferences] = useState(loadWorkspacePreferences)
-  const [theme, setTheme] = useState<WorkspaceTheme>(preferences.theme)
+  const [theme, setThemeState] = useState<WorkspaceTheme>(preferences.theme)
+  // Only an explicit choice is stored; users who never chose follow the default (light).
+  const setTheme = useCallback((next: WorkspaceTheme) => { saveWorkspacePreference('theme', next); setThemeState(next) }, [])
   const [uiFontSize, setUiFontSize] = useState(preferences.uiFontSize)
   const [menuPolicy, setMenuPolicy] = useState<MenuPolicy | null>(null)
   const [menuPolicyReady, setMenuPolicyReady] = useState(false)
@@ -215,7 +217,6 @@ function App() {
     saveWorkspacePreference('uiFontSize', uiFontSize)
   }, [uiFontSize])
   useEffect(() => {
-    saveWorkspacePreference('theme', theme)
     document.documentElement.dataset.theme = theme
     document.documentElement.style.colorScheme = theme
   }, [theme])

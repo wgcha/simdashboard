@@ -128,10 +128,11 @@ export async function expectCaseResultsLayout(page: Page) {
   expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth)).toBe(true)
   const section = await page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' }).boundingBox()
   const actions = await page.locator('.case-results-head__actions').boundingBox()
-  const path = await page.locator('.shared-hierarchy-path').first().boundingBox()
+  const path = await page.locator('.case-c__left').boundingBox()
   const env = await page.getByRole('group', { name: '결과 환경' }).boundingBox()
   expect(section && actions && path && env).toBeTruthy()
   for (const box of [actions!, path!]) expect(box.x + box.width).toBeLessThanOrEqual(section!.x + section!.width + 1)
+  // C layout: the header band sits above the panes, never over them.
   expect(overlaps(actions!, path!)).toBe(false)
   expect(overlaps(actions!, env!)).toBe(false)
 }

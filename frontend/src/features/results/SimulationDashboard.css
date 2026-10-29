@@ -199,3 +199,77 @@
 
 .case-view-bar__end { display:flex; align-items:center; gap:var(--space-3, 12px); min-width:0; margin-left:auto; }
 .case-view-context { min-width:0; overflow:hidden; color:var(--color-text-muted); font-size:var(--text-caption, 12px); text-overflow:ellipsis; white-space:nowrap; }
+
+/* C layout (2026-10-29): header bar, then three panes that scroll on their own.
+   LEFT Case 경로 + Scene list | CENTER tabs + main charts | RIGHT inspector.
+   Baseline 2560×1440; the height follows the viewport (see RequestCaseResultsWorkspace). */
+.simulation-dashboard.case-c { display:flex; flex-direction:column; flex:1 1 0; min-height:0; margin:0; padding:0; gap:var(--space-2, 8px); border:0; border-radius:0; background:transparent; }
+.case-c > .case-results-head { flex:none; flex-wrap:wrap; margin:0; padding:var(--space-2, 8px) var(--space-4, 16px); border:1px solid var(--color-border); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); }
+.case-c > .simulation-dashboard__state { flex:none; min-height:0; padding:var(--space-2, 8px) var(--space-3, 12px); }
+.case-c__body { flex:1 1 0; min-height:0; display:grid; grid-template-columns:380px minmax(0, 1fr) 480px; overflow:hidden; border:1px solid var(--color-border); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); }
+.case-c__body--materials { grid-template-columns:380px minmax(0, 1fr); }
+.case-c__left,
+.case-c__center,
+.case-c__right { min-width:0; min-height:0; overflow:auto; scrollbar-width:thin; }
+.case-c__left { display:flex; flex-direction:column; border-right:1px solid var(--color-border); }
+.case-c__right { display:flex; flex-direction:column; gap:var(--space-3, 12px); padding:var(--space-4, 16px); border-left:1px solid var(--color-border); }
+.case-c__center { display:flex; flex-direction:column; gap:var(--space-3, 12px); padding:var(--space-3, 12px) var(--space-5, 24px) var(--space-4, 16px); }
+.case-c__center > .case-view-bar { flex:none; margin-bottom:0; }
+.case-c__center > .case-view-panel { flex:1 0 auto; min-width:0; }
+
+/* LEFT: the Case path stacks vertically (shared HierarchyPath, restyled here). */
+.case-c__left .shared-hierarchy-path { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); align-items:start; gap:var(--space-2, 8px); padding:var(--space-3, 12px) var(--space-4, 16px); border:0; border-bottom:1px solid var(--color-border); border-radius:0; background:transparent; }
+.case-c__left .shared-hierarchy-path > .shared-hierarchy-path__sep { display:none; }
+.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice { display:grid; gap:3px; max-width:none; min-width:0; }
+.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice[data-hierarchy-level="Case"],
+.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice[data-hierarchy-level="Run Option"],
+.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice[data-hierarchy-level="환경"],
+.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice[data-hierarchy-level="소재 덱"] { grid-column:1 / -1; }
+.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice > select,
+.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice > b { width:100%; max-width:none; }
+.case-c__left .case-path-slot:not([hidden]) { display:block; }
+.case-c__left .case-path-slot .shared-hierarchy-path { grid-template-columns:minmax(0, 1fr); }
+.case-c__left .case-path-slot .shared-hierarchy-path > .shared-hierarchy-choice { grid-column:1 / -1; }
+
+/* LEFT: Scene list. */
+.case-scene-list { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+.case-scene-list > h3 { flex:none; margin:0; padding:var(--space-3, 12px) var(--space-4, 16px) var(--space-2, 8px); color:var(--color-text-muted); font-size:var(--text-body, 13px); font-weight:600; }
+.case-scene-list > ul { display:flex; flex-direction:column; flex:1 1 auto; margin:0; padding:0; overflow:auto; list-style:none; scrollbar-width:thin; }
+.case-scene-row { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; align-items:center; gap:var(--space-2, 8px); width:100%; box-sizing:border-box; padding:var(--space-2, 8px) var(--space-4, 16px); border:0; border-left:3px solid transparent; background:transparent; color:var(--color-text); font:inherit; text-align:left; cursor:pointer; }
+.case-scene-row:hover { background:var(--color-surface-interactive); }
+.case-scene-row.is-selected { border-left-color:var(--color-accent); background:var(--color-surface-selected); color:var(--color-accent); }
+.case-scene-row:focus-visible { outline:2px solid var(--color-focus); outline-offset:-2px; }
+.case-scene-row > b { min-width:2.2em; color:var(--color-accent); }
+.case-scene-row > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.case-scene-row > em { color:var(--color-text-muted); font-size:var(--text-caption, 12px); font-style:normal; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.case-scene-row--static { grid-template-columns:auto minmax(0, 1fr); cursor:default; }
+.case-scene-row--static:hover { background:transparent; }
+.case-scene-row--static > i { width:8px; height:8px; border-radius:50%; background:var(--color-text-muted); opacity:.45; }
+.case-scene-row--static.case-scene-chip--result > i { background:var(--color-success); opacity:1; }
+
+/* CENTER: summary = chart over the location table. */
+.case-c .simulation-dashboard__summary { display:grid; grid-template-columns:minmax(0, 1fr); align-items:start; gap:var(--space-3, 12px); }
+.case-c .simulation-dashboard__summary > .case-summary-chart { flex:none; }
+.case-c .case-summary-chart .simulation-dashboard__chart { height:clamp(260px, 27vh, 420px); }
+.case-c .simulation-dashboard__summary > .simulation-dashboard__location-map { margin-top:0; overflow:auto; }
+.case-c .simulation-dashboard__edge-panels.wide { grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); }
+.case-c .simulation-dashboard__edge-panels.wide .simulation-dashboard__chart { height:clamp(240px, 24vh, 380px); }
+
+/* RIGHT: inspector. Everything in it stacks in one column. */
+.case-c__right .case-display-options { position:static; margin:0; }
+.case-c__right .case-display-options > summary { min-height:0; padding:0; border:0; border-radius:0; color:var(--color-text); font-size:var(--text-subheading, 15px); font-weight:700; }
+.case-c__right .case-display-options[open] > summary { border:0; color:var(--color-text); }
+.case-c__right .case-display-options__panel { position:static; width:auto; margin-top:var(--space-3, 12px); padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.case-c__inspector-slot { display:flex; flex-direction:column; gap:var(--space-3, 12px); min-width:0; }
+.case-c__inspector-slot:empty { display:none; }
+.case-c__inspector-slot > section,
+.case-c__inspector-slot > aside { margin:0; }
+.case-c__inspector-slot .simulation-dashboard__edge-map { margin:var(--space-5, 24px) var(--space-6, 32px); }
+.case-c__inspector-slot .simulation-dashboard__panel-controls { margin:0; }
+.case-c__inspector-slot .simulation-dashboard__detail .simulation-dashboard__chart { height:200px; }
+.case-c__inspector-slot .simulation-dashboard__detail-assets { grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); }
+.case-inspector-foot { display:grid; gap:var(--space-3, 12px); padding-top:var(--space-3, 12px); border-top:1px solid var(--color-border); }
+.case-inspector-foot:empty { display:none; }
+.case-c .simulation-dashboard__scene-table > div { flex:none; width:190px; overflow:hidden; }
+.case-c .simulation-dashboard__scene-table > div > span,
+.case-c .simulation-dashboard__scene-table > div > small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

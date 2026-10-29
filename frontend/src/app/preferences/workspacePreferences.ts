@@ -21,7 +21,7 @@ const LEGACY_KEYS = {
 } as const
 
 export const DEFAULT_WORKSPACE_PREFERENCES: WorkspacePreferences = {
-  theme: 'dark',
+  theme: 'light',
   uiFontSize: 14,
 }
 
@@ -56,7 +56,8 @@ export function loadWorkspacePreferences(storage?: StorageLike): WorkspacePrefer
     theme: storedTheme ?? theme(read(target, LEGACY_KEYS.theme)) ?? DEFAULT_WORKSPACE_PREFERENCES.theme,
     uiFontSize: storedFontSize ?? normalizeWorkspaceFontSize(read(target, LEGACY_KEYS.uiFontSize)) ?? DEFAULT_WORKSPACE_PREFERENCES.uiFontSize,
   }
-  if (storedTheme === undefined) write(target, STORAGE_KEYS.theme, preferences.theme)
+  // The theme is stored only when the user chooses it, so an unchosen theme follows the default.
+  if (storedTheme === undefined && theme(read(target, LEGACY_KEYS.theme))) write(target, STORAGE_KEYS.theme, preferences.theme)
   if (storedFontSize === undefined) write(target, STORAGE_KEYS.uiFontSize, String(preferences.uiFontSize))
   return preferences
 }
