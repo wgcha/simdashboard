@@ -90,6 +90,10 @@ def test_delete_removes_owned_business_data_and_keeps_spdm_tree(admin_client):
     before = _tree_state(root)
     with connect() as conn:   # per-Scene value summaries of the capture (migration 0047, issue #55)
         assert _count(conn, "dashboard_scene_summaries", "capture_id", job["capture_id"]) >= 1
+        from app.services import video_representatives   # representative video choice + project rule (migration 0048)
+        video_representatives.save_choice(conn, job["case_id"], "run|opt|scene", "x/y.mp4", "tester")
+        video_representatives.save_rule(conn, project_id, ["Mid"], "tester")
+        assert _count(conn, "case_scene_video_choices", "case_id", job["case_id"]) == 1
 
     preview = _preview(client, [rid])
     item = preview["items"][0]
@@ -108,6 +112,8 @@ def test_delete_removes_owned_business_data_and_keeps_spdm_tree(admin_client):
         assert _count(conn, "dashboard_captures", "id", job["capture_id"]) == 0
         assert _count(conn, "dashboard_assets", "capture_id", job["capture_id"]) == 0
         assert _count(conn, "dashboard_scene_summaries", "capture_id", job["capture_id"]) == 0
+        assert _count(conn, "case_scene_video_choices", "case_id", job["case_id"]) == 0
+        assert _count(conn, "project_video_rules", "project_id", project_id) == 0
         assert _count(conn, "folder_environment_registry", "registration_id", rid) == 0
         assert _count(conn, "folder_environment_capture_jobs", "registration_id", rid) == 0
         assert _count(conn, "product_information", "project_id", project_id) == 0

@@ -3,6 +3,7 @@ import { AlertTriangle, FileArchive, Layers3 } from 'lucide-react'
 import { simulationDashboardApi, type DashboardCatalog, type DashboardDistribution, type DashboardEnvironment, type UsageDashboard } from '../../shared/api/simulationDashboard'
 import { Select } from '../../shared/components/Select'
 import { CaseFinalizationPanel } from './CaseFinalizationPanel'
+import { CaseSceneVideoCompare } from './CaseSceneVideoCompare'
 import { SceneNameWarningIcon } from './FolderNameWarnings'
 import type { CaseReportFinalScope } from './caseReport/caseReport'
 import {
@@ -136,6 +137,7 @@ export function CaseCompareView({ projectId, requestId, environment, catalog, cu
       ? <p className="case-compare__unit case-compare__unit--warning" role="alert" data-testid="case-compare-unit-warning"><AlertTriangle aria-hidden="true" />{mismatch}</p>
       : <p className="case-compare__unit">단위: {distributionModel.units.map(compareUnitText).join(', ') || '단위 미확인'} · Δ는 기준 Case 대비 · 최저는 Scene별 가장 낮은 값</p> : null}
     {body}
+    {environment === 'DISTRIBUTION' ? <CaseSceneVideoCompare catalog={catalog} cases={columns} path={path} /> : null}
     {target ? <div className="case-compare__final" role="group" aria-label={`Final 지정 대상 ${target.label}`} data-testid="case-compare-final">
       <span>Final 지정 대상 · <strong>{target.label}</strong></span>
       <CaseFinalizationPanel key={target.id} projectId={projectId} requestId={requestId} environment={environment} caseId={target.dashboardCaseId} captureId={target.captureId} hasCapturedCase canFinalize={canFinalize} reportScope={finalScope(target)} openRequest={finalTarget?.token} />

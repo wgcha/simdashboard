@@ -91,6 +91,8 @@ def initialize_database() -> None:
                 "folder_discovery_exclusions",
                 "materials_preparations",
                 "dashboard_scene_summaries",
+                "case_scene_video_choices",
+                "project_video_rules",
             )
             missing = [
                 table_name
@@ -162,6 +164,8 @@ def initialize_database() -> None:
                                            "updated_at"},
                 "dashboard_scene_summaries": {"id", "capture_id", "scene_id", "run_id", "run_option_id",
                                               "format_version", "observation_count", "summary_json", "created_at"},
+                "case_scene_video_choices": {"id", "case_id", "scene_key", "relative_path", "chosen_by", "chosen_at"},
+                "project_video_rules": {"project_id", "keywords_json", "updated_by", "updated_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }
             incompatible = []
@@ -1301,7 +1305,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_folder_discovery_links_schema(conn)
         ensure_materials_preparations_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
-        ensure_dashboard_schema(conn)   # includes dashboard_scene_summaries (migration 0047)
+        ensure_dashboard_schema(conn)   # includes dashboard_scene_summaries (0047) and the video tables (0048)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)
@@ -1708,6 +1712,17 @@ def ensure_dashboard_scene_summaries_schema(conn: duckdb.DuckDBPyConnection) -> 
         run_option_id VARCHAR NOT NULL, format_version INTEGER NOT NULL, observation_count INTEGER NOT NULL,
         summary_json VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
         UNIQUE (capture_id, scene_id, run_id, run_option_id)
+    )""")
+
+
+def ensure_video_representatives_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0048 (representative videos, issue #55)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS case_scene_video_choices (
+        id VARCHAR PRIMARY KEY, case_id VARCHAR NOT NULL, scene_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL,
+        chosen_by VARCHAR, chosen_at TIMESTAMP NOT NULL, UNIQUE (case_id, scene_key)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS project_video_rules (
+        project_id VARCHAR PRIMARY KEY, keywords_json VARCHAR NOT NULL, updated_by VARCHAR, updated_at TIMESTAMP NOT NULL
     )""")
 
 

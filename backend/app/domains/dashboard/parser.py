@@ -331,6 +331,7 @@ def build_distribution_scene(
     scene_name: str,
     files: Iterable[tuple[str, bytes]],
     ignored_sources: list[str] | None = None,
+    unplayable_meta: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     scene = parse_scene_name(scene_name)
     observations: list[dict[str, Any]] = []
@@ -340,8 +341,13 @@ def build_distribution_scene(
     # Issue #55: every csv of the Scene, in parse order, so the values can be parsed again on demand
     # from the stored original bytes (scene summaries keep only the maxima, not every observation).
     sources: list[dict[str, Any]] = []
+    # Videos in a container the capture does not store (avi ...): listed by name and size only (video representatives).
+    unplayable: list[dict[str, Any]] = []
     for relative, content in files:
         suffix = PurePosixPath(relative).suffix.casefold()
+        if unplayable_meta is not None and relative in unplayable_meta:
+            unplayable.append(unplayable_meta[relative])
+            continue
         if suffix in {".csv"}:
             parsed = parse_distribution_csv(content, relative)
             parsed_observations = parsed.get("observations", [])
@@ -381,7 +387,7 @@ def build_distribution_scene(
         component_observations = [item for item in observations if item.get("component_id") == component_id]
         peaks_by_basis = {basis: _peak([item for item in component_observations if item.get("basis") == basis], basis=basis) for basis in ("REPORTED_SUMMARY", "DETAIL")}
         component_results.append({"component_id": component_id, "peak": None, "peaks_by_basis": peaks_by_basis, "edge_peaks": [item for item in component_observations if item.get("kind") == "SIDE"]})
-    return {**scene, "components": sorted(components), "peak": peak, "observations": observations, "sources": sources, "edge_peaks": [item for item in observations if item.get("kind") == "SIDE"], "component_results": component_results, "media": media, "quality_issues": sorted(set(quality)), "verdict": None}
+    return {**scene, "components": sorted(components), "peak": peak, "observations": observations, "sources": sources, "edge_peaks": [item for item in observations if item.get("kind") == "SIDE"], "component_results": component_results, "media": media, **({"unplayable_videos": unplayable} if unplayable else {}), "quality_issues": sorted(set(quality)), "verdict": None}
 
 
 def fingerprint(manifest: Any, recipe_version: str = "dashboard-v1") -> str:

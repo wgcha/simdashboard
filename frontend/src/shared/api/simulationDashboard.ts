@@ -33,8 +33,22 @@ export type DashboardDistribution = { context: DashboardContextEcho; status: str
 export type DashboardComparisonMember = { simulation_case_id: string; load_case_id: string; execution_run_id: string; run_option_id?: string; capture_id: string; mode: string; component_id: string; basis: DashboardBasis }
 export type DashboardLinePoint = { node_id?: string | null; ref_coord: number | null; value: number | null; line_index: number; status?: string | null }
 export type DashboardSceneDetail = { context: DashboardContextEcho; scene: DashboardScene; edge_peaks: DashboardEdgePeak[]; line_points: DashboardLinePoint[]; corner_points?: Array<{ node_id: string; value: number | null; status?: string | null }>; assets: DashboardAsset[]; quality_issues: string[]; unit_system?: DashboardUnitSystem | null }
-export type DashboardRunVideo = { video_id: string; asset_id: string; scene_id: string; scene_label: string; scene_sequence_number?: number | null; scene_sequence_label?: string | null; title: string; component_id?: string | null; frame_role?: string | null; status?: string | null; url?: string | null; source_capture_id: string }
-export type DashboardRunVideoPage = { contract_version: number; context: DashboardContextEcho & { load_case_name?: string | null; run_label?: string | null }; pagination: { page: number; page_size: number; total_items: number; total_pages: number; has_previous: boolean; has_next: boolean }; videos: DashboardRunVideo[] }
+export type DashboardVideoSource = 'USER' | 'RULE' | 'DEFAULT'
+export type DashboardVideoChoice = { relative_path: string; chosen_by?: string | null; chosen_by_name?: string | null; chosen_at?: string | null }
+/** A stored video, or (status UNPLAYABLE, asset_id null) a file the capture does not store (avi ... / too large). */
+export type DashboardRunVideo = {
+  video_id: string; asset_id: string | null; scene_id: string; scene_label: string; scene_sequence_number?: number | null; scene_sequence_label?: string | null; title: string; component_id?: string | null; frame_role?: string | null; status?: string | null; url?: string | null; source_capture_id: string
+  /** Representative video fields (issue #55); absent on older servers. */
+  scene_key?: string; file_name?: string; relative_path?: string; size_bytes?: number | null; codec?: string | null; format?: string | null
+  playable?: boolean; unplayable_reason?: 'FORMAT' | 'CODEC' | 'TOO_LARGE' | string | null; scene_video_count?: number
+  is_representative?: boolean; representative_source?: DashboardVideoSource | null; choice?: DashboardVideoChoice | null; choice_missing?: boolean
+}
+export type DashboardVideoRule = { project_id?: string | null; keywords: string[]; updated_by?: string | null; updated_by_name?: string | null; updated_at?: string | null; can_choose?: boolean; can_edit_rule?: boolean }
+export type DashboardRunVideoPage = { contract_version: number; context: DashboardContextEcho & { load_case_name?: string | null; run_label?: string | null }; case_id?: string | null; video_rule?: DashboardVideoRule; pagination: { page: number; page_size: number; total_items: number; total_pages: number; has_previous: boolean; has_next: boolean }; videos: DashboardRunVideo[] }
+export type DashboardVideoScene = { scene_id: string; scene_key: string; label: string; scene_sequence_number?: number | null; scene_sequence_label?: string | null; video_count: number; unplayable_count: number; representative_asset_id: string | null; representative_path: string | null; representative_source: DashboardVideoSource | null }
+export type DashboardVideoScenes = { contract_version: number; context: DashboardContextEcho & { load_case_name?: string | null; run_label?: string | null }; case_id?: string | null; video_rule?: DashboardVideoRule; scenes: DashboardVideoScene[] }
+export type DashboardVideoRepresentative = { case_id: string; scene_key: string; relative_path: string | null; asset_id: string | null; source: DashboardVideoSource | null; chosen_by: string | null; chosen_by_name: string | null; chosen_at: string | null; choice_missing: boolean }
+export type DashboardVideoQuery = Pick<DashboardContext, 'capture_id' | 'run_option_id' | 'mode'> & { page?: number; page_size?: number; scene_id?: string; scene_label?: string; representative_only?: boolean }
 
 const dashboardPath = (...segments: string[]) => `/${['api', 'dashboard', ...segments].join('/')}`
 
@@ -65,6 +79,14 @@ async function write<T>(path: string, body: unknown, signal?: AbortSignal): Prom
   return response.json() as Promise<T>
 }
 
+async function send<T>(method: 'PUT' | 'DELETE', path: string, body?: unknown, parameters: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<T> {
+  const response = await apiFetch(apiUrl(path as never, {}, parameters), { method, signal, headers: body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  if (!response.ok) throw await apiErrorFromResponse(response)
+  return response.json() as Promise<T>
+}
+
+const videoRulePath = (projectId: string) => `/${['api', 'projects', encodeURIComponent(projectId), 'video-rule'].join('/')}`
+
 export const simulationDashboardApi = {
   resultEnvironments: requestResultEnvironments,
   catalog: (projectId: string, requestId: string, environment: DashboardEnvironment, signal?: AbortSignal) => read<DashboardCatalog>(dashboardPath('catalog'), { project_id: projectId, request_id: requestId, environment }, signal),
@@ -74,7 +96,12 @@ export const simulationDashboardApi = {
   distribution: (runId: string, context: Pick<DashboardContext, 'capture_id' | 'run_option_id' | 'mode' | 'component_id' | 'basis'> & { edge_keys?: string; line_indices?: string }, signal?: AbortSignal) => read<DashboardDistribution>(dashboardPath('distribution', 'runs', encodeURIComponent(runId)), { capture_id: context.capture_id, run_option_id: context.run_option_id, mode: context.mode, component_id: context.component_id, basis: context.basis, edge_keys: context.edge_keys, line_indices: context.line_indices }, signal),
   comparison: (members: DashboardComparisonMember[], edgeKeys: string, lineIndices: string, signal?: AbortSignal) => write<DashboardDistribution>(dashboardPath('distribution', 'comparison'), { members, edge_keys: edgeKeys, line_indices: lineIndices }, signal),
   sceneDetail: (sceneId: string, context: Pick<DashboardContext, 'execution_run_id' | 'capture_id' | 'run_option_id' | 'mode' | 'component_id' | 'basis'> & { line_indices?: string; position?: string }, signal?: AbortSignal) => read<DashboardSceneDetail>(dashboardPath('distribution', 'scenes', encodeURIComponent(sceneId)), { run_id: context.execution_run_id, capture_id: context.capture_id, run_option_id: context.run_option_id, mode: context.mode, component_id: context.component_id, basis: context.basis, line_indices: context.line_indices, position: context.position }, signal),
-  videos: (runId: string, context: Pick<DashboardContext, 'capture_id' | 'run_option_id' | 'mode'> & { page?: number; page_size?: number }, signal?: AbortSignal) => read<DashboardRunVideoPage>(dashboardPath('distribution', 'runs', encodeURIComponent(runId), 'videos'), { capture_id: context.capture_id, run_option_id: context.run_option_id, mode: context.mode, page: context.page === undefined ? undefined : String(context.page), page_size: context.page_size === undefined ? undefined : String(context.page_size) }, signal),
+  videos: (runId: string, context: DashboardVideoQuery, signal?: AbortSignal) => read<DashboardRunVideoPage>(dashboardPath('distribution', 'runs', encodeURIComponent(runId), 'videos'), { capture_id: context.capture_id, run_option_id: context.run_option_id, mode: context.mode, page: context.page === undefined ? undefined : String(context.page), page_size: context.page_size === undefined ? undefined : String(context.page_size), scene_id: context.scene_id, scene_label: context.scene_label, representative_only: context.representative_only ? 'true' : undefined }, signal),
+  videoScenes: (runId: string, context: Pick<DashboardContext, 'capture_id' | 'run_option_id' | 'mode'>, signal?: AbortSignal) => read<DashboardVideoScenes>(dashboardPath('distribution', 'runs', encodeURIComponent(runId), 'video-scenes'), { capture_id: context.capture_id, run_option_id: context.run_option_id, mode: context.mode }, signal),
+  setVideoRepresentative: (payload: { case_id: string; scene_key: string; relative_path: string }, signal?: AbortSignal) => send<DashboardVideoRepresentative>('PUT', dashboardPath('distribution', 'video-representatives'), payload, {}, signal),
+  resetVideoRepresentative: (caseId: string, sceneKey: string, signal?: AbortSignal) => send<DashboardVideoRepresentative>('DELETE', dashboardPath('distribution', 'video-representatives'), undefined, { case_id: caseId, scene_key: sceneKey }, signal),
+  videoRule: (projectId: string, signal?: AbortSignal) => read<DashboardVideoRule>(videoRulePath(projectId), {}, signal),
+  saveVideoRule: (projectId: string, keywords: string[], signal?: AbortSignal) => send<DashboardVideoRule>('PUT', videoRulePath(projectId), { keywords }, {}, signal),
   assetUrl: (assetId: string) => apiUrl(dashboardPath('assets', encodeURIComponent(assetId)) as never),
   assetBlob: (assetId: string, options: { maxBytes?: number; signal?: AbortSignal } = {}) => readAssetBlob(assetId, options),
 }

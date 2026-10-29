@@ -89,3 +89,8 @@ C23/C24를 Cell/Cushion/Box 또는 Upper/Lower로 추정하지 않는다. 거동
 Windows Server 2022 폐쇄망 신규 설치·기존 DB 업데이트·재부팅 실기, 실제 20 Scene 및 실제 CAE 이미지 검증은 수행하지 않았다. 합성 자료 검증과 실제 해석 결과 검증을 구분한다.
 
 합성 자료 브라우저 E2E 2개가 통과했다. 20 Scene/결측 그래프 공백, Scene 상세 연결, 컨투어 전치 셀 유지, 확대·ESC, 탭 전환 지연 응답 차단을 확인했다. 별도 하네스에서 데스크톱·모바일 화면을 직접 검수했으며 console/pageerror는 없었다. 전체 E2E 러너의 자식 종료 오류는 테스트 성공과 별도로 작업 기록에 남겼다.
+
+### Scene 대표 영상 (이슈 #55, migration 0048)
+
+영상 탭은 Scene마다 대표 영상 한 개를 보인다. 우선순위: 사용자 지정(`case_scene_video_choices`, 파일이 그대로 있을 때) > 프로젝트 규칙(`project_video_rules`의 키워드 순서, 파일 이름에 키워드가 든 첫 영상) > 파일 이름순(자연 정렬, 대소문자 무시) 첫 번째. 식별은 `case_id`(안정 id) + `scene_key`(`run id|run option id|Scene 폴더명 소문자`)라 재수집 후에도 유지되고, 선택 파일은 상대 경로로 저장하므로 파일이 사라지면 기본으로 돌아간다. 지정·되돌리기는 `result.import`, 규칙 수정은 `project.layout.edit` 권한이며 모두 감사 이벤트를 남긴다. 수집이 저장하지 않는 avi 등은 새 수집부터 Scene `unplayable_videos`에 이름·크기만 남겨 「재생 불가」 타일로 보이고(변경 없는 Case는 다시 수집하지 않으므로 다음 변경 수집부터), 저장된 mp4의 코덱은 앞뒤 128 KiB의 fourcc로 어림한다.
+

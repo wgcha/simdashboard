@@ -4,10 +4,12 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from ..database_connection import connect
-from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
+from ..modules.access_control import (PROJECT_DATA_VIEW, PROJECT_LAYOUT_EDIT, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE,
+                                      require_permission, require_resource_permission)
 from ..security import write_audit_event
 from ..services.drive import reads as drive_reads
 from ..services import dashboard_capture as storage, dashboard_queries as queries, folder_request_progress
+from ..services import video_representatives as representatives
 
 router = APIRouter(prefix="/api/dashboard", tags=["result-dashboard"])
 project_requests_router = APIRouter(tags=["result-dashboard"])
@@ -223,17 +225,188 @@ def distribution(run_id: str, request: Request, capture_id: str, mode: str, comp
             raise error(exc) from exc
 
 
+def _can(request, permission, project_id, conn) -> bool:
+    try:
+        require_permission(request, permission, project_id, conn=conn)
+        return True
+    except HTTPException:
+        return False
+
+
+def _video_selection(conn, request, capture) -> tuple[dict, dict]:
+    """Rule + the user's choices of the capture's Case, and the viewer's rights on them."""
+    case_id = str(capture["case_id"])
+    project_id = storage.case_project_id(conn, case_id)
+    rule = representatives.load_rule(conn, project_id) if project_id else {"keywords": [], "updated_by": None, "updated_at": None}
+    choices = representatives.load_choices(conn, case_id)
+    names = representatives.user_names(conn, [item.get("chosen_by") for item in choices.values()] + [rule.get("updated_by")])
+    selection = {"keywords": rule["keywords"], "choices": choices, "names": names}
+    rights = {"can_choose": bool(project_id) and _can(request, RESULT_IMPORT, project_id, conn),
+              "can_edit_rule": bool(project_id) and _can(request, PROJECT_LAYOUT_EDIT, project_id, conn)}
+    return selection, {"project_id": project_id, "keywords": rule["keywords"], "updated_by": rule.get("updated_by"),
+                       "updated_by_name": names.get(str(rule.get("updated_by"))), "updated_at": rule.get("updated_at"), **rights}
+
+
 @router.get("/distribution/runs/{run_id}/videos")
 def run_videos(run_id: str, request: Request, capture_id: str, run_option_id: str | None = None, mode: str | None = None,
-               page: int = Query(1, ge=1), page_size: int = Query(queries.VIDEO_PAGE_SIZE_MAX, ge=1, le=queries.VIDEO_PAGE_SIZE_MAX)):
+               page: int = Query(1, ge=1), page_size: int = Query(queries.VIDEO_PAGE_SIZE_MAX, ge=1, le=queries.VIDEO_PAGE_SIZE_MAX),
+               scene_id: str | None = None, scene_label: str | None = None, representative_only: bool = False):
+    """Videos of a Run option (every video, one Scene, or one representative tile per Scene)."""
     with connect() as conn:
         capture = capture_for_read(conn, request, capture_id)
-    if capture is None:
-        raise HTTPException(404, "수집 버전을 찾을 수 없습니다.")
+        if capture is None:
+            raise HTTPException(404, "수집 버전을 찾을 수 없습니다.")
+        selection, rule = _video_selection(conn, request, capture)
+        try:
+            result = queries.run_videos(capture, run_id, mode=mode, run_option_id=run_option_id, page=page, page_size=page_size,
+                                        scene_id=scene_id, scene_label=scene_label, representative_only=representative_only,
+                                        selection=selection, probe=lambda assets: representatives.probe_assets(conn, assets))
+        except storage.DashboardCaptureError as exc:
+            raise error(exc) from exc
+    result["video_rule"] = rule
+    return result
+
+
+@router.get("/distribution/runs/{run_id}/video-scenes")
+def run_video_scenes(run_id: str, request: Request, capture_id: str, run_option_id: str | None = None, mode: str | None = None):
+    """Scenes of a Run option with their video counts and representative (no video content is read)."""
+    with connect() as conn:
+        capture = capture_for_read(conn, request, capture_id)
+        if capture is None:
+            raise HTTPException(404, "수집 버전을 찾을 수 없습니다.")
+        selection, rule = _video_selection(conn, request, capture)
+        try:
+            result = queries.video_scenes(capture, run_id, mode=mode, run_option_id=run_option_id, selection=selection)
+        except storage.DashboardCaptureError as exc:
+            raise error(exc) from exc
+    result["video_rule"] = rule
+    return result
+
+
+class VideoRepresentativeInput(BaseModel):
+    case_id: str = Field(min_length=1, max_length=200)
+    scene_key: str = Field(min_length=1, max_length=2048)
+    relative_path: str = Field(min_length=1, max_length=2048)
+
+
+def _representative_context(conn, request, case_id: str, permission) -> tuple[str, dict]:
+    project_id = storage.case_project_id(conn, case_id)
+    if project_id is None:
+        raise HTTPException(404, "Case를 찾을 수 없습니다.")
+    require_permission(request, permission, project_id, conn=conn)
+    capture = storage.get_latest_capture(conn, case_id)
+    if capture is None or capture.get("environment") != "DISTRIBUTION":
+        raise HTTPException(404, "유통환경 수집 결과를 찾을 수 없습니다.")
+    return project_id, capture
+
+
+def _write(conn, work):
+    """Runs ``work`` in one transaction (DuckDB needs it explicitly; PostgreSQL's connection scope commits)."""
+    is_duck = getattr(conn, "backend", None) != "postgresql"
+    if is_duck:
+        conn.execute("BEGIN TRANSACTION")
     try:
-        return queries.run_videos(capture, run_id, mode=mode, run_option_id=run_option_id, page=page, page_size=page_size)
-    except storage.DashboardCaptureError as exc:
-        raise error(exc) from exc
+        result = work()
+        if is_duck:
+            conn.execute("COMMIT")
+        return result
+    except BaseException:
+        if is_duck:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def _representative_answer(conn, capture, key: str) -> dict:
+    run, scene = queries.find_scene_by_key(capture, key)
+    case_id = str(capture["case_id"])
+    project_id = storage.case_project_id(conn, case_id)
+    rule = representatives.load_rule(conn, project_id) if project_id else {"keywords": []}
+    choice = representatives.load_choices(conn, case_id).get(key)
+    stored = [m for m in scene.get("media", []) if m.get("kind") == "VIDEO" and m.get("asset_id")] if scene else []
+    video, source, missing = representatives.pick_representative(stored, rule["keywords"], choice["relative_path"] if choice else None)
+    names = representatives.user_names(conn, [choice.get("chosen_by")] if choice else [])
+    return {"case_id": case_id, "scene_key": key, "relative_path": video["relative_path"] if video else None,
+            "asset_id": video["asset_id"] if video else None, "source": source if video else None,
+            "chosen_by": choice.get("chosen_by") if choice and source == "USER" else None,
+            "chosen_by_name": names.get(str(choice.get("chosen_by"))) if choice and source == "USER" else None,
+            "chosen_at": choice.get("chosen_at") if choice and source == "USER" else None, "choice_missing": missing}
+
+
+@router.put("/distribution/video-representatives")
+def set_video_representative(payload: VideoRepresentativeInput, request: Request):
+    """Saves the user's representative video of one (Case, Scene); same permission as result import."""
+    with connect() as conn:
+        project_id, capture = _representative_context(conn, request, payload.case_id, RESULT_IMPORT)
+        _run, scene = queries.find_scene_by_key(capture, payload.scene_key)
+        if scene is None:
+            raise HTTPException(422, {"code": "VIDEO_SCENE_NOT_FOUND", "message": "Scene을 찾을 수 없습니다. 목록을 새로 고치세요."})
+        stored = {str(m.get("relative_path")) for m in scene.get("media", []) if m.get("kind") == "VIDEO" and m.get("asset_id")}
+        if payload.relative_path not in stored:
+            raise HTTPException(422, {"code": "VIDEO_NOT_IN_SCENE", "message": "이 Scene에 없는 영상입니다. 재생할 수 있게 저장된 영상만 대표로 지정할 수 있습니다."})
+        principal = request.state.principal
+
+        def work():
+            representatives.save_choice(conn, payload.case_id, payload.scene_key, payload.relative_path, principal.user_id)
+            write_audit_event(request=request, principal=principal, status_code=200, action="DASHBOARD_VIDEO_REPRESENTATIVE_SET",
+                              detail={"project_id": project_id, "case_id": payload.case_id, "scene_key": payload.scene_key,
+                                      "relative_path": payload.relative_path}, connection=conn)
+        _write(conn, work)
+        return _representative_answer(conn, capture, payload.scene_key)
+
+
+@router.delete("/distribution/video-representatives")
+def reset_video_representative(request: Request, case_id: str, scene_key: str):
+    """Removes the user's choice of one (Case, Scene); the rule / first file name decides again."""
+    with connect() as conn:
+        project_id, capture = _representative_context(conn, request, case_id, RESULT_IMPORT)
+        principal = request.state.principal
+
+        def work():
+            removed = representatives.clear_choice(conn, case_id, scene_key)
+            if removed:
+                write_audit_event(request=request, principal=principal, status_code=200, action="DASHBOARD_VIDEO_REPRESENTATIVE_RESET",
+                                  detail={"project_id": project_id, "case_id": case_id, "scene_key": scene_key}, connection=conn)
+        _write(conn, work)
+        return _representative_answer(conn, capture, scene_key)
+
+
+class VideoRuleInput(BaseModel):
+    keywords: list[str] = Field(default_factory=list, max_length=representatives.MAX_KEYWORDS * 4)
+
+
+@project_requests_router.get("/api/projects/{project_id}/video-rule")
+def get_video_rule(project_id: str, request: Request):
+    """The project's ordered file-name keywords that pick the default representative video."""
+    with connect() as conn:
+        require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
+        rule = representatives.load_rule(conn, project_id)
+        names = representatives.user_names(conn, [rule.get("updated_by")])
+        return {**rule, "updated_by_name": names.get(str(rule.get("updated_by"))),
+                "can_edit_rule": _can(request, PROJECT_LAYOUT_EDIT, project_id, conn)}
+
+
+@project_requests_router.put("/api/projects/{project_id}/video-rule")
+def put_video_rule(project_id: str, payload: VideoRuleInput, request: Request):
+    """Replaces the rule (admin / project manager permission, like other project settings)."""
+    with connect() as conn:
+        require_permission(request, PROJECT_LAYOUT_EDIT, project_id, conn=conn)
+        if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
+            raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+        try:
+            keywords = representatives.clean_keywords(payload.keywords)
+        except representatives.VideoRepresentativeError as exc:
+            raise HTTPException(422, {"code": exc.code, "message": str(exc)}) from exc
+        principal = request.state.principal
+
+        def work():
+            before = representatives.load_rule(conn, project_id)["keywords"]
+            saved = representatives.save_rule(conn, project_id, keywords, principal.user_id)
+            write_audit_event(request=request, principal=principal, status_code=200, action="PROJECT_VIDEO_RULE_UPDATED",
+                              detail={"project_id": project_id, "before": before, "after": keywords}, connection=conn)
+            return saved
+        saved = _write(conn, work)
+        names = representatives.user_names(conn, [saved.get("updated_by")])
+        return {**saved, "updated_by_name": names.get(str(saved.get("updated_by"))), "can_edit_rule": True}
 
 
 @router.get("/distribution/scenes/{scene_id}")

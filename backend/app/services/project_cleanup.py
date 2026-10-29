@@ -103,6 +103,9 @@ _STAGE_LEAVES = (
     ("dashboard_assets", (("capture_id", "capture"),)),
     # Per-Scene value summaries (migration 0047, issue #55) go with their capture.
     ("dashboard_scene_summaries", (("capture_id", "capture"),)),
+    # Representative video choices (migration 0048, issue #55) go with their Case; the keyword rule with its project.
+    ("case_scene_video_choices", (("case_id", "case"),)),
+    ("project_video_rules", (("project_id", "project"),)),
     ("dashboard_versions", (("dashboard_id", "dashboard"),)),
     ("dashboards", (("id", "dashboard"),)),
     ("validations", (("id", "validation"),)),

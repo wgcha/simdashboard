@@ -13,7 +13,7 @@ from typing import Any
 from ..database_connection import ConnectionLike, rows
 from ..domains.dashboard import scene_summary
 from ..domains.dashboard.parser import EVALUATIONS, _pick_usage, build_distribution_scene, fingerprint, scene_sort_key
-from . import capture_inventory, spdm_storage
+from . import capture_inventory, spdm_storage, video_representatives
 from . import usage_source_review
 from .storage import get_storage_provider, provider_for_root
 from .storage.local import LocalFsProvider
@@ -548,7 +548,8 @@ def create_capture(
             parsed["quality_issues"] = sorted(set(walk_issues))
     else:
         parsed = {"environment": "DISTRIBUTION", "context": context, **_distribution_payload(
-            relative, files, context, storage_root_id, scan_issues=walk_issues
+            relative, files, context, storage_root_id, scan_issues=walk_issues,
+            unplayable_videos=_unplayable_video_entries(walk_skipped),
         )}
     if payload["environment"] == "USAGE":
         from .dashboard_queries import usage
@@ -611,6 +612,31 @@ def create_capture(
     inventory["outcome"] = "COMPLETED"
     _logger.warning("%s", capture_inventory.log_line(inventory))
     return {"id": capture_id, "case_id": case_id, "fingerprint": digest, "status": status, "context": context, "payload": payload_json, "inventory": inventory}
+
+
+MAX_UNPLAYABLE_VIDEOS = 500
+
+
+def _unplayable_video_entries(skipped: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Video files the walk left out (container the capture does not store, or too large): name, size and why.
+
+    They stay on the drive; the screens list them as 「재생 불가 · 원본 드라이브에 있음」.  Bounded.
+    """
+    entries = []
+    for item in skipped:
+        path = str(item.get("path") or "")
+        suffix = PurePosixPath(path).suffix.casefold()
+        reason = str(item.get("reason") or "")
+        if reason == "UNSUPPORTED_EXTENSION" and suffix in video_representatives.UNPLAYABLE_SUFFIXES:
+            kind = "FORMAT"
+        elif reason == "ASSET_TOO_LARGE" and (suffix in {".mp4", ".webm"} or suffix in video_representatives.UNPLAYABLE_SUFFIXES):
+            kind = "TOO_LARGE"
+        else:
+            continue
+        entries.append({"relative_path": path, "size_bytes": int(item.get("size") or 0), "format": suffix.lstrip("."), "reason": kind})
+        if len(entries) >= MAX_UNPLAYABLE_VIDEOS:
+            break
+    return entries
 
 
 def _summary_id(capture_id: str, run_id: str, option_id: str, scene_id: str) -> str:
@@ -786,6 +812,8 @@ def _distribution_payload(
     storage_root_id: str = "",
     *,
     scan_issues: list[str] | None = None,
+    unplayable_videos: list[dict[str, Any]] | None = None,
+    _unplayable_meta: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     base = PurePosixPath(relative)
     context = context or {}
@@ -880,7 +908,7 @@ def _distribution_payload(
     runs: dict[tuple[str, str], list[dict[str, Any]]] = {key: [] for key in run_meta}
     for (run_id, option_id, scene), grouped in sorted(scene_files.items(), key=lambda item: scene_sort_key(item[0][2])):
         ignored_sources: list[str] = []
-        item = build_distribution_scene(scene, grouped, ignored_sources)
+        item = build_distribution_scene(scene, grouped, ignored_sources, _unplayable_meta)
         quality_issues.update(
             f"UNPROCESSED_FILE:{_safe_issue_relative(source)}:UNRECOGNIZED_RESULT_FILE"
             for source in ignored_sources
@@ -894,6 +922,15 @@ def _distribution_payload(
         item["run_option_id"] = option_id
         scenes.append(item)
         runs[(run_id, option_id)].append(item)
+    if unplayable_videos:
+        # Same grouping on the listed-only files (a second pass, so its path problems add no quality issues);
+        # only Scenes that already hold captured files get the list.
+        extra = _distribution_payload(relative, [(item["relative_path"], b"", "application/x-unplayable") for item in unplayable_videos],
+                                      context, storage_root_id, _unplayable_meta={item["relative_path"]: item for item in unplayable_videos})
+        by_id = {item["id"]: item for item in scenes}
+        for found in extra["scenes"]:
+            if found.get("unplayable_videos") and found["id"] in by_id:
+                by_id[found["id"]]["unplayable_videos"] = found["unplayable_videos"]
     run_rows = [{**meta, "scenes": runs[key]} for key, meta in run_meta.items()]
     return {"run": run_rows[0] if len(run_rows) == 1 else {"source_name": base.name}, "runs": run_rows,
             "scenes": scenes, "quality_issues": sorted(quality_issues)}

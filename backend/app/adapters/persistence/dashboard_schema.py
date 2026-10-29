@@ -45,3 +45,6 @@ def ensure_dashboard_schema(connection) -> None:
     # Per-Scene value summaries of DISTRIBUTION captures (migration 0047, issue #55).
     from ...database import ensure_dashboard_scene_summaries_schema
     ensure_dashboard_scene_summaries_schema(connection)
+    # Representative video per (Case, Scene) and the project keyword rule (migration 0048, issue #55).
+    from ...database import ensure_video_representatives_schema
+    ensure_video_representatives_schema(connection)

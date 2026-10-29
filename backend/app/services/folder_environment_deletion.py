@@ -60,6 +60,7 @@ PROJECT_CHILDREN = (
     ("project_workspace_layout_versions", "project_id", ("layout_kind", "version")),
     ("project_workspace_layouts", "project_id", ("layout_kind",)),
     ("project_request_type_result_profiles", "project_id", ("request_type_id", "request_type_version", "binding_version")),
+    ("project_video_rules", "project_id", ("project_id",)),   # migration 0048, issue #55
 )
 # Independent data that must survive: a reference from these blocks the delete (D15).
 REQUEST_BLOCKERS = (
@@ -387,6 +388,10 @@ def _plan(conn, ids: list[str], *, lock: bool = False) -> dict:
     # Per-Scene value summaries (migration 0047, issue #55) go with their capture.
     summaries = _select(conn, f"SELECT id FROM dashboard_scene_summaries WHERE capture_id IN ({_marks(capture_ids)})",
                         capture_ids) if capture_ids and schema.has("dashboard_scene_summaries", "capture_id") else []
+    # Representative video choices (migration 0048, issue #55) go with their Case.
+    choices = _select(conn, f"SELECT id FROM case_scene_video_choices WHERE case_id IN ({_marks(case_list)})",
+                      case_list) if case_list and schema.has("case_scene_video_choices", "case_id") else []
+    plan.add("case_scene_video_choices", {(str(row[0]),) for row in choices})
     plan.add("dashboard_cases", {(c,) for c in case_list})
     plan.add("dashboard_captures", {(c,) for c in capture_ids})
     plan.add("dashboard_assets", {(str(a[0]),) for a in assets})
@@ -480,7 +485,7 @@ def _plan(conn, ids: list[str], *, lock: bool = False) -> dict:
                 plan.add(f"drive_source_versions.{column}", {(str(r[0]),) for r in _select(
                     conn, f"SELECT id FROM drive_source_versions WHERE {column} IN ({_marks(values)})", list(values))})
     # Per-item counts.
-    counted = {"dashboard_cases", "dashboard_captures", "dashboard_assets", "dashboard_scene_summaries", "analysis_requests", "projects"}
+    counted = {"dashboard_cases", "dashboard_captures", "dashboard_assets", "dashboard_scene_summaries", "case_scene_video_choices", "analysis_requests", "projects"}
     other_total = sum(len(rows) for table, rows in plan.deletes.items() if table not in counted and "." not in table)
     for rid in active:
         counts = items[rid]["counts"]
@@ -550,14 +555,14 @@ def delete_preview(conn, registration_ids) -> dict:
 
 _STAGES = (  # FK-safe order, children first (§13.3).
     ("folder_environment_capture_jobs", "result_registration_files", "result_registration_events",
-     "result_registration_drafts", "dashboard_assets", "dashboard_scene_summaries"),
+     "result_registration_drafts", "dashboard_assets", "dashboard_scene_summaries", "case_scene_video_choices"),
     ("dashboard_captures",),
     ("dashboard_cases",),
     ("folder_environment_registry", "*children", "*nulls", "analysis_requests", "projects"),
 )
 _SINGLE_KEYS = {
     "folder_environment_capture_jobs": "id", "result_registration_events": "id", "result_registration_drafts": "id",
-    "dashboard_assets": "id", "dashboard_scene_summaries": "id", "dashboard_captures": "id", "dashboard_cases": "id", "folder_environment_registry": "id",
+    "dashboard_assets": "id", "dashboard_scene_summaries": "id", "case_scene_video_choices": "id", "dashboard_captures": "id", "dashboard_cases": "id", "folder_environment_registry": "id",
     "analysis_requests": "id", "projects": "id",
 }
 _CHUNK = 500

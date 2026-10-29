@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNo
 import { AlertTriangle, ChevronLeft, ChevronRight, LoaderCircle, Pause, Play, Repeat2, RotateCcw } from 'lucide-react'
 import './DropVideoGrid.css'
 import type { PlaybackState } from './DropVideoParts'
+import { attachPlaybackSync } from './playbackSync'
 import { normalizeVideoGridLayout } from './videoGridLayout'
 
 export type VideoGridPagination = { page: number; page_size: number; total_items: number; total_pages: number; has_previous: boolean; has_next: boolean }
@@ -35,12 +36,14 @@ export type VideoGridCoreProps<P extends { pagination: VideoGridPagination }, T>
   pageSize?: number
   columns?: number
   rows?: number
+  /** 동시 재생 맞춤: play, pause and seek of one shown video are mirrored to the other shown videos. */
+  syncPlayback?: boolean
 }
 
 const PLAY_ERROR = '파일 형식 또는 브라우저 코덱 지원을 확인하세요.'
 
 /** Grid, server/local paging and synchronized playback shared by every video widget. */
-export function VideoGridCore<P extends { pagination: VideoGridPagination }, T>({ resetKey, loadPage, itemsOf, itemId, renderCard, renderHeading, renderSummary, toolbar, emptyState, loadingLabel, gridLabel, testId, className, pageSize = 20, columns = 2, rows = 2 }: VideoGridCoreProps<P, T>) {
+export function VideoGridCore<P extends { pagination: VideoGridPagination }, T>({ resetKey, loadPage, itemsOf, itemId, renderCard, renderHeading, renderSummary, toolbar, emptyState, loadingLabel, gridLabel, testId, className, pageSize = 20, columns = 2, rows = 2, syncPlayback = false }: VideoGridCoreProps<P, T>) {
   const layout = normalizeVideoGridLayout(columns, rows)
   const normalizedPageSize = Number.isFinite(pageSize) ? Math.min(20, Math.max(1, Math.round(pageSize))) : 20
   const [page, setPage] = useState(1)
@@ -109,6 +112,12 @@ export function VideoGridCore<P extends { pagination: VideoGridPagination }, T>(
       videoRefs.current.clear()
     }
   }, [resetKey, page, normalizedPageSize, reloadToken])
+
+  // Re-attached when the shown cards change (page, selection moves the local page) or the option toggles.
+  useEffect(() => {
+    if (!syncPlayback || loading) return undefined
+    return attachPlaybackSync([...videoRefs.current.values()])
+  }, [syncPlayback, loading, result, selectedVideoId, layout.pageSize])
 
   const setState = (videoId: string, state: PlaybackState) => {
     setPlayback((current) => ({ ...current, [videoId]: state }))

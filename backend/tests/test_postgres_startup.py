@@ -108,6 +108,8 @@ class _PostgresStartupConnection:
                                            "updated_at"},
                 "dashboard_scene_summaries": {"id", "capture_id", "scene_id", "run_id", "run_option_id",
                                               "format_version", "observation_count", "summary_json", "created_at"},
+                "case_scene_video_choices": {"id", "case_id", "scene_key", "relative_path", "chosen_by", "chosen_at"},
+                "project_video_rules": {"project_id", "keywords_json", "updated_by", "updated_at"},
                 "users": {"must_change_password", "sessions_revoked_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])

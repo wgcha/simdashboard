@@ -10,3 +10,9 @@
 .case-video-columns { display:flex; align-items:center; gap:4px; padding-left:8px; border-left:1px solid var(--color-border); }
 .case-video-columns>span { color:var(--color-text-muted); font-size:11px; white-space:nowrap; }
 .case-video-columns button { min-width:38px; }
+.case-video-view { display:grid; gap:var(--space-3, 12px); min-width:0; }
+.case-video-modes { display:flex; align-items:center; gap:4px; padding-left:8px; border-left:1px solid var(--color-border); }
+.case-video-scene { display:flex; align-items:center; gap:4px; color:var(--color-text-muted); font-size:11px; }
+.case-video-scene select { max-width:18em; }
+.case-video-sync { display:inline-flex; align-items:center; gap:4px; }
+.case-video-sync svg { width:1em; height:1em; }

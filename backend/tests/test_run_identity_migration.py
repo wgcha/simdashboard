@@ -82,7 +82,9 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert materials_preparations and materials_preparations.down_revision == "0045_folder_discovery_links"
     scene_summaries = script.get_revision("0047_dashboard_scene_summaries")
     assert scene_summaries and scene_summaries.down_revision == "0046_materials_preparations"
-    assert tuple(script.get_heads()) == ("0047_dashboard_scene_summaries",)
+    video_representatives = script.get_revision("0048_video_representatives")
+    assert video_representatives and video_representatives.down_revision == "0047_dashboard_scene_summaries"
+    assert tuple(script.get_heads()) == ("0048_video_representatives",)
 
 
 def test_result_location_links_migration_widens_alembic_version_before_other_ddl(monkeypatch: pytest.MonkeyPatch) -> None:

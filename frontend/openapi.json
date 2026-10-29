@@ -11948,6 +11948,7 @@
           "result-dashboard"
         ],
         "summary": "Run Videos",
+        "description": "Videos of a Run option (every video, one Scene, or one representative tile per Scene).",
         "operationId": "run_videos_api_dashboard_distribution_runs__run_id__videos_get",
         "parameters": [
           {
@@ -12021,6 +12022,218 @@
               "minimum": 1,
               "default": 20,
               "title": "Page Size"
+            }
+          },
+          {
+            "name": "scene_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scene Id"
+            }
+          },
+          {
+            "name": "scene_label",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scene Label"
+            }
+          },
+          {
+            "name": "representative_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Representative Only"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/distribution/runs/{run_id}/video-scenes": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Run Video Scenes",
+        "description": "Scenes of a Run option with their video counts and representative (no video content is read).",
+        "operationId": "run_video_scenes_api_dashboard_distribution_runs__run_id__video_scenes_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "capture_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Capture Id"
+            }
+          },
+          {
+            "name": "run_option_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Option Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/distribution/video-representatives": {
+      "put": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Set Video Representative",
+        "description": "Saves the user's representative video of one (Case, Scene); same permission as result import.",
+        "operationId": "set_video_representative_api_dashboard_distribution_video_representatives_put",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoRepresentativeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Reset Video Representative",
+        "description": "Removes the user's choice of one (Case, Scene); the rule / first file name decides again.",
+        "operationId": "reset_video_representative_api_dashboard_distribution_video_representatives_delete",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "scene_key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Key"
             }
           }
         ],
@@ -12344,6 +12557,96 @@
                 "schema": {
                   "$ref": "#/components/schemas/FolderRequestProgress"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/video-rule": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Get Video Rule",
+        "description": "The project's ordered file-name keywords that pick the default representative video.",
+        "operationId": "get_video_rule_api_projects__project_id__video_rule_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Put Video Rule",
+        "description": "Replaces the rule (admin / project manager permission, like other project settings).",
+        "operationId": "put_video_rule_api_projects__project_id__video_rule_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoRuleInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -27474,6 +27777,49 @@
           "total_bytes"
         ],
         "title": "VersionResponse"
+      },
+      "VideoRepresentativeInput": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Case Id"
+          },
+          "scene_key": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Scene Key"
+          },
+          "relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Relative Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_id",
+          "scene_key",
+          "relative_path"
+        ],
+        "title": "VideoRepresentativeInput"
+      },
+      "VideoRuleInput": {
+        "properties": {
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 80,
+            "title": "Keywords"
+          }
+        },
+        "type": "object",
+        "title": "VideoRuleInput"
       },
       "VocabularyBody": {
         "properties": {

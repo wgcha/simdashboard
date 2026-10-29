@@ -8,6 +8,7 @@ from typing import Any
 from ..domains.dashboard import scene_summary
 from ..domains.dashboard.parser import scene_sequence_label, scene_sequence_number, scene_sort_key
 from ..domains.dashboard.units import stress_unit, stress_unit_of, unit_system
+from . import video_representatives
 from .dashboard_capture import DashboardCaptureError, _decode
 
 EDGES = {"LEFT": "LH", "RIGHT": "RH", "TOP": "TOP", "BOTTOM": "BOT"}
@@ -697,27 +698,135 @@ def select_run_option(capture, run_id, mode=None, run_option_id=None):
     return run, context
 
 
-def run_videos(capture, run_id, *, mode=None, run_option_id=None, page=1, page_size=VIDEO_PAGE_SIZE_MAX):
-    """Every VIDEO media of every Scene of one Run option, in Scene order."""
+def _scene_videos(capture, run_id, *, mode=None, run_option_id=None, selection=None):
+    """Per Scene (in Scene order): its stored videos, the unplayable-format files and the representative."""
     run, context = select_run_option(capture, run_id, mode, run_option_id)
-    videos = []
+    selection = selection or {}
+    keywords = list(selection.get("keywords") or [])
+    choices = selection.get("choices") or {}
+    groups = []
     for scene in ordered_scenes(run.get("scenes", [])):
         label = scene.get("label") or scene.get("source_name") or scene["id"]
+        key = video_representatives.scene_key(run, scene)
+        stored = []
         for media in scene.get("media", []):
             if media.get("kind") != "VIDEO" or not media.get("asset_id"):
                 continue
-            name = str(media.get("relative_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
-            videos.append({"video_id": f"{scene['id']}:{media['asset_id']}", "asset_id": media["asset_id"],
-                           "scene_id": scene["id"], "scene_label": label,
-                           "scene_sequence_number": scene_sequence(scene),
-                           "scene_sequence_label": scene_label_text(scene),
-                           "title": media.get("title") or name or label, "component_id": media.get("component_id"),
-                           "frame_role": media.get("frame_role"), "status": media.get("status") or "READY",
-                           "source_capture_id": scene.get("source_capture_id") or capture["id"]})
-    total_items = len(videos)
+            stored.append({**media, "relative_path": str(media.get("relative_path") or "")})
+        unplayable = [item for item in scene.get("unplayable_videos") or [] if isinstance(item, dict) and item.get("relative_path")]
+        choice = choices.get(key)
+        representative, source, choice_missing = video_representatives.pick_representative(
+            stored, keywords, choice.get("relative_path") if choice else None)
+        groups.append({"scene": scene, "label": label, "key": key, "stored": stored, "unplayable": unplayable,
+                       "representative": representative, "source": source, "choice": choice if source == "USER" else None,
+                       "choice_missing": choice_missing})
+    return run, context, groups
+
+
+def _video_item(capture, group, media, probe):
+    scene = group["scene"]
+    name = video_representatives.file_name(media["relative_path"])
+    info = probe.get(media["asset_id"], {})
+    is_representative = group["representative"] is not None and media["asset_id"] == group["representative"]["asset_id"]
+    codec_blocked = info.get("playable") is False
+    return {"video_id": f"{scene['id']}:{media['asset_id']}", "asset_id": media["asset_id"],
+            "scene_id": scene["id"], "scene_label": group["label"], "scene_key": group["key"],
+            "scene_sequence_number": scene_sequence(scene), "scene_sequence_label": scene_label_text(scene),
+            "title": media.get("title") or name or group["label"], "component_id": media.get("component_id"),
+            "frame_role": media.get("frame_role"), "status": media.get("status") or "READY",
+            "source_capture_id": scene.get("source_capture_id") or capture["id"],
+            "file_name": name, "relative_path": media["relative_path"], "size_bytes": info.get("size_bytes"),
+            "codec": info.get("codec"), "playable": not codec_blocked,
+            "unplayable_reason": "CODEC" if codec_blocked else None,
+            "scene_video_count": len(group["stored"]) + len(group["unplayable"]),
+            "is_representative": is_representative,
+            "representative_source": group["source"] if is_representative else None}
+
+
+def _unplayable_item(capture, group, entry):
+    scene = group["scene"]
+    path = str(entry["relative_path"])
+    name = video_representatives.file_name(path)
+    suffix = name.rsplit(".", 1)[-1].casefold() if "." in name else ""
+    digest = hashlib.sha256(path.encode()).hexdigest()[:12]
+    return {"video_id": f"{scene['id']}:unplayable:{digest}", "asset_id": None, "scene_id": scene["id"],
+            "scene_label": group["label"], "scene_key": group["key"], "scene_sequence_number": scene_sequence(scene),
+            "scene_sequence_label": scene_label_text(scene), "title": name, "component_id": None, "frame_role": None,
+            "status": "UNPLAYABLE", "source_capture_id": scene.get("source_capture_id") or capture["id"],
+            "file_name": name, "relative_path": path, "size_bytes": entry.get("size_bytes"), "codec": None,
+            "format": str(entry.get("format") or suffix) or None, "playable": False,
+            "unplayable_reason": str(entry.get("reason") or "FORMAT"),
+            "scene_video_count": len(group["stored"]) + len(group["unplayable"]),
+            "is_representative": False, "representative_source": None}
+
+
+def run_videos(capture, run_id, *, mode=None, run_option_id=None, page=1, page_size=VIDEO_PAGE_SIZE_MAX,
+               scene_id=None, scene_label=None, representative_only=False, selection=None, probe=None):
+    """Every VIDEO media of every Scene of one Run option, in Scene order.
+
+    ``selection`` (``keywords``, ``choices``) decides each Scene's representative (see ``video_representatives``).
+    ``scene_id`` / ``scene_label`` keep one Scene; ``representative_only`` keeps one tile per Scene (its
+    representative, or its first unplayable-format file when it has no stored video).  ``probe`` maps the
+    asset ids of the returned page to ``{size_bytes, codec, playable}`` (database access stays in the router).
+    Files the capture does not store (``avi`` ...) are listed with ``status: UNPLAYABLE`` and no ``asset_id``.
+    """
+    run, context, groups = _scene_videos(capture, run_id, mode=mode, run_option_id=run_option_id, selection=selection)
+    wanted = str(scene_label).casefold() if scene_label else None
+    entries = []   # (group, kind, media) in display order
+    for group in groups:
+        if scene_id and group["scene"]["id"] != scene_id:
+            continue
+        if wanted is not None and str(group["label"]).casefold() != wanted:
+            continue
+        if representative_only:
+            if group["representative"] is not None:
+                entries.append((group, "stored", group["representative"]))
+            elif group["unplayable"]:
+                entries.append((group, "unplayable", group["unplayable"][0]))
+            continue
+        entries.extend((group, "stored", media) for media in group["stored"])
+        entries.extend((group, "unplayable", entry) for entry in group["unplayable"])
+    total_items = len(entries)
     total_pages = (total_items + page_size - 1) // page_size if total_items else 0
     start = (page - 1) * page_size
-    return {"contract_version": 1, "context": context,
+    window = entries[start:start + page_size] if start < total_items else []
+    info = probe({m["asset_id"]: m["relative_path"] for _g, kind, m in window if kind == "stored"}) if probe and window else {}
+    videos = [_video_item(capture, group, media, info) if kind == "stored" else _unplayable_item(capture, group, media)
+              for group, kind, media in window]
+    names = (selection or {}).get("names") or {}
+    for video, (group, _kind, _media) in zip(videos, window):
+        choice = group["choice"]
+        video["choice"] = {"relative_path": choice["relative_path"], "chosen_by": choice.get("chosen_by"),
+                           "chosen_by_name": names.get(str(choice.get("chosen_by"))),
+                           "chosen_at": choice.get("chosen_at")} if choice and video["is_representative"] else None
+        video["choice_missing"] = bool(group["choice_missing"]) and video["is_representative"]
+    return {"contract_version": 1, "context": context, "case_id": capture.get("case_id"),
+            "video_rule": {"keywords": list((selection or {}).get("keywords") or [])},
             "pagination": {"page": page, "page_size": page_size, "total_items": total_items, "total_pages": total_pages,
                            "has_previous": page > 1 and total_pages > 0, "has_next": page < total_pages},
-            "videos": videos[start:start + page_size] if start < total_items else []}
+            "videos": videos}
+
+
+def find_scene_by_key(capture, key):
+    """``(run, scene)`` of a merged/exact capture by its re-capture-stable Scene key, or ``(None, None)``."""
+    for run in capture["payload"].get("runs", []):
+        for scene in run.get("scenes", []):
+            if video_representatives.scene_key(run, scene) == key:
+                return run, scene
+    return None, None
+
+
+def video_scenes(capture, run_id, *, mode=None, run_option_id=None, selection=None):
+    """One row per Scene of the Run option with its video counts and representative (no asset reads)."""
+    run, context, groups = _scene_videos(capture, run_id, mode=mode, run_option_id=run_option_id, selection=selection)
+    rows = []
+    for group in groups:
+        scene = group["scene"]
+        representative = group["representative"]
+        rows.append({"scene_id": scene["id"], "scene_key": group["key"], "label": group["label"],
+                     "scene_sequence_number": scene_sequence(scene), "scene_sequence_label": scene_label_text(scene),
+                     "video_count": len(group["stored"]), "unplayable_count": len(group["unplayable"]),
+                     "representative_asset_id": representative["asset_id"] if representative else None,
+                     "representative_path": representative["relative_path"] if representative else None,
+                     "representative_source": group["source"] if representative else None})
+    return {"contract_version": 1, "context": context, "case_id": capture.get("case_id"), "scenes": rows}

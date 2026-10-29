@@ -4153,11 +4153,58 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Run Videos */
+        /**
+         * Run Videos
+         * @description Videos of a Run option (every video, one Scene, or one representative tile per Scene).
+         */
         get: operations["run_videos_api_dashboard_distribution_runs__run_id__videos_get"];
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/distribution/runs/{run_id}/video-scenes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run Video Scenes
+         * @description Scenes of a Run option with their video counts and representative (no video content is read).
+         */
+        get: operations["run_video_scenes_api_dashboard_distribution_runs__run_id__video_scenes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/distribution/video-representatives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Video Representative
+         * @description Saves the user's representative video of one (Case, Scene); same permission as result import.
+         */
+        put: operations["set_video_representative_api_dashboard_distribution_video_representatives_put"];
+        post?: never;
+        /**
+         * Reset Video Representative
+         * @description Removes the user's choice of one (Case, Scene); the rule / first file name decides again.
+         */
+        delete: operations["reset_video_representative_api_dashboard_distribution_video_representatives_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4247,6 +4294,30 @@ export interface paths {
          */
         get: operations["folder_progress_api_projects__project_id__requests__request_id__folder_progress_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/video-rule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Video Rule
+         * @description The project's ordered file-name keywords that pick the default representative video.
+         */
+        get: operations["get_video_rule_api_projects__project_id__video_rule_get"];
+        /**
+         * Put Video Rule
+         * @description Replaces the rule (admin / project manager permission, like other project settings).
+         */
+        put: operations["put_video_rule_api_projects__project_id__video_rule_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -9155,6 +9226,20 @@ export interface components {
             file_count: number;
             /** Total Bytes */
             total_bytes: number;
+        };
+        /** VideoRepresentativeInput */
+        VideoRepresentativeInput: {
+            /** Case Id */
+            case_id: string;
+            /** Scene Key */
+            scene_key: string;
+            /** Relative Path */
+            relative_path: string;
+        };
+        /** VideoRuleInput */
+        VideoRuleInput: {
+            /** Keywords */
+            keywords?: string[];
         };
         /** VocabularyBody */
         VocabularyBody: {
@@ -17709,11 +17794,114 @@ export interface operations {
                 mode?: string | null;
                 page?: number;
                 page_size?: number;
+                scene_id?: string | null;
+                scene_label?: string | null;
+                representative_only?: boolean;
             };
             header?: never;
             path: {
                 run_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_video_scenes_api_dashboard_distribution_runs__run_id__video_scenes_get: {
+        parameters: {
+            query: {
+                capture_id: string;
+                run_option_id?: string | null;
+                mode?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_video_representative_api_dashboard_distribution_video_representatives_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VideoRepresentativeInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_video_representative_api_dashboard_distribution_video_representatives_delete: {
+        parameters: {
+            query: {
+                case_id: string;
+                scene_key: string;
+            };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -17893,6 +18081,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FolderRequestProgress"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_video_rule_api_projects__project_id__video_rule_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_video_rule_api_projects__project_id__video_rule_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VideoRuleInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -173,7 +173,7 @@ export function buildDistributionSection(input: { id: string; heading: string; s
   // Animated contours are videos too; the Run video list may hold the same asset, listed once as 컨투어.
   const contourAssets = new Set(animated.map((cell) => cell.asset!.asset_id))
   const reportVideos: CaseReportVideo[] = [
-    ...videos.filter((video) => !contourAssets.has(video.asset_id)).map((video) => ({ id: `${prefix}${video.video_id}`, assetId: video.asset_id, scene: video.scene_label, fileName: video.title })),
+    ...videos.filter((video): video is DashboardRunVideo & { asset_id: string } => Boolean(video.asset_id) && !contourAssets.has(video.asset_id!)).map((video) => ({ id: `${prefix}${video.video_id}`, assetId: video.asset_id, scene: video.scene_label, fileName: video.title })),
     ...animated.map((cell) => ({ id: `${prefix}contour-video:${cell.cell_id}`, assetId: cell.asset!.asset_id, scene: sceneLabel.get(cell.scene_id) ?? cell.scene_id, fileName: fileOf(cell.asset!.title, '컨투어 영상'), kind: '컨투어' as const })),
   ]
   return {
@@ -348,7 +348,7 @@ export async function loadCaseReportSources(source: Pick<CaseReportSource, 'runI
   const videos: DashboardRunVideo[] = []
   for (let page = 1; page <= 250; page += 1) {
     const result = await simulationDashboardApi.videos(source.runId, { capture_id: source.captureId, run_option_id: source.optionId || undefined, mode: source.optionId ? undefined : source.mode || undefined, page, page_size: 20 }, signal)
-    videos.push(...(result.videos ?? []))
+    videos.push(...(result.videos ?? []).filter((video) => video.asset_id))   // files the capture does not store (avi ...) are not report media
     if (!result.pagination.has_next) break
   }
   const distribution = await distributionPromise

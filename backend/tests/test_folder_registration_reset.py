@@ -27,7 +27,7 @@ RESET = ENV + "/registration-reset"
 # Every table that stores a folder path or folder-derived identity (docs/contracts/depth-schema.md §16.8).
 PATH_TABLES = tuple(table for stage in folder_registration_reset.WIPED_TABLES for table in stage) + (
     "folder_environment_scans", "folder_discovery_exclusions", "dashboard_cases", "dashboard_captures", "dashboard_assets",
-    "dashboard_scene_summaries", "projects", "analysis_requests", "notifications")
+    "dashboard_scene_summaries", "case_scene_video_choices", "project_video_rules", "projects", "analysis_requests", "notifications")
 
 
 @pytest.fixture(autouse=True)

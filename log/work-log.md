@@ -2,6 +2,15 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-29 — 영상 탭: Scene 대표 영상·프로젝트 규칙·동시 재생·재생 불가 표시 (이슈 #55 GUI 갱신)
+
+- 변경: Scene에 영상이 여러 개일 수 있어 (Case, Scene)마다 대표 영상을 둔다. 우선순위는 사용자 지정(파일이 그대로 있을 때) > 프로젝트 규칙 키워드(앞 키워드부터, 파일 이름 자연 정렬 순) > 파일 이름순 첫 번째. 파일이 사라지면 기본으로 돌아간다.
+- DB: migration 0048(추가만, FK 없음) `case_scene_video_choices`(case_id + scene_key `run|run option|Scene 폴더명(소문자)` → 파일 상대 경로·지정자·시각; 재수집해도 유지)와 `project_video_rules`(프로젝트별 키워드 JSON). DuckDB `ensure_video_representatives_schema`, 기동 필수 표·열 검사, 프로젝트 정리·폴더 등록 삭제 계획·초기화(프로젝트 정리 경유) 대상.
+- API: `GET /api/dashboard/distribution/runs/{run}/videos`에 `scene_id`·`scene_label`·`representative_only` 추가(응답에 대표·재생 가능 필드 추가, 기존 필드 유지), `GET .../video-scenes`, `PUT|DELETE /api/dashboard/distribution/video-representatives`(결과 등록 권한 `result.import`), `GET|PUT /api/projects/{id}/video-rule`(수정은 프로젝트 관리 권한 `project.layout.edit`). 쓰기는 감사 이벤트(`DASHBOARD_VIDEO_REPRESENTATIVE_SET|RESET`, `PROJECT_VIDEO_RULE_UPDATED`).
+- 재생 불가: 수집이 저장하지 않는 avi 등(`.avi .mov .mkv .wmv .flv .m4v .mpg .mpeg`, 32 MiB 초과 영상)은 새 수집부터 Scene의 `unplayable_videos`(이름·크기·형식)로 payload에 남겨 「재생 불가 · avi · 크기 · 원본 드라이브에 있음」 타일로 보인다. 저장된 mp4는 앞뒤 128 KiB의 sample entry fourcc로 코덱을 어림(`avc1` 재생, `mp4v`/`hvc1` 불가 → 「재생 불가 · 코덱」+내려받기), asset별 1회·LRU 4096.
+- 화면: 영상 탭 두 보기(Case 전체·Scene별 대표 / Scene 하나·전체 격자), ★ 대표·「대표 변경」 패널(미리보기·대표로 저장·기본으로 되돌리기·마지막 변경), 프로젝트 규칙 편집, 「동시 재생 맞춤」(`playbackSync`), Case 비교의 「같은 Scene 대표 영상 나란히」.
+- 남은 점: 변경 없는 Case는 다시 수집하지 않으므로(지문 불변) 이미 저장된 수집에는 avi 목록이 없고 다음 변경 수집부터 나타난다. 실제 PG18 migration과 실제 영상 코덱 샘플은 검증하지 않았다.
+
 ## 2026-10-28 — 유통환경 수집: Scene 요약 + 원본 csv 온디맨드 파싱 (이슈 #55, 2단계)
 
 - 증상: 유통 Case 수집이 csv 값마다 관측 JSON을 `dashboard_captures.payload_json` 한 행에 저장(csv의 약 27배 이상) → 224 MB Case가 jsonb 256 MB 한도, 화면마다 전체 payload 로드. 0.3.2.4는 128 MiB 가드로 거절만 했다.
