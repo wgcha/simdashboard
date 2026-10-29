@@ -74,8 +74,7 @@ export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersi
   }
 
   return <div className="portfolio-page" data-custom-font="true" style={{ '--portfolio-font-size': `${renderedFontSize}px` } as CSSProperties}>
-    <button className="result-overview-return" disabled={editMode} onClick={() => { setShowOperations(false); setFilters((current) => ({ ...current, date_from: '', date_to: '', analysis_type: '', status: '' })) }}><ArrowLeft /> 결과 대시보드</button>
-    <header className="portfolio-head"><div><span>ANALYSIS OPERATIONS</span><h1>해석 운영 현황</h1><p>프로젝트부터 최신 해석 판정까지 한 화면에서 추적합니다.</p></div><div><small>데이터 기준</small><strong>{data.grain.replaceAll('_', ' ')}</strong><span>최근 결과 {data.freshness ? new Date(data.freshness).toLocaleString('ko-KR') : '없음'}</span></div></header>
+    <header className="portfolio-head"><div className="portfolio-head-title"><button className="result-overview-return" disabled={editMode} onClick={() => { setShowOperations(false); setFilters((current) => ({ ...current, date_from: '', date_to: '', analysis_type: '', status: '' })) }}><ArrowLeft /> 결과 대시보드</button><div><span>ANALYSIS OPERATIONS</span><h1>해석 운영 현황</h1><p>프로젝트부터 최신 해석 판정까지 한 화면에서 추적합니다.</p></div></div><div><small>데이터 기준</small><strong>{data.grain.replaceAll('_', ' ')}</strong><span>최근 결과 {data.freshness ? new Date(data.freshness).toLocaleString('ko-KR') : '없음'}</span></div></header>
     {editMode && <section className="portfolio-edit-toolbar" data-testid="portfolio-layout-editor">
       <GripVertical />
       <span><strong>운영 대시보드 편집 · v{layoutVersion}</strong> 카드의 이동 버튼이나 손잡이를 사용하고, 상단의 운영 설정 저장으로 새 버전을 만드세요.</span>

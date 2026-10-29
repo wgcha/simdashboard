@@ -756,3 +756,13 @@
 .app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-kpis small,
 .app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-chart header :is(strong,small),
 .app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-table-card :is(header span,h2,.portfolio-row,.portfolio-row strong,.portfolio-row small,.portfolio-row b) { font-size:var(--text-body); }
+
+/* C안 운영 현황: 헤더에 돌아가기, 필터 한 줄, 차트 4열 */
+.app-shell .portfolio-head-title { display:flex; align-items:center; gap:var(--space-4, 16px); }
+.app-shell .portfolio-head-title > .result-overview-return { flex:0 0 auto; }
+.app-shell .portfolio-filters { display:flex; flex-wrap:nowrap; align-items:flex-end; }
+.app-shell .portfolio-filters .portfolio-search { flex:1 1 280px; max-width:520px; }
+.app-shell .portfolio-filters > label:not(.portfolio-search) { flex:0 1 150px; }
+.app-shell .portfolio-filters > a { margin-left:auto; }
+.app-shell .portfolio-grid { grid-template-columns:repeat(4, minmax(0, 1fr)); }
+@media (max-width:1200px) { .app-shell .portfolio-filters { flex-wrap:wrap; } .app-shell .portfolio-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
