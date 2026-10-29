@@ -1,0 +1,27 @@
+/* The doubled .app-shell outranks the theme-specific rail geometry in focused-shell.css. */
+/* Sidebar collapse toggle and ~72px icon rail (2026-10-29). Menu items are unchanged; in the rail
+   every item shows its icon only and keeps its aria-label and hover title. */
+.app-shell .sidebar .brand { position:relative; }
+.app-shell .sidebar .sidebar-rail-toggle { display:inline-grid; place-items:center; flex:none; width:28px; height:28px; margin-left:auto; padding:0; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--color-text-muted, #66758a); cursor:pointer; }
+.app-shell .sidebar .sidebar-rail-toggle:hover { border-color:var(--color-border, #dbe2ec); color:var(--color-accent, #245fc5); }
+.app-shell .sidebar .sidebar-rail-toggle:focus-visible { outline:2px solid var(--color-focus, #245fc5); outline-offset:1px; }
+.app-shell .sidebar .sidebar-rail-toggle svg { width:16px; height:16px; }
+
+.app-shell.app-shell .sidebar.sidebar--rail { width:72px; padding-inline:8px; }
+.app-shell.app-shell:has(.sidebar.sidebar--rail) .main-shell { margin-left:72px; width:calc(100% - 72px); }
+.app-shell.app-shell .sidebar.sidebar--rail .brand { flex-direction:column; justify-content:center; gap:10px; padding-inline:0; }
+.app-shell.app-shell .sidebar.sidebar--rail .brand > span:nth-child(2) { display:none; }
+.app-shell.app-shell .sidebar.sidebar--rail .sidebar-rail-toggle { margin-left:0; }
+.app-shell.app-shell .sidebar.sidebar--rail .nav-main .nav-link,
+.app-shell.app-shell .sidebar.sidebar--rail .nav-group-label,
+.app-shell.app-shell .sidebar.sidebar--rail .sidebar-settings > summary,
+.app-shell.app-shell .sidebar.sidebar--rail .sidebar-foot > button { display:flex; justify-content:center; align-items:center; width:100%; padding-inline:0; }
+.app-shell.app-shell .sidebar.sidebar--rail .nav-main .nav-link > span,
+.app-shell.app-shell .sidebar.sidebar--rail .nav-group-label > span:not(.nav-group-icon),
+.app-shell.app-shell .sidebar.sidebar--rail .nav-group-caret,
+.app-shell.app-shell .sidebar.sidebar--rail .sidebar-settings > summary > span,
+.app-shell.app-shell .sidebar.sidebar--rail .sidebar-settings-body,
+.app-shell.app-shell .sidebar.sidebar--rail .sidebar-foot > button > span,
+.app-shell.app-shell .sidebar.sidebar--rail .signed-user { display:none; }
+.app-shell.app-shell .sidebar.sidebar--rail .nav-main .nav-link svg { margin-top:0; }
+.app-shell.app-shell .sidebar.sidebar--rail .nav-group-items { padding-left:0; }

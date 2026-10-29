@@ -13,6 +13,8 @@ import {
   LayoutDashboard,
   LogOut,
   Monitor,
+  ChevronsLeft,
+  ChevronsRight,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
@@ -27,6 +29,7 @@ import {
   Weight,
 } from 'lucide-react'
 import { ChangePasswordDialog } from '../../features/auth/ChangePasswordDialog'
+import './AppSidebar.css'
 import { physicsAiNavHref } from '../../shared/api/physicsaiLinkModel'
 import { usePhysicsAiLink } from '../../shared/hooks/usePhysicsAiLink'
 import { eslNavHref } from '../../shared/api/eslLinkModel'
@@ -121,6 +124,11 @@ export const SIDEBAR_HIDDEN_MENUS: ReadonlySet<AppSidebarMenuId> = new Set<AppSi
   'materials',
 ])
 
+// Collapsed icon rail (2026-10-29): remembered per browser; the default stays expanded.
+export const SIDEBAR_RAIL_STORAGE_KEY = 'simdashboard.sidebar.rail.v1'
+function readSidebarRail() { try { return window.localStorage.getItem(SIDEBAR_RAIL_STORAGE_KEY) === '1' } catch { return false } }
+function writeSidebarRail(rail: boolean) { try { window.localStorage.setItem(SIDEBAR_RAIL_STORAGE_KEY, rail ? '1' : '0') } catch { /* the state still applies until reload */ } }
+
 function groupForMenu(id: string): MenuGroupId | undefined {
   return MENU_GROUP_BY_ID[id as AppSidebarMenuId]
 }
@@ -157,6 +165,8 @@ export function AppSidebar({
   workspacePathForMenu,
 }: AppSidebarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [rail, setRail] = useState(readSidebarRail)
+  const toggleRail = () => setRail((current) => { writeSidebarRail(!current); return !current })
   const activeGroup = groupForMenu(activePage)
   const initialOpen = useMemo(() => new Set<MenuGroupId>(['overview', ...(activeGroup && activeGroup !== 'overview' ? [activeGroup] : [])]), [activeGroup])
   const [openGroups, setOpenGroups] = useState<Set<MenuGroupId>>(initialOpen)
@@ -194,8 +204,8 @@ export function AppSidebar({
     return <Link key={menu.id} aria-label={label} aria-current={activePage === menu.id ? 'page' : undefined} title={label} className={'nav-link ' + extraClass + (activePage === menu.id ? ' active' : '')} to={workspacePathForMenu(menu.id)} onClick={navigate} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{label}</span></Link>
   }
 
-  return <aside className={`sidebar ${mobileMenuOpen ? 'mobile-menu-open' : ''}`} aria-label="주 메뉴">
-    <div className="brand" title="VD simulation workbench"><span className="brand-mark"><Activity /></span><span>VD <strong>workbench</strong></span><button type="button" className="mobile-menu-trigger" aria-label={mobileMenuOpen ? '메뉴 닫기' : '메뉴 열기'} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((value) => !value)}>{mobileMenuOpen ? <PanelLeftClose /> : <PanelLeftOpen />}<span>{mobileMenuOpen ? '메뉴 닫기' : '메뉴 열기'}</span></button></div>
+  return <aside className={`sidebar${rail ? ' sidebar--rail' : ''}${mobileMenuOpen ? ' mobile-menu-open' : ''}`} aria-label="주 메뉴">
+    <div className="brand" title="VD simulation workbench"><span className="brand-mark"><Activity /></span><span>VD <strong>workbench</strong></span><button type="button" className="mobile-menu-trigger" aria-label={mobileMenuOpen ? '메뉴 닫기' : '메뉴 열기'} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((value) => !value)}>{mobileMenuOpen ? <PanelLeftClose /> : <PanelLeftOpen />}<span>{mobileMenuOpen ? '메뉴 닫기' : '메뉴 열기'}</span></button><button type="button" className="sidebar-rail-toggle" aria-label={rail ? '메뉴 펼치기' : '메뉴 접기'} title={rail ? '메뉴 펼치기' : '메뉴 접기'} aria-expanded={!rail} onClick={toggleRail}>{rail ? <ChevronsRight aria-hidden="true" /> : <ChevronsLeft aria-hidden="true" />}</button></div>
     <nav className="nav-main">
       {visibleGroups.map((group) => group.id === 'overview' ? <div key={group.id} className="nav-primary" aria-label="주요 업무">{group.menus.map((menu) => renderMenuLink(menu))}</div> : <div key={group.id}><details className={`nav-group nav-group--${group.id}`} role="group" aria-label={group.label} open={openGroups.has(group.id)} onToggle={(event) => {
         const isOpen = event.currentTarget.open
@@ -206,7 +216,7 @@ export function AppSidebar({
           return next
         })
       }}>
-        <summary className="nav-group-label" aria-label={`${group.label} 메뉴`}><span className="nav-group-icon" aria-hidden="true">{group.id === 'workflow' ? <FlaskConical /> : group.id === 'administration' ? <Settings2 /> : group.id === 'support' ? <BookOpen /> : <LayoutDashboard />}</span><span>{group.label}</span><Plus className="nav-group-caret" aria-hidden="true" /></summary>
+        <summary className="nav-group-label" aria-label={`${group.label} 메뉴`} title={group.label}><span className="nav-group-icon" aria-hidden="true">{group.id === 'workflow' ? <FlaskConical /> : group.id === 'administration' ? <Settings2 /> : group.id === 'support' ? <BookOpen /> : <LayoutDashboard />}</span><span>{group.label}</span><Plus className="nav-group-caret" aria-hidden="true" /></summary>
         <div className="nav-group-items">
           {group.menus.map((menu) => renderMenuLink(menu))}
         </div>
@@ -219,8 +229,8 @@ export function AppSidebar({
     <div className="sidebar-foot">
       {/* Global font-size buttons are hidden (user decision 2026-10-08); the stored size still applies. */}
       {signedIn && <div className="signed-user"><strong>{userDisplayName}</strong><span>{userBadge}</span></div>}
-      <details className="sidebar-settings"><summary><Settings2 /> <span>환경설정</span><Plus className="nav-group-caret" aria-hidden="true" /></summary><div className="sidebar-settings-body"><span className="system-pill"><span className="live-dot" /> {databaseBackend === 'postgresql' ? '서버 연결' : '로컬 연결'}</span><small>계정과 연결 상태를 확인합니다.</small>{signedIn && authMode === 'password' && <ChangePasswordDialog key={accountKey ?? 'account'} theme={theme} />}</div></details>
-      {signedIn && <button onClick={onLogout}><LogOut /><span>로그아웃</span></button>}
+      <details className="sidebar-settings"><summary aria-label="환경설정" title="환경설정"><Settings2 /> <span>환경설정</span><Plus className="nav-group-caret" aria-hidden="true" /></summary><div className="sidebar-settings-body"><span className="system-pill"><span className="live-dot" /> {databaseBackend === 'postgresql' ? '서버 연결' : '로컬 연결'}</span><small>계정과 연결 상태를 확인합니다.</small>{signedIn && authMode === 'password' && <ChangePasswordDialog key={accountKey ?? 'account'} theme={theme} />}</div></details>
+      {signedIn && <button onClick={onLogout} aria-label="로그아웃" title="로그아웃"><LogOut /><span>로그아웃</span></button>}
     </div>
   </aside>
 }
