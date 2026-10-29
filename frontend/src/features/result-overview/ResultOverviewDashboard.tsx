@@ -93,13 +93,14 @@ export function ResultOverviewDashboard({ data, loading, projectId, search, isGl
   return <div className="result-overview-dashboard" data-ui-density="v1" data-testid="result-overview-dashboard">
     <header className="result-overview-heading">
       <div><span className="result-overview-kicker">RESULTS</span><h1>결과 대시보드</h1><p>최신 결과를 확인하고 해당 의뢰로 이어갑니다.</p></div>
-      <Button className="result-overview-operations" onClick={onShowOperations}><SlidersHorizontal aria-hidden="true" /> 운영 현황 <ChevronRight aria-hidden="true" /></Button>
-    </header>
-
-    <section className="result-overview-filters" aria-label="결과 대시보드 필터">
+      <div className="result-overview-header-tools">
+      <section className="result-overview-filters" aria-label="결과 대시보드 필터">
       <label><span className="sr-only">프로젝트</span><Select controlSize="lg" aria-label="결과 프로젝트" value={projectId} onChange={(event) => onProjectChange(event.target.value)}><option value="">모든 프로젝트</option>{data.filter_options.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</Select></label>
       <label className="result-overview-search"><Search aria-hidden="true" /><Input controlSize="lg" aria-label="의뢰 제목, 하중 경우 검색" value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="의뢰 제목, 하중 경우 검색" /></label>
     </section>
+      <Button className="result-overview-operations" onClick={onShowOperations}><SlidersHorizontal aria-hidden="true" /> 운영 현황 <ChevronRight aria-hidden="true" /></Button>
+      </div>
+    </header>
 
     {loading ? <div className="result-overview-loading" role="status" aria-busy="true"><LoaderCircle className="spin" aria-hidden="true" /> 결과 대시보드를 갱신하고 있습니다.</div> : <>
     <section className="result-overview-summary" aria-label="결과 요약">
@@ -129,13 +130,16 @@ export function ResultOverviewDashboard({ data, loading, projectId, search, isGl
             <span role="cell" className="result-overview-row-actions">{onOpenCase && <Button size="sm" onClick={() => onOpenCase(record)}>{record.case_state === 'COMPLETED' ? '결과 검토' : '의뢰 보기'}</Button>}{onOpenCase && <Button size="sm" variant="ghost" className="result-overview-icon-action" aria-label={`${record.request_title} 의뢰 열기`} onClick={() => onOpenCase(record)}><ExternalLink aria-hidden="true" /></Button>}</span>
           </article>)}
         </div>}
-        {pageCount > 1 && <nav className="result-overview-pagination" aria-label="결과 목록 페이지"><Button size="sm" disabled={safePage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>이전</Button><span>{safePage + 1} / {pageCount}</span><Button size="sm" disabled={safePage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>다음</Button></nav>}
-        <footer className="result-overview-source" data-testid="result-overview-source">집계 기준: 폴더 등록 Case (의뢰 × Case × 환경) · 최근 결과 받은 시각 {formatDate(data.case_freshness)}</footer>
+        <footer className="result-overview-source">
+          <span data-testid="result-overview-source">집계 기준: 폴더 등록 Case (의뢰 × Case × 환경) · 최근 결과 받은 시각 {formatDate(data.case_freshness)}</span>
+          <span className="result-overview-source-actions">{legacyCount > 0 && <button type="button" className="result-overview-unassigned result-overview-legacy-link" aria-pressed={filter === 'legacy'} onClick={() => toggleFilter('legacy')}>옛 결과 {legacyCount}건 {filter === 'legacy' ? '(목록 표시 중)' : '보기'}</button>}
+          <nav className="result-overview-pagination" aria-label="결과 목록 페이지"><Button size="sm" disabled={safePage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>이전</Button><span>{safePage + 1} / {pageCount}</span><Button size="sm" disabled={safePage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>다음</Button></nav></span>
+        </footer>
       </section>
 
       <aside className="result-overview-side-column">
         <section className="result-overview-panel type-summary-panel"><header className="result-overview-panel-heading"><div><h2>유형별 판정 (옛 결과)</h2><p>옛 결과의 최신 Run 수치 판정</p></div></header><div className="result-overview-type-list">{typeSummaries.length === 0 ? <p className="result-overview-empty-copy">옛 결과가 없습니다. 새 결과에는 판정 기준이 아직 없습니다.</p> : typeSummaries.map((summary) => <TypeBar key={summary.name} summary={summary} />)}</div><div className="result-overview-legend"><span className="legend-pass">PASS</span><span className="legend-fail">FAIL</span><span className="legend-pending">대기</span><span className="legend-no-data">판정 없음</span>{typeSummaries.some((summary) => summary.other > 0) && <span className="legend-other">확인 필요</span>}</div></section>
-        <section className="result-overview-panel pending-panel"><header className="result-overview-panel-heading"><div><h2>결과 대기</h2><p>폴더에 등록됐지만 결과가 아직 없는 Case입니다.</p></div><span>{counts.waiting}</span></header>{waitingCases.length ? <div className="result-overview-pending-list">{waitingCases.map((record) => <button key={record.case_id} onClick={() => onOpenCase?.(record)}><span><strong>{record.request_title}</strong><small>{record.case_name} · {ENVIRONMENT_TEXT[record.environment] ?? record.environment}</small></span><ChevronRight aria-hidden="true" /></button>)}</div> : <p className="result-overview-empty-copy">현재 결과 대기 항목이 없습니다.</p>}{legacyCount > 0 && <button type="button" className="result-overview-unassigned result-overview-legacy-link" aria-pressed={filter === 'legacy'} onClick={() => toggleFilter('legacy')}>옛 결과 {legacyCount}건 {filter === 'legacy' ? '(목록 표시 중)' : '보기'}</button>}</section>
+        <section className="result-overview-panel pending-panel"><header className="result-overview-panel-heading"><div><h2>결과 대기</h2><p>폴더에 등록됐지만 결과가 아직 없는 Case입니다.</p></div><span>{counts.waiting}</span></header>{waitingCases.length ? <div className="result-overview-pending-list">{waitingCases.map((record) => <button key={record.case_id} onClick={() => onOpenCase?.(record)}><span><strong>{record.request_title}</strong><small>{record.case_name} · {ENVIRONMENT_TEXT[record.environment] ?? record.environment}</small></span><ChevronRight aria-hidden="true" /></button>)}</div> : <p className="result-overview-empty-copy">현재 결과 대기 항목이 없습니다.</p>}</section>
       </aside>
     </div></>}
   </div>
