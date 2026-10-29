@@ -12,6 +12,7 @@ import {
 } from '../../shared/api/notifications'
 import { NotificationEntry } from './NotificationEntry'
 import './notifications.css'
+import { notificationTarget } from './notificationLink'
 
 const PAGE_SIZE = 50
 const MAX_LIMIT = 200
@@ -66,7 +67,7 @@ export function NotificationsPage() {
   }
   const open = async (item: NotificationItem) => {
     if (!item.read) await markRead([item.id])
-    if (item.link) navigate(item.link)
+    if (item.link) navigate(notificationTarget(item.link))
   }
 
   return <section className="notifications-page" aria-labelledby="notifications-title" data-testid="notifications-page">

@@ -37,7 +37,8 @@ test('첫 화면은 독립 결과 대시보드이며 실제 최신 Run 집계와
   if (process.env.GUI_QA_OUTPUT_DIR) await page.screenshot({ path: path.join(process.env.GUI_QA_OUTPUT_DIR, 'results-dashboard-mobile.png') })
 })
 
-test('대시보드 결과에서 의뢰와 하중 경우 및 정확한 Run으로 연결된다', async ({ page }) => {
+test('대시보드의 옛 결과 「결과 검토」는 그 의뢰의 Case 결과를 연다', async ({ page }) => {
+  // The legacy Run review has no entry point (user decision 2026-10-29); 옛 결과 rows open the request's Case 결과.
   await loginWorkspace(page, 'e2e-admin', '/')
   const dashboard = page.getByTestId('result-overview-dashboard')
   await dashboard.getByLabel('의뢰 제목, 하중 경우 검색').fill('Run 비교: 회귀와 개선')
@@ -46,26 +47,12 @@ test('대시보드 결과에서 의뢰와 하중 경우 및 정확한 Run으로 
   await expect(row).toHaveCount(1)
   const data = await (await page.request.get('/api/portfolio/overview')).json() as PortfolioOverview
   const record = data.records.find((item) => item.request_id === 'request-showcase-compare')!
-  let releaseRuns!: () => void
-  let startedRuns!: () => void
-  const runsStarted = new Promise<void>((resolve) => { startedRuns = resolve })
-  const heldRuns = new Promise<void>((resolve) => { releaseRuns = resolve })
-  await page.route('**/api/load-cases/loadcase-showcase-compare/runs', async (route) => {
-    startedRuns()
-    await heldRuns
-    await route.continue()
-  })
   await row.getByRole('button', { name: '결과 검토', exact: true }).click()
-  await runsStarted
-  const summary = page.getByRole('region', { name: '현재 Run 핵심 결과' })
-  await expect(summary.getByText('Run #1', { exact: true })).toHaveCount(0)
-  releaseRuns()
+  await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('case_results')
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(record.request_id)
-  await expectLoadCase(page, record.load_case_id)
-  await expect(page.getByLabel('결과 버전 선택')).toHaveValue(record.run_id!)
-  await expect(summary).toContainText('Run #3')
-  await expect(summary).toContainText('표시 항목의 기준')
-  await expect(summary.locator('.result-summary-value')).toContainText('중 첫 항목')
+  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByLabel('결과 버전 선택')).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '현재 Run 핵심 결과' })).toHaveCount(0)
   await openWorkspaceRoute(page, '/workspace/overview')
   await expect(dashboard).toBeVisible()
 })

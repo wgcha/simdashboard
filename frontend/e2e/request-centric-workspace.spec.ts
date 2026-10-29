@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Overview } from '../src/types'
-import { expectLoadCase, loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
+import { expectLoadCase, loginWorkspace, mockResultEnvironments, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 async function selectComparisonRequest(page: Page) {
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-feature-showcase')
@@ -283,8 +283,10 @@ test('결과 등록에서 검토로 이동할 때 조회가 실패하면 로딩 
   await page.getByRole('button', { name: '결과 등록', exact: true }).click()
   await expect(page.getByLabel('등록 하중 경우 선택')).toHaveCount(0)
   await expectLoadCase(page, 'loadcase-showcase-compare')
-  await page.route('**/api/load-cases/loadcase-showcase-compare/overview*', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'E2E 결과 조회 실패' }) }))
-  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: /^기존 Run 대시보드/ }).click()
-  await expect(page.locator('.full-state.error')).toBeVisible()
+  // The result step is Case 결과 (the legacy Run review has no entry point, 2026-10-29): a failed catalog read shows an error.
+  await mockResultEnvironments(page)
+  await page.route('**/api/dashboard/catalog**', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'E2E 결과 조회 실패' }) }))
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: 'Case 결과', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' }).getByRole('alert').first()).toBeVisible({ timeout: 15_000 })
   await expect(page.getByTestId('workspace-context-restoring')).toHaveCount(0)
 })

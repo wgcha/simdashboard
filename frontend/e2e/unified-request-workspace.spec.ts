@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { expectLoadCase, loginWorkspace, selectedLoadCase, setWorkspaceFontSize } from './workspace-test-helpers'
+import { expectLoadCase, loginWorkspace, setWorkspaceFontSize } from './workspace-test-helpers'
 
 const context = {
   project: 'project-feature-showcase',
@@ -18,11 +18,13 @@ async function selectRequestContext(page: Page) {
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(context.request)
 }
 
-/** The legacy Run review tab in the journey ("결과 검토" was renamed; the name also carries the analysis type). */
-const LEGACY_REVIEW = /^기존 Run 대시보드/
-
+/** The result step of the journey is Case 결과; the legacy Run review has no entry point (user decision 2026-10-29). */
 function journeyButton(page: Page, step: string) {
-  return journey(page).getByRole('button', step === '결과 검토' ? { name: LEGACY_REVIEW } : { name: step, exact: true })
+  return journey(page).getByRole('button', { name: step === '결과 검토' ? 'Case 결과' : step, exact: true })
+}
+
+async function expectCaseResults(page: Page) {
+  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible({ timeout: 15_000 })
 }
 
 function journey(page: Page) {
@@ -33,7 +35,11 @@ async function expectUnifiedContext(page: Page, activeStep: string, expected = c
   await expect(page.locator('.request-workspace-header')).toHaveCount(1)
   await expect(page.getByLabel('프로젝트 선택', { exact: true })).toHaveValue(expected.project)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(expected.request)
-  if (activeStep === '결과 등록') {
+  if (activeStep === '결과 검토') {
+    // Case 결과 is request-scoped: no load case or Run selector.
+    await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
+    await expect(page.getByLabel('결과 버전 선택', { exact: true })).toHaveCount(0)
+  } else if (activeStep === '결과 등록') {
     await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toHaveCount(0)
     await expect(page.getByLabel('결과 버전 선택', { exact: true })).toHaveCount(0)
@@ -94,7 +100,7 @@ test('한 의뢰의 작업 탭이 같은 헤더와 문맥을 유지하고 뒤로
 
   await journeyButton(page, '결과 검토').click()
   await expect(page).toHaveURL(/\/workspace\/requests(?:\?|$)/)
-  await expect(page.getByTestId('pending-analysis-workspace')).toBeVisible()
+  await expectCaseResults(page)
   await expectUnifiedContext(page, '결과 검토')
 
   await page.goBack()
@@ -114,11 +120,10 @@ test('기본 의뢰도 의뢰 개요에서 결과 검토로 바로 이동한다'
   await loginWorkspace(page)
   const requestId = await page.getByLabel('의뢰 선택', { exact: true }).inputValue()
   await expect(page.locator('.request-context-strip')).not.toHaveAttribute('data-load-case-id', '')
-  const loadCaseId = await selectedLoadCase(page)
   await journeyButton(page, '결과 검토').click()
   await expect(page).toHaveURL(/\/workspace\/requests(?:\?|$)/)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(requestId)
-  await expectLoadCase(page, loadCaseId)
+  await expectCaseResults(page)
   await expect(journeyButton(page, '결과 검토')).toHaveAttribute('aria-current', 'step')
 })
 
@@ -147,7 +152,7 @@ test('하중 경우가 없는 의뢰도 등록 탭에서 의뢰 문맥을 잃지
 
   await journeyButton(page, '결과 검토').click()
   await expect(page).toHaveURL(/\/workspace\/requests(?:\?|$)/)
-  await expect(page.getByTestId('pending-analysis-workspace')).toBeVisible()
+  await expectCaseResults(page)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-workflow')
 })
 

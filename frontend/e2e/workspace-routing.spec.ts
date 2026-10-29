@@ -8,7 +8,8 @@ async function login(page: Page, username = 'e2e-admin') {
   await page.getByLabel('사용자 이름').fill(username)
   await page.getByLabel('비밀번호').fill(password)
   await page.getByRole('button', { name: '로그인', exact: true }).click()
-  await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible()
+  // The first workspace bootstrap after login can be slow on a cold dev server.
+  await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible({ timeout: 15_000 })
 }
 
 test('workspace menu navigation updates the URL and browser history restores the active menu', async ({ page }) => {

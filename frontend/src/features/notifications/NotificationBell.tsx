@@ -12,6 +12,7 @@ import {
 } from '../../shared/api/notifications'
 import { NotificationEntry } from './NotificationEntry'
 import './notifications.css'
+import { notificationTarget } from './notificationLink'
 
 export const NOTIFICATIONS_PATH = '/workspace/notifications'
 const DROPDOWN_LIMIT = 8
@@ -101,7 +102,7 @@ export function NotificationBell() {
       try { await notificationsApi.markRead([item.id]); announceNotificationsChanged() } catch { /* the link still opens */ }
     }
     setOpen(false)
-    if (item.link) navigate(item.link)
+    if (item.link) navigate(notificationTarget(item.link))
   }
   const markAll = async () => {
     try { await notificationsApi.markAllRead(); announceNotificationsChanged(); await loadRecent() } catch { setError('읽음 처리하지 못했습니다.') }
