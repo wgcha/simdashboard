@@ -200,36 +200,97 @@
 .case-view-bar__end { display:flex; align-items:center; gap:var(--space-3, 12px); min-width:0; margin-left:auto; }
 .case-view-context { min-width:0; overflow:hidden; color:var(--color-text-muted); font-size:var(--text-caption, 12px); text-overflow:ellipsis; white-space:nowrap; }
 
-/* C layout (2026-10-29): header bar, then three panes that scroll on their own.
-   LEFT Case 경로 + Scene list | CENTER tabs + main charts | RIGHT inspector.
+/* B layout (2026-10-29): one context row, a tab row with Scene chips, then full-width
+   content between two folding panels (Scene 목록 left, 상세 right). Each pane scrolls on its own.
    Baseline 2560×1440; the height follows the viewport (see RequestCaseResultsWorkspace). */
-.simulation-dashboard.case-c { display:flex; flex-direction:column; flex:1 1 0; min-height:0; margin:0; padding:0; gap:var(--space-2, 8px); border:0; border-radius:0; background:transparent; }
-.case-c > .case-results-head { flex:none; flex-wrap:wrap; margin:0; padding:var(--space-2, 8px) var(--space-4, 16px); border:1px solid var(--color-border); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); }
-.case-c > .simulation-dashboard__state { flex:none; min-height:0; padding:var(--space-2, 8px) var(--space-3, 12px); }
-.case-c__body { flex:1 1 0; min-height:0; display:grid; grid-template-columns:380px minmax(0, 1fr) 480px; overflow:hidden; border:1px solid var(--color-border); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); }
-.case-c__body--materials { grid-template-columns:380px minmax(0, 1fr); }
-.case-c__left,
-.case-c__center,
-.case-c__right { min-width:0; min-height:0; overflow:auto; scrollbar-width:thin; }
-.case-c__left { display:flex; flex-direction:column; border-right:1px solid var(--color-border); }
-.case-c__right { display:flex; flex-direction:column; gap:var(--space-3, 12px); padding:var(--space-4, 16px); border-left:1px solid var(--color-border); }
-.case-c__center { display:flex; flex-direction:column; gap:var(--space-3, 12px); padding:var(--space-3, 12px) var(--space-5, 24px) var(--space-4, 16px); }
-.case-c__center > .case-view-bar { flex:none; margin-bottom:0; }
-.case-c__center > .case-view-panel { flex:1 0 auto; min-width:0; }
+.simulation-dashboard.case-b { display:flex; flex-direction:column; flex:1 1 0; min-height:0; margin:0; padding:0; gap:var(--space-2, 8px); border:0; border-radius:0; background:transparent; }
+.case-b > .simulation-dashboard__state { flex:none; min-height:0; padding:var(--space-2, 8px) var(--space-3, 12px); }
 
-/* LEFT: the Case path stacks vertically (shared HierarchyPath, restyled here). */
-.case-c__left .shared-hierarchy-path { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); align-items:start; gap:var(--space-2, 8px); padding:var(--space-3, 12px) var(--space-4, 16px); border:0; border-bottom:1px solid var(--color-border); border-radius:0; background:transparent; }
-.case-c__left .shared-hierarchy-path > .shared-hierarchy-path__sep { display:none; }
-.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice { display:grid; gap:3px; max-width:none; min-width:0; }
-.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice[data-hierarchy-level="Case"],
-.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice[data-hierarchy-level="Run Option"],
-.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice[data-hierarchy-level="환경"],
-.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice[data-hierarchy-level="소재 덱"] { grid-column:1 / -1; }
-.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice > select,
-.case-c__left .shared-hierarchy-path > .shared-hierarchy-choice > b { width:100%; max-width:none; }
-.case-c__left .case-path-slot:not([hidden]) { display:block; }
-.case-c__left .case-path-slot .shared-hierarchy-path { grid-template-columns:minmax(0, 1fr); }
-.case-c__left .case-path-slot .shared-hierarchy-path > .shared-hierarchy-choice { grid-column:1 / -1; }
+/* Context bar: environment, Case path, display options, history and links in one wrapping row. */
+.case-b > .case-b__context { flex:none; flex-wrap:wrap; justify-content:flex-start; align-items:center; gap:var(--space-2, 8px) var(--space-4, 16px); margin:0; padding:var(--space-2, 8px) var(--space-3, 12px); border:1px solid var(--color-border); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); }
+.case-b__context > .case-results-head__actions { margin-left:auto; }
+.case-b__context .case-path-bar { margin:0; padding:0; border:0; background:transparent; box-shadow:none; }
+.case-b__context .shared-hierarchy-path { flex:0 1 auto; flex-wrap:wrap; gap:var(--space-1, 4px) var(--space-2, 8px); }
+.case-b__context .shared-hierarchy-path > .shared-hierarchy-choice > select { max-width:22ch; }
+.case-b__context .case-path-slot[hidden] { display:none; }
+.case-b__context .case-path-slot:not([hidden]) { display:contents; }
+.case-b__context .case-display-options { flex:0 1 auto; margin:0; padding-left:var(--space-4, 16px); border-left:1px solid var(--color-border); }
+.case-b__context .case-display-options[open] { display:flex; align-items:center; gap:var(--space-3, 12px); }
+.case-b__context .case-display-options > summary { min-height:var(--control-h-sm, 32px); padding:0; border:0; color:var(--color-text-muted); font-weight:700; white-space:nowrap; }
+.case-b__context .case-display-options[open] > summary { border:0; color:var(--color-text-muted); }
+.case-b__context .case-display-options__panel { position:static; display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2, 8px) var(--space-3, 12px); width:auto; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.case-b__context .case-display-options__row { flex-wrap:nowrap; align-items:center; gap:var(--space-3, 12px); }
+.case-b__context .case-display-options__row > .shared-hierarchy-choice { min-width:0; }
+.case-b__context .simulation-dashboard__picker { display:flex; align-items:center; gap:var(--space-2, 8px); margin:0; padding:2px var(--space-2, 8px); white-space:nowrap; }
+.case-b__context .simulation-dashboard__picker legend { float:left; margin-right:var(--space-1, 4px); padding:0; }
+.case-b__context .case-display-options__compare { flex-wrap:nowrap; align-items:center; padding:2px var(--space-2, 8px); }
+.case-b__context .case-display-options__compare legend { float:left; margin-right:var(--space-1, 4px); padding:0; white-space:nowrap; }
+.case-b__context .case-display-options__compare > .simulation-dashboard__select { display:flex; align-items:center; gap:var(--space-1, 4px); white-space:nowrap; }
+/* At 2560 px the distribution display options do not fit beside the path: they take their own
+   full-width line under it, while environment, path, history and links stay on the first line. */
+.case-b__context > .case-context-links { margin-left:auto; }
+.case-b__context[data-environment="distribution"] > .case-display-options { order:10; flex-basis:100%; padding:var(--space-2, 8px) 0 0; border-left:0; border-top:1px solid var(--color-border); }
+/* Compact one-row controls: inline labels, borderless groups. */
+.case-b__context .case-env-toggle button { padding:0 var(--space-3, 12px); }
+.case-b__context .shared-hierarchy-path > .shared-hierarchy-path__sep { margin-inline:-2px; }
+.case-b__context .shared-hierarchy-path > .shared-hierarchy-choice--fixed > b { min-width:0; }
+.case-b__context .case-display-options__row > .shared-hierarchy-choice { display:flex; align-items:center; gap:var(--space-1, 4px); }
+.case-b__context .case-display-options__row > .shared-hierarchy-choice > span { white-space:nowrap; }
+.case-b__context .case-display-options__row > .shared-hierarchy-choice--fixed > b { min-width:0; padding-inline:var(--space-2, 8px); }
+.case-b__context .simulation-dashboard__picker,
+.case-b__context .case-display-options__compare { border:0; padding:0; gap:var(--space-2, 8px); }
+.case-b__context .simulation-dashboard__picker label { display:inline-flex; align-items:center; gap:2px; }
+.case-context-links { display:flex; align-items:center; gap:var(--space-3, 12px); padding-left:var(--space-4, 16px); border-left:1px solid var(--color-border); white-space:nowrap; }
+
+/* Small dropdowns of the context and tab rows (업데이트 이력, Scene 전체 목록). */
+.case-context-dropdown { position:relative; }
+.case-context-dropdown > summary { display:inline-flex; align-items:center; gap:var(--space-1, 4px); min-height:var(--control-h-sm, 32px); padding:0 var(--space-3, 12px); border:1px solid var(--color-border); border-radius:var(--radius-sm, 4px); background:var(--color-surface-interactive); color:var(--color-text); font-weight:600; list-style:none; cursor:pointer; white-space:nowrap; }
+.case-context-dropdown > summary::-webkit-details-marker { display:none; }
+.case-context-dropdown > summary small { color:var(--color-text-muted); }
+.case-context-dropdown[open] > summary { border-color:var(--color-accent); color:var(--color-accent); }
+.case-context-dropdown__panel { position:absolute; top:calc(100% + 6px); left:0; z-index:30; min-width:280px; max-width:min(520px, 80vw); max-height:420px; overflow:auto; padding:var(--space-2, 8px); border:1px solid var(--color-border-strong); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); box-shadow:var(--shadow-popover, 0 8px 24px rgb(15 23 42 / .16)); }
+.case-context-dropdown__panel ul { margin:0; padding-left:18px; }
+.case-context-dropdown__panel li { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.case-display-options__history .case-context-dropdown__panel { max-height:280px; }
+
+/* Tab row: panel toggles, view tabs, then the Scene chips at the right. */
+.case-b > .case-b__tabs { flex:none; flex-wrap:nowrap; align-items:center; gap:var(--space-3, 12px); margin:0; padding:0 var(--space-3, 12px); border:1px solid var(--color-border); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); }
+.case-b__tabs > .case-view-tabs { flex:none; }
+.case-b__tabs > .case-view-bar__end { flex:1 1 auto; justify-content:flex-end; min-width:0; }
+.case-panel-toggle { display:inline-flex; flex:none; align-items:center; gap:var(--space-1, 4px); min-height:var(--control-h-sm, 32px); padding:0 var(--space-2, 8px); border:1px solid var(--color-border); border-radius:var(--radius-sm, 4px); background:var(--color-surface-interactive); color:var(--color-text-muted); font:inherit; font-weight:600; white-space:nowrap; cursor:pointer; }
+.case-panel-toggle[aria-expanded="true"] { border-color:var(--color-accent); background:var(--color-surface-selected); color:var(--color-accent); }
+.case-panel-toggle svg,
+.case-panel-close svg { width:16px; height:16px; }
+.case-panel-toggle:focus-visible,
+.case-panel-close:focus-visible,
+.case-scene-chip:focus-visible { outline:2px solid var(--color-focus); outline-offset:1px; }
+.case-b .case-scene-chips { flex:1 1 auto; justify-content:flex-end; align-items:center; gap:var(--space-1, 4px); min-width:120px; overflow:visible; }
+.case-b .case-scene-chip { box-sizing:border-box; max-width:128px; min-height:28px; gap:var(--space-1, 4px); padding:2px var(--space-2, 8px); background:var(--color-surface-interactive); font:inherit; font-size:var(--text-caption, 12px); cursor:default; }
+.case-b button.case-scene-chip { cursor:pointer; }
+.case-b .case-scene-chip > b { flex:none; color:var(--color-accent); }
+.case-b .case-scene-chip > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.case-b .case-scene-chip.is-selected { border-color:var(--color-accent); background:var(--color-surface-selected); color:var(--color-accent); font-weight:700; }
+.case-scene-more > summary { min-height:28px; padding:0 var(--space-2, 8px); border-radius:999px; font-size:var(--text-caption, 12px); }
+.case-scene-more__panel { right:0; left:auto; width:420px; padding:0; }
+.case-scene-more__panel .case-scene-list > ul { max-height:360px; }
+
+/* Body: full-width content; the panels take a column only while open. */
+.case-b__body { flex:1 1 0; min-height:0; display:grid; grid-template-columns:minmax(0, 1fr); overflow:hidden; border:1px solid var(--color-border); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); }
+.case-b__body--left { grid-template-columns:340px minmax(0, 1fr); }
+.case-b__body--right { grid-template-columns:minmax(0, 1fr) 480px; }
+.case-b__body--left.case-b__body--right { grid-template-columns:340px minmax(0, 1fr) 480px; }
+.case-b__left[hidden],
+.case-b__right[hidden] { display:none; }
+.case-b__left,
+.case-b__center,
+.case-b__right { min-width:0; min-height:0; overflow:auto; scrollbar-width:thin; }
+.case-b__left { display:flex; flex-direction:column; border-right:1px solid var(--color-border); }
+.case-b__right { display:flex; flex-direction:column; gap:var(--space-3, 12px); padding:var(--space-3, 12px) var(--space-4, 16px) var(--space-4, 16px); border-left:1px solid var(--color-border); }
+.case-b__center { display:flex; flex-direction:column; padding:var(--space-3, 12px) var(--space-5, 24px) var(--space-4, 16px); }
+.case-b__center > .case-view-panel { flex:1 0 auto; min-width:0; }
+.case-b__right-head { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2, 8px); }
+.case-b__right-head h3 { margin:0; font-size:var(--text-subheading, 15px); }
+.case-panel-close { display:inline-grid; place-items:center; width:var(--control-h-sm, 32px); height:var(--control-h-sm, 32px); padding:0; border:1px solid var(--color-border); border-radius:var(--radius-sm, 4px); background:var(--color-surface-interactive); color:var(--color-text); cursor:pointer; }
 
 /* LEFT: Scene list. */
 .case-scene-list { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
@@ -248,18 +309,14 @@
 .case-scene-row--static.case-scene-chip--result > i { background:var(--color-success); opacity:1; }
 
 /* CENTER: summary = chart over the location table. */
-.case-c .simulation-dashboard__summary { display:grid; grid-template-columns:minmax(0, 1fr); align-items:start; gap:var(--space-3, 12px); }
-.case-c .simulation-dashboard__summary > .case-summary-chart { flex:none; }
-.case-c .case-summary-chart .simulation-dashboard__chart { height:clamp(260px, 27vh, 420px); }
-.case-c .simulation-dashboard__summary > .simulation-dashboard__location-map { margin-top:0; overflow:auto; }
-.case-c .simulation-dashboard__edge-panels.wide { grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); }
-.case-c .simulation-dashboard__edge-panels.wide .simulation-dashboard__chart { height:clamp(240px, 24vh, 380px); }
+.case-b .simulation-dashboard__summary { display:grid; grid-template-columns:minmax(0, 1fr); align-items:start; gap:var(--space-3, 12px); }
+.case-b .simulation-dashboard__summary > .case-summary-chart { flex:none; }
+.case-b .case-summary-chart .simulation-dashboard__chart { height:clamp(260px, 27vh, 420px); }
+.case-b .simulation-dashboard__summary > .simulation-dashboard__location-map { margin-top:0; overflow:auto; }
+.case-b .simulation-dashboard__edge-panels.wide { grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); }
+.case-b .simulation-dashboard__edge-panels.wide .simulation-dashboard__chart { height:clamp(240px, 24vh, 380px); }
 
-/* RIGHT: inspector. Everything in it stacks in one column. */
-.case-c__right .case-display-options { position:static; margin:0; }
-.case-c__right .case-display-options > summary { min-height:0; padding:0; border:0; border-radius:0; color:var(--color-text); font-size:var(--text-subheading, 15px); font-weight:700; }
-.case-c__right .case-display-options[open] > summary { border:0; color:var(--color-text); }
-.case-c__right .case-display-options__panel { position:static; width:auto; margin-top:var(--space-3, 12px); padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+/* RIGHT: 상세 panel. Everything in it stacks in one column. */
 .case-c__inspector-slot { display:flex; flex-direction:column; gap:var(--space-3, 12px); min-width:0; }
 .case-c__inspector-slot:empty { display:none; }
 .case-c__inspector-slot > section,
@@ -268,8 +325,9 @@
 .case-c__inspector-slot .simulation-dashboard__panel-controls { margin:0; }
 .case-c__inspector-slot .simulation-dashboard__detail .simulation-dashboard__chart { height:200px; }
 .case-c__inspector-slot .simulation-dashboard__detail-assets { grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); }
-.case-inspector-foot { display:grid; gap:var(--space-3, 12px); padding-top:var(--space-3, 12px); border-top:1px solid var(--color-border); }
-.case-inspector-foot:empty { display:none; }
-.case-c .simulation-dashboard__scene-table > div { flex:none; width:190px; overflow:hidden; }
-.case-c .simulation-dashboard__scene-table > div > span,
-.case-c .simulation-dashboard__scene-table > div > small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.case-b .simulation-dashboard__scene-table > div { flex:none; width:190px; overflow:hidden; }
+.case-b .simulation-dashboard__scene-table > div > span,
+.case-b .simulation-dashboard__scene-table > div > small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Dropdowns at the right end of the context bar open leftwards so they never widen the page. */
+.case-b__context .case-name-warnings__panel,
+.case-b__context .case-display-options__history .case-context-dropdown__panel { left:auto; right:0; }

@@ -116,6 +116,8 @@ async function installMocks(page: Page, options: Options = {}) {
   })
   await page.route('**/api/dashboard/distribution/runs/**', (route) => {
     const url = new URL(route.request().url())
+    // Representative-video comparison (issue #55) asks for each Case's Scenes; none here.
+    if (url.pathname.endsWith('/video-scenes')) return fulfillJson(route, { contract_version: 1, context: {}, scenes: [] })
     if (url.pathname.endsWith('/videos')) return fulfillJson(route, { contract_version: 1, context: {}, pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 1, has_previous: false, has_next: false }, videos: [] })
     distributionRequests.push(url)
     return fulfillJson(route, distribution(url, options))

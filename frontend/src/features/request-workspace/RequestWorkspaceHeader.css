@@ -90,3 +90,9 @@
 .request-journey:not(.request-journey-compact) .request-journey-item.result-review { min-width:0; padding:0; }
 .dark-theme .request-journey:not(.request-journey-compact) { background:transparent; border-bottom-color:#294256; }
 .dark-theme .request-workspace-header { border-bottom-color:#294256; }
+/* Case 결과 actions (sync status, 보고서, Final) share the request header row (B layout, 2026-10-29). */
+.request-workspace-header { flex-wrap:wrap; row-gap:8px; }
+.request-workspace-header > .request-workspace-title { flex:0 1 auto; min-width:0; }
+.request-workspace-header > .request-header-actions { display:flex; flex:1 1 auto; justify-content:flex-end; align-items:center; min-width:0; }
+.request-workspace-header > .request-header-actions:empty { display:none; }
+.request-workspace-header > .request-header-actions > .case-results-head__actions { margin-left:auto; }

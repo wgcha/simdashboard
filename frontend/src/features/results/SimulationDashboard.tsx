@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, Expand, Image as ImageIcon, Info, Layers3, Play, RotateCcw, SlidersHorizontal } from 'lucide-react'
+import { AlertTriangle, Expand, Image as ImageIcon, Info, Layers3, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, RotateCcw, SlidersHorizontal, X } from 'lucide-react'
 import { resultStateChoices, caseResultState } from '../../shared/api/hierarchyChoiceModel'
 import { simulationDashboardApi, type DashboardAsset, type DashboardCatalog, type DashboardChoice, type DashboardComparisonMember, type DashboardDistribution, type DashboardEdgePeak, type DashboardEnvironment, type DashboardMember, type DashboardScene, type DashboardSceneDetail, type DashboardValue, type UsageDashboard } from '../../shared/api/simulationDashboard'
 import { Select } from '../../shared/components/Select'
@@ -245,6 +245,21 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     setView(next)
     if (materialsActive) updateParams({ resultTab: null })
   }
+  // Folding panels: open state per environment and tab, remembered for this browser tab.
+  const [panelPrefs, setPanelPrefs] = useState<PanelPrefs>(readPanelPrefs)
+  const panelKey = `${tab}:${activeView}`
+  const panels = { ...defaultPanels(tab, activeView), ...panelPrefs[panelKey] }
+  const setPanel = (side: PanelSide, open: boolean) => setPanelPrefs((current) => {
+    const next = { ...current, [panelKey]: { ...defaultPanels(tab, activeView), ...current[panelKey], [side]: open } }
+    writePanelPrefs(next)
+    return next
+  })
+  // Selecting a Scene, cell or point opens 상세; the ref keeps callbacks made by older renders current.
+  const openDetailRef = useRef<() => void>(() => undefined)
+  openDetailRef.current = () => { if (!panels.right) setPanel('right', true) }
+  const openDetail = useCallback(() => openDetailRef.current(), [])
+  const [actionsTarget, setActionsTarget] = useState<HTMLElement | null>(null)
+  useLayoutEffect(() => { setActionsTarget(document.querySelector<HTMLElement>('[data-request-header-actions]')) }, [projectId, requestId])
 
   const pathBar = catalog && !materialsActive ? <HierarchyPath label="Case 경로" className="case-path-bar">
     {resolvedEnvironment ? <HierarchyChoice label="환경" value={resolvedEnvironment} choices={[{ id: resolvedEnvironment, label: ENVIRONMENT_LABELS[resolvedEnvironment] }]} onChange={() => undefined} /> : null}
@@ -272,8 +287,9 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     </div>
   </details> : null
 
-  const inspectorFoot = catalog && !materialsActive ? <div className="case-inspector-foot">
-      <div className="case-display-options__history"><strong>업데이트 이력</strong><ul aria-label="결과 업데이트 이력">{storedCaptures.length ? storedCaptures.map((item) => <li key={item.id} title={item.label}>{item.label}</li>) : <li>아직 결과가 없습니다.</li>}</ul></div>
+  // B layout: update history is a dropdown in the context bar, next to the folder rules link.
+  const historyAndLinks = catalog && !materialsActive ? <div className="case-context-links">
+      <details className="case-display-options__history case-context-dropdown"><summary>업데이트 이력 <small>{storedCaptures.length}</small></summary><div className="case-context-dropdown__panel"><ul aria-label="결과 업데이트 이력">{storedCaptures.length ? storedCaptures.map((item) => <li key={item.id} title={item.label}>{item.label}</li>) : <li>아직 결과가 없습니다.</li>}</ul></div></details>
       {canManageFolders ? <Link className="case-display-options__link" to={folderHref}>폴더 연결·규칙 열기</Link> : null}
   </div> : null
 
@@ -281,7 +297,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const viewContext = tab === 'distribution' && !materialsActive && (activeView === 'summary' || activeView === 'compare' || activeView === 'cases') && componentLabel && basis ? `${componentLabel} · ${basisLabel(basis)}` : ''
   const caseState = caseResultState(selectedCase)
   const distributionEmpty = caseState && selectedCase?.capture_pending ? '결과 받는 중입니다. 드라이브에서 결과 파일을 받는 대로 자동으로 표시됩니다.' : caseState && selectedCase?.capture_failed ? '결과 파일을 받지 못했습니다. 등록 화면에서 다시 시도하세요.' : catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
-  const distribution = (section: 'summary' | 'compare') => <DistributionArea key={`${projectId}:${requestId}`} inspector={inspectorTarget} onSceneList={setSceneList} section={section} compareView={compareView} onCompareView={setCompareView} edges={edges} lines={lines} comparison={comparison} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={distributionEmpty} />
+  const distribution = (section: 'summary' | 'compare') => <DistributionArea key={`${projectId}:${requestId}`} inspector={inspectorTarget} onSceneList={setSceneList} onDetail={openDetail} section={section} compareView={compareView} onCompareView={setCompareView} edges={edges} lines={lines} comparison={comparison} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={distributionEmpty} />
   const optionChoiceForCompare = options.find((item) => item.id === optionId)
   const comparePathReady = Boolean(activeCaptureId && runId && mode && componentId && basis && optionChoiceForCompare && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId))
   const comparePath: ComparePath | null = tab === 'distribution' && comparePathReady && (basis === 'DETAIL' || basis === 'REPORTED_SUMMARY') ? { loadCase: loadChoices.find((item) => item.id === loadCaseId)?.label ?? '', run: runChoices.find((item) => item.id === runId)?.label ?? '', option: optionChoiceForCompare?.option_label || optionChoiceForCompare?.label || '', component: componentLabel ?? '', basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') } : null
@@ -313,11 +329,24 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const finalScope: CaseReportFinalScope | null = materialsActive || !dashboardCaseId || !activeCaptureId || !hasCapturedCase ? null : tab === 'usage'
     ? { source: { kind: 'case_usage', projectId, requestId, caseId: dashboardCaseId, captureId: finalCaptureId, referenceCaseId: '', referenceCaptureId: '' }, labels: { project: '', request: '', caseLabel: caseText, reference: '' } }
     : { source: { kind: 'case_final', projectId, requestId, caseId: dashboardCaseId, captureId: finalCaptureId, catalogCaseId: selectedCase?.id ?? caseId, basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') }, labels: { project: '', request: '', caseLabel: caseText, component: componentLabel ?? '' } }
-  return <section className="simulation-dashboard case-c" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
-    <header className="case-results-head">
+  // Report, Final status and sync actions sit in the request header row when it offers a slot.
+  const headActions = <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScopeWithCompare} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
+  const distributionPanels = tab === 'distribution' && !materialsActive && Boolean(catalog) && !noResults
+  const leftAvailable = distributionPanels && (activeView === 'summary' || activeView === 'compare' || activeView === 'video')
+  const rightAvailable = distributionPanels && (activeView === 'summary' || activeView === 'compare')
+  const leftOpen = leftAvailable && panels.left
+  const rightOpen = rightAvailable && panels.right
+  return <section className="simulation-dashboard case-b" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
+    {/* B layout (2026-10-29): one context row, a tab row with Scene chips, then full-width content with two folding panels. */}
+    <header className="case-results-head case-b__context" aria-label="결과 문맥" data-environment={materialsActive ? undefined : tab}>
       {environments?.length === 2 ? <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div> : null}
+      {pathBar}
+      {/* The materials tab renders its own path (same component) into this slot. */}
+      <div ref={setPathTarget} className="case-path-slot" hidden={!materialsActive} />
+      {displayOptions}
+      {historyAndLinks}
       {materialsActive ? null : <FolderNameWarnings warnings={catalog?.name_warnings} />}
-      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScopeWithCompare} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
+      {actionsTarget ? createPortal(headActions, actionsTarget) : headActions}
     </header>
     {noResults && !materialsActive ? <State message={NO_RESULTS_MESSAGE} /> : null}
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}
@@ -325,43 +354,92 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     {!materialsActive && catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message="폴더 구조를 읽을 수 없습니다. 저장된 결과를 표시합니다." title={catalog.folder_schema?.diagnostic?.message} error /> : null}
     {!materialsActive && catalog && !catalog.cases.length ? <State message="확정된 Case가 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}
     {noResults && !materialsActive ? null : <SceneNameWarningProvider warnings={catalog?.name_warnings} runOptionId={optionId}>
-    {/* C layout: Case 경로 + Scene list | tabs + main charts | inspector. Each pane scrolls on its own. */}
-    <div className={`case-c__body${materialsActive ? ' case-c__body--materials' : ''}`} data-environment={tab}>
-      <nav className="case-c__left" aria-label="Case 경로와 Scene">
-        {pathBar}
-        {/* The materials tab renders its own path (same component) into this slot. */}
-        <div ref={setPathTarget} className="case-path-slot" hidden={!materialsActive} />
-        {catalog && !materialsActive && tab === 'distribution' ? <SceneList chips={sceneSummary} info={sceneList} /> : null}
-      </nav>
-      <div className="case-c__center">
-        <div className="case-view-bar"><ViewTabs tabs={tabs} active={activeView} onSelect={selectView} /><div className="case-view-bar__end">{viewContext ? <span className="case-view-context" title={`표시 중: ${viewContext}`}>{viewContext}</span> : null}</div></div>
+    <div className="case-view-bar case-b__tabs">
+      {leftAvailable ? <button type="button" className="case-panel-toggle" aria-expanded={leftOpen} aria-controls="case-scene-panel" title={leftOpen ? 'Scene 목록 닫기' : 'Scene 목록 열기'} onClick={() => setPanel('left', !leftOpen)}>{leftOpen ? <PanelLeftClose aria-hidden="true" /> : <PanelLeftOpen aria-hidden="true" />}<span>Scene 목록</span></button> : null}
+      <ViewTabs tabs={tabs} active={activeView} onSelect={selectView} />
+      <div className="case-view-bar__end">
+        {viewContext ? <span className="case-view-context" title={`표시 중: ${viewContext}`}>{viewContext}</span> : null}
+        {catalog && !materialsActive && tab === 'distribution' && (sceneList?.rows.length || sceneSummary.length) ? <SceneChips chips={sceneSummary} info={sceneList} onSelect={openDetail} /> : null}
+        {rightAvailable ? <button type="button" className="case-panel-toggle" aria-expanded={rightOpen} aria-controls="case-detail-panel" title={rightOpen ? '상세 닫기' : '상세 열기'} onClick={() => setPanel('right', !rightOpen)}>{rightOpen ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}<span>상세</span></button> : null}
+      </div>
+    </div>
+    <div className={`case-b__body${leftOpen ? ' case-b__body--left' : ''}${rightOpen ? ' case-b__body--right' : ''}`} data-environment={tab}>
+      {distributionPanels ? <nav id="case-scene-panel" className="case-b__left" aria-label="Scene 목록 패널" hidden={!leftOpen}>
+        <SceneList chips={sceneSummary} info={sceneList} onSelect={openDetail} />
+      </nav> : null}
+      <div className="case-b__center">
         <div className="case-view-panel" id="case-view-panel" role="tabpanel" aria-labelledby={`case-view-tab-${activeView}`}>{content}</div>
       </div>
-      {materialsActive ? null : <aside className="case-c__right" aria-label="속성 패널">
-        {displayOptions}
+      {/* The inspector slot stays mounted while closed so the portalled detail keeps its place. */}
+      {distributionPanels ? <aside id="case-detail-panel" className="case-b__right" aria-label="상세 패널" hidden={!rightOpen}>
+        <header className="case-b__right-head"><h3>상세</h3><button type="button" className="case-panel-close" aria-label="상세 닫기" title="상세 닫기" onClick={() => setPanel('right', false)}><X aria-hidden="true" /></button></header>
         <div ref={setInspectorTarget} className="case-c__inspector-slot" />
-        {inspectorFoot}
-      </aside>}
+      </aside> : null}
     </div>
     </SceneNameWarningProvider>}
   </section>
 }
+
+const PANEL_STORAGE_KEY = 'simdashboard.case-results.panels.v1'
+type PanelSide = 'left' | 'right'
+type PanelPrefs = Record<string, Partial<Record<PanelSide, boolean>>>
+/** Per-tab panel state for this browser tab; storage may be unavailable (private mode, blocked site data). */
+function readPanelPrefs(): PanelPrefs {
+  try {
+    const parsed: unknown = JSON.parse(window.sessionStorage.getItem(PANEL_STORAGE_KEY) ?? '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as PanelPrefs : {}
+  } catch { return {} }
+}
+function writePanelPrefs(prefs: PanelPrefs) { try { window.sessionStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(prefs)) } catch { /* the state still applies for this page */ } }
+/** Scene 목록 opens by default only on distribution 요약 and Scene 비교; 상세 opens on a selection. */
+function defaultPanels(environment: Tab, view: ViewTab): Record<PanelSide, boolean> { return { left: environment === 'distribution' && (view === 'summary' || view === 'compare'), right: false } }
 
 /** Renders into a pane outside the tab content (right inspector) and falls back to the place of use. */
 function InSlot({ target, children }: { target: HTMLElement | null; children: ReactNode }) { return target ? createPortal(children, target) : <>{children}</> }
 
 type SceneListRow = { id: string; sequence: string; label: string; value: number | null; unit: string | null }
 type SceneListInfo = { rows: SceneListRow[]; selectedId: string; onSelect: (sceneId: string) => void }
-/** Left pane Scene list: sequence, name, folder-name marker and the selected-edge maximum when the result is loaded. */
-function SceneList({ chips, info }: { chips: Array<{ label: string; title: string; hasResult: boolean }>; info: SceneListInfo | null }) {
+type SceneChipSource = Array<{ label: string; title: string; hasResult: boolean }>
+/** Scene 목록 panel: sequence, name, folder-name marker and the selected-edge maximum when the result is loaded. */
+function SceneList({ chips, info, onSelect, listLabel = 'Scene 목록' }: { chips: SceneChipSource; info: SceneListInfo | null; onSelect?: () => void; listLabel?: string }) {
   const count = info?.rows.length ?? chips.length
-  return <section className="case-scene-list" aria-label="Scene 목록 영역">
+  return <section className="case-scene-list" aria-label={`${listLabel} 영역`}>
     <h3>Scene {count}{info ? ' · 선택 엣지 최대' : ''}</h3>
-    <ul role="list" aria-label="Scene 목록">
-      {info ? info.rows.map((row) => <li key={row.id} role="listitem"><button type="button" className={`case-scene-row${row.id === info.selectedId ? ' is-selected' : ''}`} aria-current={row.id === info.selectedId ? 'true' : undefined} title={row.label} onClick={() => info.onSelect(row.id)}><b>{row.sequence}</b><span>{row.label}<SceneNameWarningIcon label={row.label} /></span><em>{row.value == null ? '' : `${row.value}${row.unit ? ` ${row.unit}` : ''}`}</em></button></li>)
+    <ul role="list" aria-label={listLabel}>
+      {info ? info.rows.map((row) => <li key={row.id} role="listitem"><button type="button" className={`case-scene-row${row.id === info.selectedId ? ' is-selected' : ''}`} aria-current={row.id === info.selectedId ? 'true' : undefined} title={row.label} onClick={() => { info.onSelect(row.id); onSelect?.() }}><b>{row.sequence}</b><span>{row.label}<SceneNameWarningIcon label={row.label} /></span><em>{row.value == null ? '' : `${row.value}${row.unit ? ` ${row.unit}` : ''}`}</em></button></li>)
         : chips.map((item) => <li key={item.label} role="listitem"><span className={`case-scene-row case-scene-row--static${item.hasResult ? ' case-scene-chip--result' : ''}`} title={`${item.title} · ${item.hasResult ? '결과 있음' : '결과 없음'}`}><i aria-hidden="true" /><span>{item.label}<SceneNameWarningIcon label={item.label} /></span><span className="case-sr-only">{item.hasResult ? ' 결과' : ' 결과 없음'}</span></span></li>)}
     </ul>
   </section>
+}
+
+/** Name without its leading sequence token (`1_Face_Drop_Scene01` → `Face_Drop_Scene01`); the full name stays in the title. */
+function shortSceneName(label: string) { return label.replace(/^\d+[\s_.-]+/, '') || label }
+const CHIP_WIDTH = 132
+/** Tab-row Scene chips: sequence + short name, folder-name marker, selected state and "+N" for the full list. */
+function SceneChips({ chips, info, onSelect }: { chips: SceneChipSource; info: SceneListInfo | null; onSelect: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [capacity, setCapacity] = useState(8)
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const update = () => setCapacity(Math.max(1, Math.floor((node.clientWidth - 56) / CHIP_WIDTH)))
+    update()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(update)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+  const total = info ? info.rows.length : chips.length
+  const selectedIndex = info ? info.rows.findIndex((row) => row.id === info.selectedId) : -1
+  // Keep the selected Scene visible even when it falls past the visible count.
+  const visible = total <= capacity ? total : capacity
+  const start = selectedIndex >= visible ? selectedIndex - visible + 1 : 0
+  const more = total - visible
+  return <div ref={ref} className="case-scene-chips" role="group" aria-label="Scene 바로가기">
+    {info ? info.rows.slice(start, start + visible).map((row) => <button key={row.id} type="button" className={`case-scene-chip${row.id === info.selectedId ? ' is-selected' : ''}`} aria-pressed={row.id === info.selectedId} title={row.label} onClick={() => { info.onSelect(row.id); onSelect() }}><b>{row.sequence}</b><span>{shortSceneName(row.label)}</span><SceneNameWarningIcon label={row.label} /></button>)
+      : chips.slice(0, visible).map((item) => <span key={item.label} className={`case-scene-chip${item.hasResult ? ' case-scene-chip--result' : ''}`} title={`${item.title} · ${item.hasResult ? '결과 있음' : '결과 없음'}`}><i aria-hidden="true" /><span>{shortSceneName(item.label)}</span><SceneNameWarningIcon label={item.label} /></span>)}
+    {more > 0 ? <details className="case-scene-more case-context-dropdown"><summary aria-label={`Scene 전체 목록 (${more}개 더)`} title="Scene 전체 목록">+{more}</summary><div className="case-context-dropdown__panel case-scene-more__panel" onClick={(event) => { if ((event.target as HTMLElement).closest('button')) (event.currentTarget.parentElement as HTMLDetailsElement).open = false }}><SceneList chips={chips} info={info} onSelect={onSelect} listLabel="Scene 전체 목록" /></div></details> : null}
+  </div>
 }
 
 function State({ message, error = false, title }: { message: string; error?: boolean; title?: string }) { return <div className={`simulation-dashboard__state ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} title={title}>{error ? <AlertTriangle /> : <Layers3 />}<span className="case-prose">{message}</span></div> }
@@ -401,8 +479,8 @@ function UsageArea({ caseId, captureId, referenceCaseId, referenceCaptureId }: {
   </div>
 }
 
-type DistributionProps = { inspector: HTMLElement | null; onSceneList: (info: SceneListInfo | null) => void; section: 'summary' | 'compare'; compareView: CompareView; onCompareView: (view: CompareView) => void; edges: string[]; lines: string[]; comparison: DashboardComparisonMember[]; caseId: string; loadCaseId: string; captureId: string; runId: string; optionId: string; mode: string; componentId: string; basis: '' | 'REPORTED_SUMMARY' | 'DETAIL'; hasCapturedRun: boolean; hasCapturedOption: boolean; emptyContextMessage: string }
-function DistributionArea({ inspector, onSceneList, section, compareView, onCompareView, edges, lines, comparison, caseId, loadCaseId, captureId, runId, optionId, mode, componentId, basis, hasCapturedRun, hasCapturedOption, emptyContextMessage }: DistributionProps) {
+type DistributionProps = { inspector: HTMLElement | null; onSceneList: (info: SceneListInfo | null) => void; onDetail: () => void; section: 'summary' | 'compare'; compareView: CompareView; onCompareView: (view: CompareView) => void; edges: string[]; lines: string[]; comparison: DashboardComparisonMember[]; caseId: string; loadCaseId: string; captureId: string; runId: string; optionId: string; mode: string; componentId: string; basis: '' | 'REPORTED_SUMMARY' | 'DETAIL'; hasCapturedRun: boolean; hasCapturedOption: boolean; emptyContextMessage: string }
+function DistributionArea({ inspector, onSceneList, onDetail, section, compareView, onCompareView, edges, lines, comparison, caseId, loadCaseId, captureId, runId, optionId, mode, componentId, basis, hasCapturedRun, hasCapturedOption, emptyContextMessage }: DistributionProps) {
   const [data, setData] = useState<DashboardDistribution | null>(null); const [error, setError] = useState(''); const [sceneId, setSceneId] = useState(''); const [memberId, setMemberId] = useState(''); const latestKey = useRef('')
   const contextKey = `${caseId}:${loadCaseId}:${runId}:${optionId}:${mode}:${captureId}:${componentId}:${basis}:${edges.join(',')}:${lines.join(',')}:${comparison.map((item) => `${item.simulation_case_id}/${item.load_case_id}/${item.execution_run_id}/${item.run_option_id}/${item.capture_id}/${item.mode}/${item.component_id}/${item.basis}`).join('|')}`
   useEffect(() => {
@@ -433,7 +511,8 @@ function DistributionArea({ inspector, onSceneList, section, compareView, onComp
   if (!runId || !mode || !componentId || !basis) return <State message="Run Case와 Run Option을 선택하세요." />
   if (error) return <State message={error} error />
   if (!data) return <State message="결과를 불러오는 중입니다." />
-  const choose = (scene: string, member: string) => { setSceneId(scene); setMemberId(member) }
+  // A chart point, contour or behaviour cell selection opens the 상세 panel.
+  const choose = (scene: string, member: string) => { setSceneId(scene); setMemberId(member); onDetail() }
   const compareViews: Array<[CompareView, string]> = [['edges', '엣지별 수준'], ['contours', '컨투어'], ['behavior', '거동']]
   return <div className="simulation-dashboard__distribution" data-testid="distribution-dashboard">
     {section === 'summary' ? <Summary data={data} inspector={inspector} sceneId={sceneId} memberId={memberId} selectedEdges={edges} onSelect={choose} /> : <>

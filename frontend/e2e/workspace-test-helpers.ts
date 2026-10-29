@@ -124,17 +124,20 @@ export async function setWorkspaceFontSize(page: Page, points: number) {
 type Box = { x: number; y: number; width: number; height: number }
 function overlaps(a: Box, b: Box) { return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height }
 
-/** Desktop layout guard: no page-level horizontal scroll, path bar and header actions inside the dashboard and not overlapping. */
+/** Desktop layout guard: no page-level horizontal scroll; the context bar sits inside the dashboard above the content, and the
+ * Case actions (in the request header row, or in the context bar without one) never overlap the path or environment toggle. */
 export async function expectCaseResultsLayout(page: Page) {
   expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth)).toBe(true)
   const section = await page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' }).boundingBox()
   const actions = await page.locator('.case-results-head__actions').boundingBox()
-  const path = await page.locator('.case-c__left').boundingBox()
+  const context = await page.locator('.case-b__context').boundingBox()
+  const body = await page.locator('.case-b__body').boundingBox()
   const env = await page.getByRole('group', { name: '결과 환경' }).boundingBox()
-  expect(section && actions && path && env).toBeTruthy()
-  for (const box of [actions!, path!]) expect(box.x + box.width).toBeLessThanOrEqual(section!.x + section!.width + 1)
-  // C layout: the header band sits above the panes, never over them.
-  expect(overlaps(actions!, path!)).toBe(false)
+  expect(section && actions && context && body && env).toBeTruthy()
+  for (const box of [context!, body!]) expect(box.x + box.width).toBeLessThanOrEqual(section!.x + section!.width + 1)
+  expect(actions!.x + actions!.width).toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth) + 1)
+  expect(context!.y + context!.height).toBeLessThanOrEqual(body!.y + 1)
+  expect(overlaps(actions!, body!)).toBe(false)
   expect(overlaps(actions!, env!)).toBe(false)
 }
 

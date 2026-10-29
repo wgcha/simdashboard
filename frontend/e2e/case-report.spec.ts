@@ -369,7 +369,8 @@ test.describe('4K 기준 화면', () => {
     await installMocks(page)
     await openCaseResults(page)
     mkdirSync(SHOT_DIR, { recursive: true })
-    const head = page.locator('.case-results-head')
+    // B layout: 보고서·Final actions sit in the request header row.
+    const head = page.locator('.case-results-head__actions')
     await expect(head.getByRole('button', { name: '보고서', exact: true })).toBeVisible()
     await head.screenshot({ path: `${SHOT_DIR}/stage5-header.png` })
     const dialog = await openReport(page)

@@ -2,6 +2,14 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-29 — Case 결과 B안(접는 패널)·의뢰 헤더 통일·옛 Run 대시보드 진입점 숨김·사이드바 접기
+
+- Case 결과 헤더: 의뢰 개요·결과 등록과 같은 한 줄 의뢰 헤더(제목·담당자·상태 | 프로젝트·의뢰 선택·새 결과 확인). 옛 큰 문맥 띠·제목 중복 제거, 프로젝트/의뢰 전환 유지. 동기화 상태·지금 확인·재해석·원본 변경·보고서·Final 상태·Final 지정은 헤더 슬롯(`data-request-header-actions`)으로 옮김(슬롯이 없으면 문맥 막대 오른쪽).
+- 결과 화면(`SimulationDashboard`): C안 3분할 대신 B안. 문맥 막대(결과 환경 · Case › 하중경우 › Run Case › Run Option · 업데이트 이력 드롭다운 · 폴더 연결·규칙 열기 · 폴더 이름 확인; 2560px에서 유통환경 표시 옵션은 둘째 줄) → 탭 줄(Scene 목록 토글 · 탭 · 표시 기준 · Scene 칩(순번+짧은 이름, 폴더 이름 표식, 선택, +N 전체 목록) · 상세 토글) → 전체 폭 내용. 왼쪽 「Scene 목록」은 유통 요약·Scene 비교에서만 기본 열림, 오른쪽 「상세」(엣지 맵·Scene 상세·품질 이슈·Scene 비교 범례/순서/크기)는 Scene·셀·점 선택 시 열리고 닫기 버튼이 있다. 사용환경·Case 비교·영상·소재·물성은 두 패널 닫힘. 탭별 열림 상태는 sessionStorage(`simdashboard.case-results.panels.v1`, try/catch).
+- 옛 Run 기반 검토 진입점 숨김(코드·경로 유지, 직접 URL은 동작): 「기존 Run 대시보드」 탭(하중 경우·Run 선택, 스냅샷·도메인·미설정 분석 페이지 → open_cell·chassis·custom·`ResultsWorkspace`), 결과 대시보드 옛 결과 「결과 검토」·의뢰 개요 「결과 검토」·폴더 등록의 「결과 검토」 링크는 Case 결과로, 도움말의 예제 갤러리 버튼 숨김, 옛 형식 알림 링크(view=open_cell|chassis|custom|compare)는 Case 결과로 연다.
+- 사이드바: 접기 토글로 72px 아이콘 레일(aria-label·title 유지), localStorage `simdashboard.sidebar.rail.v1`(try/catch), 기본 펼침. 메뉴 항목 변경 없음.
+- 검증: tsc, test:css-architecture·test:architecture·test:routing·test:preferences·test:root-font-size 통과. e2e(격리 러너, 스펙별): simulation-dashboard·case-report·case-compare(video-scenes 목 추가로 기존 6건 실패 해소)·materials-dashboard·criterion-margin·notifications·case-video-grid·case-finalization 통과(아래 제외). 0.3.4 기준선에서도 실패하는 항목은 그대로: request-centric-workspace 옛 Run 시나리오 10건, result-overview 73·99, ui-density-p4 57×2·113, unified-request-workspace 새로고침 후 복원(80·193×3), workspace-routing 4건, run-condition-comparison 77, materials 391, simulation-dashboard 502. simulation-dashboard 419는 이 환경의 Vite 허용 목록 밖 Pretendard 글꼴 403(node_modules 심볼릭 링크) 콘솔 오류로 실패, comparison-evidence 20은 첫 테스트 시간 초과로 한 번 실패. 2560×1440 스크린샷 육안 확인(사용환경 내용 폭 0.3.3.1 이상). `check:architecture`(실제 기준선 검사)는 이 작업 전부터 실패(App.tsx 줄 수·materials raw /api/·breakpoint 등).
+
 ## 2026-10-29 — 영상 탭: Scene 대표 영상·프로젝트 규칙·동시 재생·재생 불가 표시 (이슈 #55 GUI 갱신)
 
 - 변경: Scene에 영상이 여러 개일 수 있어 (Case, Scene)마다 대표 영상을 둔다. 우선순위는 사용자 지정(파일이 그대로 있을 때) > 프로젝트 규칙 키워드(앞 키워드부터, 파일 이름 자연 정렬 순) > 파일 이름순 첫 번째. 파일이 사라지면 기본으로 돌아간다.

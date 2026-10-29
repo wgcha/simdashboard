@@ -92,6 +92,8 @@ export function RequestWorkspaceHeader({
         <h1>{title}</h1>
         <p><span>{owner || '담당자 미지정'}</span><b>·</b><strong>{(statusLabels[status] ?? status) || '상태 미지정'}</strong>{completedCount && <><b>·</b><span>{completedCount}</span></>}</p>
       </div>
+      {/* Case 결과 portals its sync status, 보고서 and Final actions here so its context bar stays one row. */}
+      <div className="request-header-actions" data-request-header-actions="" />
       <div className="request-context-strip" aria-label="현재 의뢰 문맥" data-load-case-id={caseResultsMode ? undefined : selectedLoadCaseId}>
         <label><span>프로젝트</span><SearchableSelect ariaLabel="프로젝트 선택" items={projects} kind="project" value={projectId} disabled={contextChanging} onChange={onProjectChange} placeholder="프로젝트 선택" /></label>
         <label><span>의뢰</span><SearchableSelect ariaLabel="의뢰 선택" items={requests} kind="request" value={requestId} disabled={requestUnavailable || contextChanging} onChange={onRequestChange} placeholder={requestUnavailable ? currentTab === 'import' ? 'SPDM 의뢰 연결 필요' : '의뢰 접수 후 선택' : '의뢰 선택'} /></label>

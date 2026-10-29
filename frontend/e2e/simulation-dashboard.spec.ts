@@ -369,6 +369,8 @@ test('Case legend preserves an empty selection and stable colors when hiding and
   await openResults(page)
   await chooseDistribution(page)
   await openCompare(page, '엣지별 수준')
+  // B layout: the Case legend lives in the 상세 panel, closed until opened or a Scene is selected.
+  await page.locator('.case-panel-toggle[aria-controls="case-detail-panel"]').click()
   const legend = page.getByRole('group', { name: 'Case 범례' })
   const caseA = legend.getByRole('checkbox', { name: 'Case A', exact: true })
   const caseB = legend.getByRole('checkbox', { name: 'Case B', exact: true })
@@ -560,12 +562,25 @@ async function checkWideLayout(page: Page, screenshot: string) {
   await expect(page.getByRole('tablist', { name: '결과 보기' }).getByRole('tab')).toHaveCount(5)
   await expect(page.getByRole('tab', { name: '요약', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('button', { name: 'Final 지정', exact: true })).toBeVisible()
-  // C layout: the Case path stacks in the left pane (380 px) beside the center charts and the right inspector.
-  const paneBoxes = await page.evaluate(() => ['.case-c__left', '.case-c__center', '.case-c__right'].map((selector) => { const box = document.querySelector(selector)!.getBoundingClientRect(); return { left: Math.round(box.left), width: Math.round(box.width), top: Math.round(box.top), height: Math.round(box.height) } }))
-  expect(paneBoxes[0].width).toBe(380)
-  expect(paneBoxes[2].width).toBe(480)
-  expect(paneBoxes[0].left + paneBoxes[0].width).toBeLessThanOrEqual(paneBoxes[1].left + 1)
-  expect(paneBoxes[1].left + paneBoxes[1].width).toBeLessThanOrEqual(paneBoxes[2].left + 1)
+  // B layout: 요약 opens with the Scene 목록 panel (340 px) and the 상세 panel closed; selecting a Scene opens 상세 (480 px).
+  const paneBoxes = () => page.evaluate(() => ['.case-b__left', '.case-b__center', '.case-b__right'].map((selector) => { const box = document.querySelector(selector)!.getBoundingClientRect(); return { left: Math.round(box.left), width: Math.round(box.width) } }))
+  // 상세 stays open per tab once opened (the second theme pass); close it to start from the default.
+  if (await page.locator('.case-b__right').isVisible()) await page.locator('.case-panel-close').click()
+  await expect(page.locator('.case-b__right')).toBeHidden()
+  await page.getByRole('list', { name: 'Scene 목록', exact: true }).getByRole('button').nth(1).click()
+  await expect(page.locator('.case-b__right')).toBeVisible()
+  const boxes = await paneBoxes()
+  expect(boxes[0].width).toBe(340)
+  expect(boxes[2].width).toBe(480)
+  expect(boxes[0].left + boxes[0].width).toBeLessThanOrEqual(boxes[1].left + 1)
+  expect(boxes[1].left + boxes[1].width).toBeLessThanOrEqual(boxes[2].left + 1)
+  // Context bar: environment, Case path and update history share the first line; display options take at most one more.
+  const env = (await page.getByRole('group', { name: '결과 환경' }).boundingBox())!
+  const casePath = (await page.getByRole('group', { name: 'Case 경로' }).boundingBox())!
+  const history = (await page.locator('.case-display-options__history').boundingBox())!
+  expect(Math.abs(env.y + env.height / 2 - (casePath.y + casePath.height / 2))).toBeLessThan(8)
+  expect(Math.abs(env.y + env.height / 2 - (history.y + history.height / 2))).toBeLessThan(8)
+  expect((await page.locator('.case-b__context').boundingBox())!.height).toBeLessThan(110)
   expect(await page.getByRole('group', { name: 'Case 경로' }).locator('.shared-hierarchy-choice').count()).toBeGreaterThanOrEqual(4)
   expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth)).toBe(true)
   await page.screenshot({ path: join(tmpdir(), screenshot), fullPage: false })
@@ -716,23 +731,5 @@ test.describe('folder name warnings at 4K 150%', () => {
     await expect(page.getByTestId('folder-name-warnings')).toHaveCount(0)
     await openCompare(page, '엣지별 수준')
     await expect(page.getByTestId('scene-name-warning')).toHaveCount(0)
-  })
-})
-
-test.describe('GUISHOT', () => {
-  test.use({ viewport: { width: 2560, height: 1440 } })
-  test('GUISHOT capture', async ({ page }) => {
-    test.setTimeout(120_000)
-    await installDashboardMocks(page)
-    await loginWorkspace(page)
-    await page.getByRole('button', { name: '라이트', exact: true }).click()
-    await expect(page.getByTestId('focused-request-overview')).toBeVisible({ timeout: 20_000 })
-    await page.waitForTimeout(1500)
-    await page.screenshot({ path: `${process.env.SHOT_DIR}/mywork.png` })
-    await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results')
-    await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible({ timeout: 20_000 })
-    await chooseDistribution(page)
-    await page.waitForTimeout(1500)
-    await page.screenshot({ path: `${process.env.SHOT_DIR}/case-results.png` })
   })
 })
