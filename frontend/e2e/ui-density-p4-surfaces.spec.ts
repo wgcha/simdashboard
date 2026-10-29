@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { expectLoadCase, loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
+import { expectLoadCase, loginWorkspace, openLegacyRunReview, openWorkspaceRoute, setWorkspaceFontSize, SHOWCASE_COMPARE } from './workspace-test-helpers'
 
 async function fontSize(page: Page, _from: number, to: number) {
   await setWorkspaceFontSize(page, to)
@@ -93,9 +93,7 @@ for (const width of [1366, 1920]) {
 test('P4 comparison scales filters, evidence and chart controls at 18pt', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 })
   await loginWorkspace(page, 'e2e-admin', '/workspace/overview')
-  const dashboard = page.getByTestId('result-overview-dashboard')
-  await dashboard.getByLabel('의뢰 제목, 하중 경우 검색').fill('Run 비교: 회귀와 개선')
-  await dashboard.getByRole('button', { name: '결과 검토', exact: true }).click()
+  await openLegacyRunReview(page, SHOWCASE_COMPARE)
   await page.locator('.analysis-tab').filter({ hasText: 'Run 비교' }).click()
   await fontSize(page, 14, 18)
   const comparison = page.locator('.comparison-workspace')

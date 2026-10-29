@@ -102,7 +102,8 @@ export async function loginWorkspace(page: Page, username = 'e2e-admin', pathnam
   await page.getByLabel('사용자 이름').fill(username)
   await page.getByLabel('비밀번호').fill('e2e-validation-password')
   await page.getByRole('button', { name: '로그인', exact: true }).click()
-  await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible()
+  // The first workspace bootstrap after login can be slow on a cold dev server.
+  await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible({ timeout: 15_000 })
 }
 
 export const WORKSPACE_FONT_SIZE_STORAGE_KEY = 'simdashboard.workspace.font-size-pt.v1'
@@ -136,3 +137,31 @@ export async function expectCaseResultsLayout(page: Page) {
   expect(overlaps(actions!, path!)).toBe(false)
   expect(overlaps(actions!, env!)).toBe(false)
 }
+
+/**
+ * The legacy Run review (기존 Run 대시보드) has no menu, tab or link entry any more (user decision
+ * 2026-10-29) but its route stays: open it in-app by URL so client state (login, font size, theme) is kept.
+ * Without `analysis` the first analysis page opens, like the former 결과 검토 button; `rawView: 'custom'`
+ * opens the request's own result layout (view=custom without a page), like the former 기존 Run 대시보드 tab.
+ */
+export async function openLegacyRunReview(page: Page, context: { project: string; request: string; loadCase: string; run?: string; analysis?: 'open_cell' | 'chassis_rear' | 'run_comparison' | 'custom'; rawView?: 'custom' }) {
+  await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible()
+  if (context.rawView) {
+    const raw = new URLSearchParams({ project: context.project, request: context.request, loadCase: context.loadCase, ...(context.run ? { run: context.run } : {}), view: context.rawView })
+    await page.evaluate((target) => { window.history.pushState({}, '', target); window.dispatchEvent(new PopStateEvent('popstate')) }, `/workspace/requests?${raw.toString()}`)
+    return
+  }
+  const response = await page.request.get(`/api/dashboard-pages?load_case_id=${encodeURIComponent(context.loadCase)}`)
+  expect(response.ok()).toBeTruthy()
+  const body = await response.json() as unknown
+  const pages = (Array.isArray(body) ? body : (body as { items?: unknown[] }).items ?? []) as Array<{ id: string; page?: { analysis_key?: string } }>
+  const selected = (context.analysis ? pages.find((item) => item.page?.analysis_key === context.analysis) : undefined) ?? pages[0]
+  const key = selected?.page?.analysis_key
+  const view = key === 'open_cell' ? 'open_cell' : key === 'chassis_rear' ? 'chassis' : key === 'run_comparison' ? 'compare' : 'custom'
+  const query = new URLSearchParams({ project: context.project, request: context.request, loadCase: context.loadCase, ...(context.run ? { run: context.run } : {}), view, ...(selected && view === 'custom' ? { page: selected.id } : {}) })
+  await page.evaluate((target) => { window.history.pushState({}, '', target); window.dispatchEvent(new PopStateEvent('popstate')) }, `/workspace/requests?${query.toString()}`)
+  await expect(page).toHaveURL(/\/workspace\/requests\?/)
+}
+
+/** The showcase request with three Runs used by the Run comparison specs. */
+export const SHOWCASE_COMPARE = { project: 'project-feature-showcase', request: 'request-showcase-compare', loadCase: 'loadcase-showcase-compare' } as const

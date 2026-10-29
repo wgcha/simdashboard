@@ -2,14 +2,11 @@ import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { CriterionMargin } from '../src/types'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { loginWorkspace, openLegacyRunReview, SHOWCASE_COMPARE } from './workspace-test-helpers'
 
 async function openComparison(page: Page) {
   await loginWorkspace(page)
-  await openWorkspaceRoute(page, '/workspace/overview')
-  const dashboard = page.getByTestId('result-overview-dashboard')
-  await dashboard.getByLabel('의뢰 제목, 하중 경우 검색').fill('Run 비교: 회귀와 개선')
-  await dashboard.getByRole('button', { name: '결과 검토', exact: true }).click()
+  await openLegacyRunReview(page, SHOWCASE_COMPARE)
   await page.locator('.analysis-tab').filter({ hasText: 'Run 비교' }).click()
   await expect(page.getByTestId('comparison-evidence-table')).toBeVisible()
 }

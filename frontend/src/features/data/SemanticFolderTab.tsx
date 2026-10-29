@@ -28,8 +28,9 @@ const candidateErrorText = (value: unknown) => {
   return `${recipe}${version}: ${typeof message === 'string' ? readableReason(message) : JSON.stringify(message)}`
 }
 const activeRecipeFormat = (recipe: SemanticCatalog['recipes'][number]) => recipe.active_format ?? (recipe.latest_version === recipe.active_version ? recipe.definition.format : undefined)
-const reviewHref = ({ projectId, requestId, loadCaseId, runId }: ReviewTarget) => {
-  const query = new URLSearchParams({ project: projectId, request: requestId, loadCase: loadCaseId, run: runId, view: 'custom' })
+// 결과 검토 opens the request's Case 결과; the legacy Run review (view=custom) has no entry point (2026-10-29).
+const reviewHref = ({ projectId, requestId }: ReviewTarget) => {
+  const query = new URLSearchParams({ project: projectId, request: requestId, view: 'case_results' })
   return `/workspace/requests?${query.toString()}`
 }
 

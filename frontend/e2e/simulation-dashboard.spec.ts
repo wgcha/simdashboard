@@ -718,3 +718,21 @@ test.describe('folder name warnings at 4K 150%', () => {
     await expect(page.getByTestId('scene-name-warning')).toHaveCount(0)
   })
 })
+
+test.describe('GUISHOT', () => {
+  test.use({ viewport: { width: 2560, height: 1440 } })
+  test('GUISHOT capture', async ({ page }) => {
+    test.setTimeout(120_000)
+    await installDashboardMocks(page)
+    await loginWorkspace(page)
+    await page.getByRole('button', { name: '라이트', exact: true }).click()
+    await expect(page.getByTestId('focused-request-overview')).toBeVisible({ timeout: 20_000 })
+    await page.waitForTimeout(1500)
+    await page.screenshot({ path: `${process.env.SHOT_DIR}/mywork.png` })
+    await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results')
+    await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible({ timeout: 20_000 })
+    await chooseDistribution(page)
+    await page.waitForTimeout(1500)
+    await page.screenshot({ path: `${process.env.SHOT_DIR}/case-results.png` })
+  })
+})

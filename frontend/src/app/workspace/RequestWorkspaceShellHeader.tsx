@@ -1,4 +1,4 @@
-import { ResultLayoutDetailTab } from '../../features/results/ResultLayoutDetailTab'
+import type { ResultLayoutDetailTab } from '../../features/results/ResultLayoutDetailTab'
 import { ResultVersionSelector } from '../../features/results/ResultVersionSelector'
 import { RequestWorkspaceHeader, type RequestWorkspaceTab } from '../../features/request-workspace/RequestWorkspaceHeader'
 import type { AnalysisRequest, LoadCase, Overview, Project, Workflow } from '../../types'
@@ -58,8 +58,8 @@ type Props = {
 }
 
 /** Application-level assembly keeps request navigation controls identical on all four tabs. */
-export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isCurrentReview, loadLayout, onReviewError, onRunChange }: Props) {
-  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, caseResultsMode, caseResultsMaterialsTab, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
+export function RequestWorkspaceShellHeader({ actions, model, onRunChange }: Props) {
+  const { activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, caseResultsMode, contextChanging, loadCases, owner, projectId, projects, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
   const completedCount = selectedWorkflow ? `${selectedWorkflow.steps.filter((step) => step.status === 'COMPLETED').length} / ${selectedWorkflow.total_count ?? selectedWorkflow.steps.length} 작업 완료` : undefined
   // Snapshot and unconfigured review layouts also render one selected immutable Run.
   const showRunSelector = activeTab === 'review' && !caseResultsMode
@@ -85,21 +85,10 @@ export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isC
     projects={projects}
     requestId={requestId}
     requests={requests}
-    resultReviewTab={<div className="request-review-actions"><button type="button" className={caseResultsMode ? 'active' : ''} aria-current={caseResultsMode ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenCaseResults}>Case 결과</button><ResultLayoutDetailTab
-      active={activeTab === 'review' && !caseResultsMode}
-      label="기존 Run 대시보드"
-      requestId={requestId}
-      requestContextLoading={requestContextLoading || contextChanging}
-      analysisLabel={selectedLoadCaseId ? overview?.load_case.analysis_type.replace('_', ' ') ?? '결과 대기' : '하중 경우 미지정'}
-      loadLayout={loadLayout}
-      onBeginOpen={onBeginReview}
-      onBeforeOpen={actions.onReviewContextOpen}
-      isCurrentOpen={isCurrentReview}
-      onSnapshot={actions.onReviewSnapshot}
-      onDomain={actions.onReviewDomain}
-      onUnconfigured={actions.onReviewUnconfigured}
-      onError={onReviewError}
-    /></div>}
+    // The legacy Run review (기존 Run 대시보드: load case / Run selectors, snapshot · domain · unconfigured
+    // analysis pages) has no entry point any more (user decision 2026-10-29). Its routes and the
+    // review* actions stay wired so direct URLs keep working; only Case 결과 is offered here.
+    resultReviewTab={<div className="request-review-actions"><button type="button" className={caseResultsMode ? 'active' : ''} aria-current={caseResultsMode ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenCaseResults}>Case 결과</button></div>}
     selectedLoadCaseId={selectedLoadCaseId}
     status={status}
     title={title}

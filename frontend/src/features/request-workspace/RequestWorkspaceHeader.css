@@ -25,15 +25,6 @@
 .request-review-actions > button.active::after { content:""; position:absolute; right:14px; bottom:0; left:14px; height:3px; border-radius:3px 3px 0 0; background:#245fc5; }
 .request-review-actions > button:disabled { color:#a8b2c1; cursor:not-allowed; }
 .request-journey-compact { margin-top:0; }
-.request-workspace-header--case { padding-top:16px; gap:12px; }
-.request-workspace-header--case .request-workspace-title h1 { font-size:23px; }
-.request-workspace-header--case .request-workspace-title p { margin-top:4px; font-size:12px; }
-.request-workspace-header--case .request-context-strip { grid-template-columns:repeat(2,minmax(0,1fr)); padding:8px 12px; gap:12px; }
-.request-workspace-header--case .request-context-strip label { gap:3px; }
-.request-workspace-header--case .request-context-strip select { min-height:34px; font-size:13px; }
-.request-journey--case { margin-top:12px; margin-bottom:14px; min-height:44px; }
-.request-journey--case .request-journey-item { min-width:110px; font-size:13px; }
-.request-journey--case .request-journey-item.result-review { min-width:440px; }
 .dark-theme .request-workspace-header { background:#0d1c2b; color:#e8f1fb; }
 .dark-theme .request-workspace-title h1 { color:#e8f1fb; }
 .dark-theme .request-workspace-title p,.dark-theme .request-context-strip label { color:#a8b8cd; }
@@ -75,11 +66,27 @@
 .request-new-results-status.new { color: var(--color-success, var(--color-accent)); font-weight: 700; }
 .request-new-results-status.bad { color: var(--color-danger); }
 
-/* C안 요청 헤더: 제목 좌측, 문맥 선택 우측 한 줄 (Case 결과 헤더 제외) */
-.request-workspace-header:not(.request-workspace-header--case) { display:flex; align-items:flex-end; justify-content:space-between; gap:var(--space-5, 24px); padding-top:16px; padding-bottom:12px; }
-.request-workspace-header:not(.request-workspace-header--case) .request-workspace-title h1 { font-size:24px; }
-.request-workspace-header:not(.request-workspace-header--case) .request-workspace-title p { margin-top:4px; }
-.request-workspace-header:not(.request-workspace-header--case) .request-context-strip,
-.request-workspace-header:not(.request-workspace-header--case) .request-context-strip:has(> :nth-child(4)) { display:flex; align-items:flex-end; flex-wrap:wrap; gap:12px 16px; padding:0; border:0; box-shadow:none; background:transparent; }
-.request-workspace-header:not(.request-workspace-header--case) .request-context-strip label { min-width:240px; }
-.request-journey:not(.request-journey--case):not(.request-journey-compact) { margin-top:0; margin-bottom:16px; min-height:48px; }
+/* C안 요청 헤더 (모든 의뢰 탭 공통, 2026-10-29): 제목·담당자·상태 좌측, 프로젝트/의뢰 선택 우측 한 줄. */
+.request-workspace-header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-5, 24px); padding-top:12px; padding-bottom:12px; border-bottom:1px solid var(--color-border, #dbe2ec); }
+.request-workspace-header .request-workspace-title h1 { font-size:22px; }
+.request-workspace-header .request-workspace-title p { margin-top:2px; font-size:13px; }
+.request-workspace-header .request-context-strip,
+.request-workspace-header .request-context-strip:has(> :nth-child(4)) { display:flex; align-items:flex-end; flex-wrap:wrap; justify-content:flex-end; gap:8px 16px; padding:0; border:0; box-shadow:none; background:transparent; }
+.request-workspace-header .request-context-strip label { gap:3px; min-width:0; }
+/* Search box and select side by side, so each selector stays one control high. */
+.request-workspace-header .request-context-strip .selection-control { display:flex; align-items:center; gap:6px; }
+.request-workspace-header .request-context-strip .selection-control > input[type="search"] { width:170px; flex:none; }
+.request-workspace-header .request-context-strip .selection-control > select { width:300px; max-width:28vw; min-height:var(--control-h-sm); }
+.request-workspace-header[data-ui-density="v1"] .request-context-strip select,
+.request-workspace-header[data-ui-density="v1"] .request-context-strip input,
+.request-workspace-header[data-ui-density="v1"] .request-results-refresh { min-height:var(--control-h-sm); }
+.request-journey,
+.request-journey-compact { margin-top:12px; margin-bottom:12px; min-height:44px; }
+.request-journey .request-journey-item.result-review { min-width:150px; }
+/* Journey as a plain underlined tab strip under the header (MyWork / ConceptC mockups). */
+.request-journey:not(.request-journey-compact) { padding:0; border:0; border-bottom:1px solid var(--color-border, #dbe2ec); border-radius:0; box-shadow:none; background:transparent; }
+.request-journey:not(.request-journey-compact) .request-journey-item { justify-content:flex-start; min-width:0; }
+.request-journey:not(.request-journey-compact) .request-journey-item::after { display:none; }
+.request-journey:not(.request-journey-compact) .request-journey-item.result-review { min-width:0; padding:0; }
+.dark-theme .request-journey:not(.request-journey-compact) { background:transparent; border-bottom-color:#294256; }
+.dark-theme .request-workspace-header { border-bottom-color:#294256; }
