@@ -287,6 +287,10 @@ def _postgres_pool_settings() -> PostgresPoolSettings:
     )
 
 
+# The value the pre-0.3.0.3 .env template wrote for every installation (not a choice made by an administrator).
+LEGACY_TEMPLATE_TTL_MINUTES = "480"
+
+
 def security_settings() -> SecuritySettings:
     auth_mode = os.getenv("AUTH_MODE", "disabled").strip().lower()
     if auth_mode not in {"disabled", "password", "oidc"}:
@@ -297,6 +301,11 @@ def security_settings() -> SecuritySettings:
     # Sliding session: the lifetime is counted from the last renewal (idle lifetime), 30 days by default.
     # An explicitly set AUTH_TOKEN_TTL_MINUTES (non-empty) still wins over AUTH_SESSION_IDLE_DAYS.
     raw_ttl = os.getenv("AUTH_TOKEN_TTL_MINUTES", "").strip()
+    if raw_ttl == LEGACY_TEMPLATE_TTL_MINUTES:
+        # 2026-10-29: every .env made from the old template carries AUTH_TOKEN_TTL_MINUTES=480 (8 h), and
+        # .env is preserved by update.bat, so the 30-day sliding session never took effect on existing
+        # servers.  That exact template value is treated as unset; any other explicit value still wins.
+        raw_ttl = ""
     token_ttl_minutes: int | None = None
     if raw_ttl:
         try:

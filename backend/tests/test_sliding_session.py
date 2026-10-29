@@ -218,3 +218,14 @@ def test_session_settings_ranges(monkeypatch):
         monkeypatch.setenv("AUTH_SESSION_IDLE_DAYS", bad)
         with pytest.raises(RuntimeError, match="AUTH_SESSION_IDLE_DAYS"):
             security_settings()
+
+
+def test_legacy_template_ttl_480_does_not_cut_the_sliding_session(monkeypatch):
+    """2026-10-29: .env files made from the old template carry AUTH_TOKEN_TTL_MINUTES=480 (8 h)."""
+    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.delenv("AUTH_SESSION_IDLE_DAYS", raising=False)
+    monkeypatch.setenv("AUTH_TOKEN_TTL_MINUTES", "480")
+    assert security_settings().token_ttl_minutes is None
+    assert security_settings().session_lifetime_seconds == 30 * DAY
+    monkeypatch.setenv("AUTH_TOKEN_TTL_MINUTES", "481")   # any other explicit value still wins
+    assert security_settings().session_lifetime_seconds == 481 * 60
