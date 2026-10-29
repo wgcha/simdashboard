@@ -74,3 +74,12 @@
 .request-new-results-status { color: var(--color-text-muted); font-size: var(--text-caption); white-space: nowrap; }
 .request-new-results-status.new { color: var(--color-success, var(--color-accent)); font-weight: 700; }
 .request-new-results-status.bad { color: var(--color-danger); }
+
+/* C안 요청 헤더: 제목 좌측, 문맥 선택 우측 한 줄 (Case 결과 헤더 제외) */
+.request-workspace-header:not(.request-workspace-header--case) { display:flex; align-items:flex-end; justify-content:space-between; gap:var(--space-5, 24px); padding-top:16px; padding-bottom:12px; }
+.request-workspace-header:not(.request-workspace-header--case) .request-workspace-title h1 { font-size:24px; }
+.request-workspace-header:not(.request-workspace-header--case) .request-workspace-title p { margin-top:4px; }
+.request-workspace-header:not(.request-workspace-header--case) .request-context-strip,
+.request-workspace-header:not(.request-workspace-header--case) .request-context-strip:has(> :nth-child(4)) { display:flex; align-items:flex-end; flex-wrap:wrap; gap:12px 16px; padding:0; border:0; box-shadow:none; background:transparent; }
+.request-workspace-header:not(.request-workspace-header--case) .request-context-strip label { min-width:240px; }
+.request-journey:not(.request-journey--case):not(.request-journey-compact) { margin-top:0; margin-bottom:16px; min-height:48px; }

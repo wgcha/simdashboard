@@ -766,3 +766,24 @@
 .app-shell .portfolio-filters > a { margin-left:auto; }
 .app-shell .portfolio-grid { grid-template-columns:repeat(4, minmax(0, 1fr)); }
 @media (max-width:1200px) { .app-shell .portfolio-filters { flex-wrap:wrap; } .app-shell .portfolio-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+
+/* C안 내 작업: 좌측 의뢰 목록 + 중앙 현재 할 일, 하단 상세 2열 */
+.app-shell .focused-request-view.has-request-pane { display:grid; grid-template-columns:minmax(300px, 380px) minmax(0, 1fr); gap:var(--space-5, 24px); align-items:start; }
+.focused-request-pane { position:sticky; top:0; border:1px solid var(--focus-border); border-radius:8px; background:#fff; overflow:hidden; }
+.focused-request-pane > header { display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:14px 18px 10px; }
+.focused-request-pane > header h2 { margin:0; font-size:16px; color:var(--focus-navy); }
+.focused-request-pane > header small { color:#8190a4; }
+.focused-request-pane .focused-other-list { max-height:calc(100vh - 360px); overflow:auto; }
+.focused-request-main { min-width:0; }
+.focused-disclosure-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--space-4, 16px); align-items:start; }
+.focused-disclosure-grid > .focused-disclosure { margin-top:12px; }
+.focused-disclosure-grid > .focused-demo-history { grid-column:1 / -1; }
+.focused-request-main .focused-current-task { min-height:0; padding:24px 28px; }
+.focused-request-main .focused-timeline { margin:20px 4px 12px; }
+.app-shell.dark-theme .focused-request-pane { background:#0d1c2b; border-color:#294256; }
+.app-shell.dark-theme .focused-request-pane > header h2 { color:#e8f1fb; }
+@media (max-width:1200px) {
+  .app-shell .focused-request-view.has-request-pane { grid-template-columns:minmax(0, 1fr); }
+  .focused-request-pane { position:static; }
+  .focused-disclosure-grid { grid-template-columns:minmax(0, 1fr); }
+}
