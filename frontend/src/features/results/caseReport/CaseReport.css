@@ -313,3 +313,9 @@
 .case-report__meta-wide {
   grid-column: 1 / -1;
 }
+
+/* C안: two columns (setup | summary, layout editor, notices) */
+.case-report__dialog { width: min(1400px, 86vw); }
+.case-report__body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 24px; }
+.case-report__column { display: grid; align-content: start; gap: 14px; min-width: 0; }
+@media (max-width: 1100px) { .case-report__body { grid-template-columns: minmax(0, 1fr); } }

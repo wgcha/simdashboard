@@ -155,6 +155,7 @@ export function CaseReportDialog({ scope, onClose }: Props) {
       <button type="button" className="case-report__close" aria-label="닫기" disabled={busy} onClick={close}>×</button>
     </header>
     <div className="case-report__body">
+      <div className="case-report__column case-report__column--setup">
       <dl className="case-report__scope" aria-label="보고서 범위">
         {scopeItems(scope).map(([label, value]) => <div key={label}><dt>{label}</dt><dd title={value || '없음'}>{value || '없음'}</dd></div>)}
       </dl>
@@ -172,8 +173,10 @@ export function CaseReportDialog({ scope, onClose }: Props) {
         {usesUploadedTemplate(layout) ? <TemplateNotAppliedNotice /> : null}
         <button type="button" className="case-report__secondary" aria-expanded={editing} disabled={busy} onClick={() => setEditing((current) => !current)}><Settings2 size={15} aria-hidden="true" />{editing ? '편집 닫기' : '레이아웃 편집'}</button>
       </div> : null}
-      {formats.pptx && editing && layout && overview ? <div className="case-report__editor" data-testid="case-report-layout-editor"><Suspense fallback={<p className="case-report__hint">편집 화면을 준비하고 있습니다.</p>}><ReportLayoutEditor layout={layout} overview={overview} contents={contents} templates={[]} isSystem={isSystem} restricted={{ templateNote }} onChange={setLayout} onTemplateUpload={() => undefined} onTemplateDelete={() => undefined} onSave={() => void saveAsNew()} onSaveAs={() => void saveAsNew()} onDelete={() => undefined} /></Suspense></div> : null}
       <CaseReportMetaFields value={meta} disabled={busy} onChange={setMeta} />
+      </div>
+      <div className="case-report__column case-report__column--summary" aria-label="구성 요약">
+      {formats.pptx && editing && layout && overview ? <div className="case-report__editor" data-testid="case-report-layout-editor"><Suspense fallback={<p className="case-report__hint">편집 화면을 준비하고 있습니다.</p>}><ReportLayoutEditor layout={layout} overview={overview} contents={contents} templates={[]} isSystem={isSystem} restricted={{ templateNote }} onChange={setLayout} onTemplateUpload={() => undefined} onTemplateDelete={() => undefined} onSave={() => void saveAsNew()} onSaveAs={() => void saveAsNew()} onDelete={() => undefined} /></Suspense></div> : null}
       {data ? <p className="case-report__counts" data-testid="case-report-counts">{data.sections.length > 1 ? `구성 ${data.sections.length}개 · ` : ''}{data.environment === 'USAGE' ? `평가 ${data.sections[0]?.summary.rows.length ?? 0}행` : `Scene ${data.sections.reduce((total, section) => total + (section.sceneTable?.rows.length ?? 0), 0)}개`} · 그래프 {data.sections.reduce((total, section) => total + section.chartGroups.reduce((sum, group) => sum + group.charts.length, 0), 0)}개 · 이미지 {data.sections.reduce((total, section) => total + section.images.length, 0)}개 · 영상 {data.sections.reduce((total, section) => total + section.videos.length, 0)}개</p> : !loadError ? <p className="case-report__hint" role="status"><LoaderCircle size={14} className="case-report__spinner" aria-hidden="true" />보고서 자료를 불러오는 중입니다.</p> : null}
       {loadError ? <p className="case-report__message case-report__message--error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{loadError}</p> : null}
       {error ? <p className="case-report__message case-report__message--error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{error}</p> : null}
@@ -181,6 +184,7 @@ export function CaseReportDialog({ scope, onClose }: Props) {
       {busy ? <p className="case-report__hint" role="status" data-testid="case-report-building"><LoaderCircle size={14} className="case-report__spinner" aria-hidden="true" />보고서를 만드는 중입니다. 취소하거나 Esc를 누르면 멈춥니다.</p> : null}
       {skipped.images.length ? <div className="case-report__skipped" role="status" data-testid="case-report-skipped-images"><strong>용량 제한 등으로 넣지 못한 이미지 {skipped.images.length}개</strong><ul>{skipped.images.map((item, index) => <li key={`${index}:${item}`} title={item}>{item}</li>)}</ul></div> : null}
       {skipped.videos.length ? <div className="case-report__skipped" role="status" data-testid="case-report-skipped"><strong>용량 제한·형식 등으로 넣지 못한 영상 {skipped.videos.length}개(파일 이름으로 표시)</strong><ul>{skipped.videos.map((item, index) => <li key={`${index}:${item}`} title={item}>{item}</li>)}</ul></div> : null}
+      </div>
     </div>
     <footer className="case-report__actions">
       {busy ? <button type="button" className="case-report__secondary" onClick={cancelBuild}>취소</button> : <button type="button" className="case-report__secondary" onClick={close}>닫기</button>}
