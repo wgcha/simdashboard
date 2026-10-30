@@ -299,12 +299,53 @@ def test_invalid_path_forms_are_400(start, path):
 def test_spdm_root_and_hidden_folders_are_never_written(start, path):
     env = start()
     for response in (env.post("/mkdirs", json={"request_id": "m-spdm", "path": path}),
-                     env.upload(path, "a.rad", b"x", request_id="u-spdm"),
-                     env.get("/list", params={"path": path})):
+                     env.upload(path, "a.rad", b"x", request_id="u-spdm")):
         assert response.status_code == 403 and _code(response) == "PATH_NOT_ALLOWED", (path, response.text)
     assert env.drive.writes() == []
     with connect() as conn:
         assert conn.execute("SELECT count(*) FROM drive_upload_queue").fetchone()[0] == 0
+
+
+def test_hidden_folders_are_not_read_either(start):
+    env = start()
+    for path in (".hidden", ".hidden/job", f"{SPDM}/../x"):
+        response = env.get("/list", params={"path": path})
+        assert response.status_code in (400, 403), (path, response.text)
+    assert env.get("/files", params={"path": ".hidden/a.csv"}).status_code == 403
+    assert env.get("/files", params={"path": "/abs/a.csv"}).status_code == 400
+
+
+def test_spdm_root_is_readable_but_never_written_or_submitted(start):
+    env = start()
+    data = b"node,val\n1,2\n"
+    env.drive.add_file(f"{SPDM}/R95J/WR-1/out/result.csv", data)
+    for path in (SPDM, f"{SPDM}/R95J", f"{SPDM}/R95J/WR-1/out"):
+        listing = env.get("/list", params={"path": path})
+        assert listing.status_code == 200, (path, listing.text)
+    assert [e["name"] for e in env.get("/list", params={"path": f"{SPDM}/R95J/WR-1/out"}).json()["entries"]] == ["result.csv"]
+    download = env.get("/files", params={"path": f"{SPDM}/R95J/WR-1/out/result.csv"})
+    assert download.status_code == 200 and download.content == data
+    assert download.headers["x-content-sha256"] == hashlib.sha256(data).hexdigest()
+    assert env.get("/files", params={"path": f"{SPDM}/missing.csv"}).status_code == 404
+    for path in (SPDM, f"{SPDM}/R95J/WR-1/out"):
+        for response in (env.post("/mkdirs", json={"request_id": "m-r", "path": f"{path}/new"}),
+                         env.upload(path, "a.rad", b"x", request_id="u-r")):
+            assert response.status_code == 403 and _code(response) == "PATH_NOT_ALLOWED", (path, response.text)
+    _stage_inputs(env)
+    inside = f"{SPDM}/R95J/WR-1/a.rad"
+    for change in ({"input_path": inside}, {"engine_paths": [inside]}, {"additional_paths": [inside]}):
+        response = env.post("/jobs/radioss", json=_submit_body(request_id="s-spdm", **change))
+        assert response.status_code == 403 and _code(response) == "PATH_NOT_ALLOWED", (change, response.text)
+    assert relay.output_rel(f"~/{SPDM}/R95J/WR-1/out") is None
+    assert relay.output_rel(f"{SPDM}/x") is None
+    assert env.drive.writes() == [] and _submits(env) == []
+
+
+def test_spdm_root_outside_the_relay_base_stays_unreadable(start):
+    env = start(SIMDASH_SCX_RELAY_DRIVE_BASE="cushion")
+    env.drive.add_file(f"{SPDM}/a.csv", b"x")
+    for response in (env.get("/list", params={"path": SPDM}), env.get("/files", params={"path": f"{SPDM}/a.csv"})):
+        assert response.status_code == 403 and _code(response) == "PATH_NOT_ALLOWED", response.text
 
 
 def test_queue_refuses_a_relay_item_inside_the_spdm_root(start):
@@ -490,7 +531,7 @@ def test_download_streams_with_sha256_and_removes_its_staging(start):
     small = env.get("/files", params={"path": f"{JOB_DIR}/out/result.h3d", "max_bytes": "10"})
     assert small.status_code == 413 and _code(small) == "TOO_LARGE"
     assert env.get("/files", params={"path": f"{JOB_DIR}/out"}).status_code == 404
-    assert env.get("/files", params={"path": f"{SPDM}/a.csv"}).status_code == 403
+    assert env.get("/files", params={"path": f"{SPDM}/a.csv"}).status_code == 404  # SPDM read allowed, file missing
 
 
 def test_interrupted_download_still_removes_its_staging(start):
@@ -551,7 +592,7 @@ def test_health_reports_the_relay_and_never_builds_the_gateway(start):
     assert drive_gateway.existing_gateway() is None
     assert body == {"relay_version": 1, "drive_mode": "scx", "writes_active": True, "job_api": True,
                     "adapter_version": "0.3.0-fake", "drive": None, "queue_paused": False, "relay_base": "",
-                    "forbidden_prefixes": [SPDM], "home_display": "/Users/vd.dashboard", "job_path_form": "rel",
+                    "forbidden_prefixes": [SPDM], "spdm_read": True, "home_display": "/Users/vd.dashboard", "job_path_form": "rel",
                     "max_upload_bytes": 4294967296, "max_download_bytes": 21474836480}
 
 

@@ -16,7 +16,7 @@
 2. **드라이브 쓰기는 기존 업로드 대기열(`upload_queue.py`)로만.** relay 모듈은 `upload_new`·`mkdirs`·`copy_within`을 직접 부르지 않는다(기존 정적 시험 "쓰기 메서드를 부르는 모듈은 `upload_queue.py` 하나" 유지). 대기열 규칙(덮어쓰기·삭제·이동 없음, CONFLICT 시 같은 내용이면 DONE, 재시도 가능 코드 백오프, `AUTH_REQUIRED` → `BLOCKED`·대기열 일시정지) 그대로.
 3. **읽기는 `list_dir`·`stat`·`download_to`만**, 잡은 `submit_radioss`·`get_job`·`terminate_job`만.
 4. **제출은 자동 재시도하지 않는다.** 응답을 잃은 제출(`SUBMISSION_UNKNOWN`)은 사람이 확인한다. 같은 `request_id` 재요청은 어댑터를 다시 부르지 않고 기록된 결과를 돌려준다(§6.1).
-5. **SPDM 마스터 루트(`SIMDASH_SCX_DRIVE_ROOT`)에는 relay로 쓸 수 없다**(예외 설정 없음, §4).
+5. **SPDM 마스터 루트(`SIMDASH_SCX_DRIVE_ROOT`)에는 relay로 쓸 수 없다**(예외 설정 없음, §4). SPDM 루트: 읽기(list/download) 허용, 쓰기·제출 금지(0.3.4.2부터).
 6. 기본 꺼짐. 켜도 loopback + 공유 비밀 헤더 두 조건을 모두 만족해야 한다.
 
 ## 2. 설정(대시보드 환경변수, 기본 꺼짐)
@@ -51,8 +51,8 @@
 
 - API의 드라이브 경로는 모두 **공용 계정 홈 기준 상대 경로**(어댑터 `drive_root="~"` 관례): NFC, `/` 구분, `/`·`~` 시작 금지, `\`·제어문자 금지, 빈 구간·`.`·`..` 금지(`config.validate_drive_rel_path`), 구간마다 1~255자, 전체 ≤ 1024자(드라이브 한도, 이슈 #51).
 - **허용 범위(쓰기)**: `SIMDASH_SCX_RELAY_DRIVE_BASE` 아래. 파일 업로드의 대상 폴더는 기준 아래 **깊이 2 이상**(`<프로젝트>/<잡 폴더>`), mkdirs는 깊이 1 이상.
-- **금지(쓰기·읽기 공통)**: SPDM 루트 `S = SIMDASH_SCX_DRIVE_ROOT`에 대해 경로 `p`가 `p == S` 또는 `p`가 `S + "/"`로 시작(대소문자 무시·NFC 비교)이면 403 `PATH_NOT_ALLOWED`. relay 기준이 S 안이거나 S와 같으면 기동 거부. 또 `p`의 첫 구간이 `.`로 시작하면 거부(숨김·시스템 폴더 보호).
-- **허용 범위(읽기)**: 쓰기 범위와 같음 + relay가 기록한 잡(§6)의 `output_rel` 아래. 그 밖은 403 `PATH_NOT_ALLOWED`.
+- **SPDM 루트: 읽기(list/download) 허용, 쓰기·제출 금지.** SPDM 루트 `S = SIMDASH_SCX_DRIVE_ROOT`에 대해 경로 `p`가 `p == S` 또는 `p`가 `S + "/"`로 시작(대소문자 무시·NFC 비교)이면 mkdirs·업로드·제출 경로(`input_path`·`engine_paths`·`additional_paths`)·`output_rel` 변환은 403 `PATH_NOT_ALLOWED`(솔버가 입력 폴더에 결과를 쓰므로 제출 입력도 금지). `list`·`files`는 `check_path(..., read=True)`로 이 검사만 건너뛴다(형식 검사·`.` 시작 금지는 그대로). relay 기준이 S 안이거나 S와 같으면 기동 거부. 또 `p`의 첫 구간이 `.`로 시작하면 읽기·쓰기 모두 거부(숨김·시스템 폴더 보호). 드라이브 게이트웨이(`gateway.py`)는 읽기 경로를 따로 막지 않는다(`FORBIDDEN → SPDM_FORBIDDEN`은 어댑터가 낸 권한 오류의 매핑일 뿐).
+- **허용 범위(읽기)**: 쓰기 범위와 같음 + relay가 기록한 잡(§6)의 `output_rel` 아래. 그 밖은 403 `PATH_NOT_ALLOWED`. 이 범위 규칙(`check_read`)은 SPDM에도 그대로 적용되므로, **SPDM 루트가 relay 기준 밖에 있으면(기준이 비어 있지 않고 S를 포함하지 않음) SPDM은 여전히 읽을 수 없다.** SPDM을 읽게 하려면 기준을 비우거나(홈 전체) S를 포함하는 상위 폴더로 둔다.
 - 경로 오류(형식) → 400 `INVALID_PATH`.
 
 ## 5. 엔드포인트
@@ -69,7 +69,8 @@
                "token_refreshed_at": "…", "queue_depth": 0, "in_flight": 0},   // gateway.health_dict, 게이트웨이 미생성이면 null
      "queue_paused": false,                   // 대기열 BLOCKED(재로그인 필요)
      "relay_base": "",                        // SIMDASH_SCX_RELAY_DRIVE_BASE
-     "forbidden_prefixes": ["SPDM"],          // SIMDASH_SCX_DRIVE_ROOT
+     "forbidden_prefixes": ["SPDM"],          // SIMDASH_SCX_DRIVE_ROOT — 쓰기·제출 금지 접두
+     "spdm_read": true,                       // SPDM 루트 list/download 허용(0.3.4.2부터)
      "home_display": "/Users/vd.dashboard",
      "job_path_form": "rel",
      "max_upload_bytes": 4294967296, "max_download_bytes": 21474836480}
@@ -201,7 +202,7 @@ relay 기록에 있는 job_id만. `terminate_job` 1회(재시도 없음) → 200
 `tests/drive_fakes.py`의 `FakeWorkerDriveGateway`에 잡 API(`submit_radioss`·`get_job`·`terminate_job`, `JobResources`·`RadiossJobRequest`·`JobInfo` 가짜 타입, 상태 시퀀스·`SUBMISSION_UNKNOWN`·예외 주입, 호출 기록)를 더하고, 잡 API 없는 변형(501 확인)을 둔다.
 
 1. 접근: 꺼짐 404 · none 모드 503 · 키 없음/틀림 401(같은 응답) · 프록시 헤더 각각 403 · loopback 아닌 client 403 · 비교에 `hmac.compare_digest` 사용(정적) · 비밀이 로그(caplog)·오류 본문에 없음 · 비밀 파일 형식 오류 기동 거부.
-2. 경로: `..`·`/`·`~`·`\`·제어문자·빈 구간 400 · SPDM 루트 자신·하위·대소문자 다른 표기 403 · 기준 밖 403 · 업로드 깊이 1 거부 · 1024자 초과 400.
+2. 경로: `..`·`/`·`~`·`\`·제어문자·빈 구간 400 · SPDM 루트 자신·하위·대소문자 다른 표기 쓰기·제출 403, list·download 200(기준 밖이면 403) · 기준 밖 403 · 업로드 깊이 1 거부 · 1024자 초과 400.
 3. 업로드: 대기열 항목(origin·root_key·request_id·MKDIR+FILE) · 해시 불일치 400·임시 파일 없음 · 상한 413 · 임시 공간 부족 503 · 같은 request_id 200 같은 묶음 · 다른 내용 409 · 드라이브에 같은 내용 있음 → DONE · 다른 내용 → CONFLICT(덮어쓰기 없음) · `AUTH_REQUIRED` → 묶음 PAUSED · 쓰기 꺼짐 409 · mkdirs 멱등.
 4. 읽기: list·download 범위(기준·기록된 output_rel만) · `max_bytes` 413 · `X-Content-SHA256` · 응답 후·끊김 시 임시 파일 삭제.
 5. 잡: 501 · 성공 201 · replay 200(어댑터 호출 1회) · `SUBMISSION_UNKNOWN` 409 + 행 UNKNOWN + replay도 어댑터 미호출 · 코드 없는 예외 → UNKNOWN · 처리 중 409 · 기동 시 SUBMITTING→UNKNOWN · 정의된 오류 매핑 · 경로 표기 3종 · output_rel 변환(`~/`·절대·변환 불가 null) · get_job/terminate 기록 밖 404 · resolve attach(get_job 확인·중복 409)·abandon.

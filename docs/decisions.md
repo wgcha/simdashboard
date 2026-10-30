@@ -28,3 +28,4 @@
 - 2026-10-06 · 프로젝트 바로 아래 `CAD`·`Report` 폴더는 사용자 수동 작업 영역으로 탐색·진척에서 제외 · 의뢰 폴더가 아님
 - 2026-10-06 · 관리자 프로젝트 정리: 데모(고정 ID)와 살아 있는 등록이 없는 프로젝트를 미리보기→확인→일괄 삭제, 선택한 프로젝트의 예전 연결 기록도 삭제(D15 예외), SPDM 파일 불변, 지운 데모는 `spdm_storage_settings.demo_projects_removed`로 재생성 방지. 등록 삭제는 마지막 등록이 DELETED 등록이 만든 프로젝트·의뢰까지 소유 · 등록 전부터 있던 프로젝트가 목록에 남던 문제 · `docs/contracts/depth-schema.md` §13.2-5, §16
 - 2026-10-17 · PhysicsAI는 대시보드 SCX 연결을 같이 쓴다: 대시보드가 loopback 전용 SCX relay(`/internal/scx-relay/v1`, 기본 꺼짐, 공유 비밀 헤더)를 열고 쓰기는 업로드 대기열로만, 제출은 `request_id` 기록·replay(자동 재제출 없음), SPDM 루트 쓰기 금지 · refresh token 회전과 단일 워커 잠금 때문에 어댑터 소유자는 하나 · `docs/features/scx-relay.md`
+- 2026-10-30 · SCX relay가 SPDM 루트를 읽기(list/download)만 허용, 쓰기·제출·output_rel은 계속 금지, 범위 규칙(relay 기준·기록된 잡 결과 폴더)은 유지 · ESL 「SCX 드라이브에서 고르기」가 SPDM 안 해석 결과를 골라 받아야 함, 마스터 보호는 쓰기 금지로 충분 · `docs/features/scx-relay.md` §4

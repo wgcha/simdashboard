@@ -280,8 +280,11 @@ def guard(client_host: str | None, headers: Mapping[str, str]) -> str:
 
 # --- paths (contract §4) --------------------------------------------------------------------------
 
-def check_path(value: Any, *, allow_empty: bool = False) -> str:
-    """Shared-account-home relative path: form (400) and the forbidden places (403)."""
+def check_path(value: Any, *, allow_empty: bool = False, read: bool = False) -> str:
+    """Shared-account-home relative path: form (400) and the forbidden places (403).
+
+    ``read=True`` (list / download only) lets the SPDM master root through; writes,
+    ``output_rel`` and submit inputs keep refusing it. ``check_read`` still applies."""
     if not isinstance(value, str):
         raise RelayError(400, "INVALID_PATH", "경로가 없습니다.")
     try:
@@ -291,8 +294,8 @@ def check_path(value: Any, *, allow_empty: bool = False) -> str:
     if text.startswith("."):
         raise RelayError(403, "PATH_NOT_ALLOWED", "'.'으로 시작하는 폴더는 relay로 다룰 수 없습니다.")
     spdm_root = _spdm_root()
-    if text and spdm_root and _inside(text, spdm_root):
-        raise RelayError(403, "PATH_NOT_ALLOWED", "SPDM 마스터 루트는 relay로 읽거나 쓸 수 없습니다.")
+    if not read and text and spdm_root and _inside(text, spdm_root):
+        raise RelayError(403, "PATH_NOT_ALLOWED", "SPDM 마스터 루트는 relay로 쓰거나 제출할 수 없습니다(읽기만 허용).")
     return text
 
 
@@ -513,7 +516,9 @@ def health() -> dict[str, Any]:
             "writes_active": drive_writes.drive_writes_active(), "job_api": job_api_available(adapter, gateway),
             "adapter_version": str(version) if version is not None else None, "drive": drive,
             "queue_paused": paused, "relay_base": current.drive_base,
+            # write/submit-forbidden prefixes; reads (list/download) of the SPDM root are allowed
             "forbidden_prefixes": [drive_settings.spdm_root] if drive_settings.spdm_root else [],
+            "spdm_read": True,
             "home_display": current.home_abs, "job_path_form": current.job_path_form,
             "max_upload_bytes": current.max_upload_bytes, "max_download_bytes": current.max_download_bytes}
 
@@ -703,7 +708,7 @@ def _int_param(raw: Any, default: int, minimum: int, maximum: int, what: str) ->
 
 
 def list_entries(query: Mapping[str, str]) -> dict[str, Any]:
-    path = check_path(query.get("path", ""), allow_empty=True)
+    path = check_path(query.get("path", ""), allow_empty=True, read=True)
     max_entries = _int_param(query.get("max_entries"), LIST_DEFAULT, 1, LIST_MAX, "max_entries")
     check_read(path)
     background = drive_gateway.priority("BACKGROUND")
@@ -729,7 +734,7 @@ class Download:
 
 def prepare_download(query: Mapping[str, str]) -> Download:
     """Download into ``<STAGING>/relay-dl-<uuid>/``; the response removes the folder when it ends."""
-    path = check_path(query.get("path"))
+    path = check_path(query.get("path"), read=True)
     current = settings()
     limit = min(_int_param(query.get("max_bytes"), current.max_download_bytes, 1, 2 ** 50, "max_bytes"),
                 current.max_download_bytes)
