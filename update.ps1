@@ -254,6 +254,12 @@ try {
 }
 catch {
     Write-UpdateLog ("UPDATE FAILED STAGE={0} EXIT={1}" -f $stage, $failureExitCode)
+    # Keep the reason in the stage log too (it used to reach only the console).
+    # Credentials embedded in a remote URL (scheme://user:secret@host) are masked.
+    $failureReason = ([string]$_.Exception.Message) -replace '(?i)([a-z][a-z0-9+.-]*://)[^/@\s]+@', '$1***@'
+    foreach ($reasonLine in ($failureReason -split "\r?\n")) {
+        if (-not [string]::IsNullOrWhiteSpace($reasonLine)) { Write-UpdateLog ("REASON {0}" -f $reasonLine.TrimEnd()) }
+    }
     Write-Host "`n[ERROR] Update failed during '$stage' (exit code $failureExitCode)." -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
     Write-Host "Review the stage log: $logPath" -ForegroundColor Yellow
