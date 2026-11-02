@@ -17,6 +17,7 @@ import type { DashboardDistribution, DashboardMember, DashboardSceneDetail, Usag
 import type { ReportChartSpec } from '../../../reportExport'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageEvaluationLabel, usageMetricStatus } from '../usageEvaluations'
 import { distributionMember, noEdgeSelected, sceneSequenceText } from '../distributionValues'
+import { sceneDetailLine } from '../sceneDetailLines'
 
 export type CaseReportChart = ReportChartSpec & { id: string }
 /** Charts shown together (one slide: a single chart or a 2×2 grid). */
@@ -115,11 +116,9 @@ export function distributionChartGroups(input: { prefix: string; distribution: D
       if (!item?.detail) return { ...base, series: [], notes: [], empty: item?.error ? `Scene 상세를 불러오지 못했습니다: ${item.error}` : 'Scene 상세 없음' }
       const notes: string[] = []
       const lines = [1, 2, 3, 4].flatMap((line) => {
-        const points = item.detail!.line_points
-          .filter((point) => point.line_index === line && point.ref_coord != null && point.value != null && Number.isFinite(point.ref_coord) && Number.isFinite(point.value))
-          .map((point): [number, number] => [point.ref_coord!, point.value!])
-          .sort((a, b) => a[0] - b[0])
+        const { points, merged } = sceneDetailLine(item.detail!.line_points, line)
         if (!points.length) return []
+        if (merged > 0) notes.push(`L${line}: 같은 ref_coord ${number.format(merged)}점은 최대값으로 표시`)
         const reduced = lttb(points)
         if (reduced.length < points.length) notes.push(`L${line}: 원본 ${number.format(points.length)}점 → ${number.format(reduced.length)}점(LTTB 축약)`)
         return [{ name: `L${line}`, color: LINE_COLORS[line - 1], x: reduced.map((point) => point[0]), values: reduced.map((point) => point[1]) }]

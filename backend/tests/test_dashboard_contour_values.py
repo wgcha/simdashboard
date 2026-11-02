@@ -56,3 +56,26 @@ def test_contour_value_is_null_when_selected_source_has_no_numeric_value() -> No
 
     assert result["location_peaks"][0]["status"] == "MISSING"
     assert result["contours"][0]["value"] is None
+
+
+def test_contour_value_is_complete_when_every_side_position_has_the_selected_lines() -> None:
+    capture = _capture()
+    observations = capture["payload"]["runs"][0]["scenes"][0]["observations"]
+    for position, value in (("BOT", 3.0), ("LH", 4.0), ("RH", 5.0)):
+        observations.append({"kind": "SIDE", "component_id": "C23", "basis": "DETAIL", "position": position,
+                             "line_index": 2, "value": value, "row": 3, "column": "Layer_2"})
+    result = queries.distribution(capture, "run-1", "INDIVIDUAL", "C23", "DETAIL", {"TOP"}, {2})
+
+    contour = result["contours"][0]
+    assert contour["value"]["status"] == "READY" and contour["value"]["completeness"] == "COMPLETE"
+    assert contour["status"] == "READY" and contour["reason"] is None
+
+
+def test_contour_reason_names_what_is_missing() -> None:
+    capture = _capture()
+    scene = capture["payload"]["runs"][0]["scenes"][0]
+    scene["media"] = []
+    assert queries.distribution(capture, "run-1", "INDIVIDUAL", "C23", "DETAIL", {"TOP"}, {2})["contours"][0]["reason"] == "컨투어 이미지 없음"
+    scene["media"] = [{"asset_id": f"image-{n}", "component_id": "C23", "kind": "IMAGE"} for n in (1, 2)]
+    contour = queries.distribution(capture, "run-1", "INDIVIDUAL", "C23", "DETAIL", {"TOP"}, {2})["contours"][0]
+    assert contour["status"] == "AMBIGUOUS" and "여러 장" in contour["reason"]

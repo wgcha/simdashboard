@@ -534,6 +534,17 @@ def extracted_keys(groups, component, basis, lines):
             and (key[2] == "CORNER" or key[4] in lines) and (every_line or key[2] == "SIDE")]
 
 
+SIDE_POSITIONS = ("TOP", "BOT", "LH", "RH")
+
+
+def extraction_complete(groups, component, basis, lines):
+    """Every side position has a value on every selected line (issue #59: the contour value said 「일부」 always)."""
+    if not lines:
+        return False
+    return all((group := groups.get((component, basis, "SIDE", position, line))) is not None and group.maximum is not None
+               for position in SIDE_POSITIONS for line in lines)
+
+
 def scene_name(scene):
     return str(scene.get("source_name") or scene.get("label") or "")
 
@@ -583,8 +594,10 @@ def distribution(capture, run_id, mode, component, basis, edges, lines, run_opti
         groups = scene_groups(scene)
         values = scene_edges(scene, component, basis, lines, member_id, groups)
         result["edge_peaks"].extend(values)
+        keys = extracted_keys(groups, component, basis, lines)
         extracted_peak = keyed_peak(
-            scene, groups, extracted_keys(groups, component, basis, lines),
+            scene, groups, keys,
+            complete=extraction_complete(groups, component, basis, lines),
             basis=basis,
             scope="EXTRACTED_SIDES_AND_CORNERS" if lines == {1, 2, 3, 4} else "EXTRACTED_SELECTED_LINES",
         )
@@ -605,7 +618,9 @@ def distribution(capture, run_id, mode, component, basis, edges, lines, run_opti
         result["contours"].append({"cell_id": member_id + ":" + scene["id"] + ":contour", "scene_id": scene["id"],
             "member_id": member_id, "asset": asset, "status": "READY" if asset else "AMBIGUOUS" if images else "MISSING",
             "value": extracted_peak if extracted_peak["value"] is not None else None,
-            "reason": "프레임·수치/영상 시간 정합성 미확인", "scale_status": "UNCONFIRMED"})
+            # Issue #59: no fixed "unconfirmed" caption on a ready image; the reason names what is missing.
+            "reason": None if asset else "컨투어 이미지가 여러 장이라 하나를 고르지 못했습니다." if images else "컨투어 이미지 없음",
+            "scale_status": "UNCONFIRMED"})
         for role in ("CELL", "CUSHION", "BOX"):
             candidates = [m for m in media if m.get("subject_role") == role]
             result["behaviors"].append({"cell_id": member_id + ":" + scene["id"] + ":" + role, "scene_id": scene["id"],

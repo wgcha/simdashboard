@@ -936,7 +936,7 @@ export function reportChartColor(value: string | undefined, index: number) {
   return CHART_PALETTE[index % CHART_PALETTE.length]
 }
 
-/** Merges per-series XY points onto one sorted X axis (blank where a series has no point at that X). */
+/** Merges per-series XY points onto one sorted X axis (blank where a series has no point at that X; a repeated X keeps its largest value). */
 export function scatterChartData(chart: Pick<ReportChartSpec, 'series'>) {
   const xs = [...new Set(chart.series.flatMap((series) => series.x ?? []))].sort((a, b) => a - b)
   const position = new Map(xs.map((value, index) => [value, index]))
@@ -944,7 +944,7 @@ export function scatterChartData(chart: Pick<ReportChartSpec, 'series'>) {
     x: xs,
     series: chart.series.map((series) => {
       const values = new Array<number | null>(xs.length).fill(null)
-      ;(series.x ?? []).forEach((value, index) => { const y = series.values[index]; if (y != null) values[position.get(value)!] = y })
+      ;(series.x ?? []).forEach((value, index) => { const y = series.values[index]; if (y == null) return; const at = position.get(value)!; const known = values[at]; if (known == null || y > known) values[at] = y })
       return { name: series.name, values }
     }),
   }
